@@ -4,9 +4,13 @@ Manages files across repos in a GitHub org based on [custom properties](https://
 
 ## Manage Licenses
 
+`repo-content-updater license --github-token ghp_xxx`
+
 Applies a `LICENSE` template to all repos with the custom property `manage-license` set to `yes`. This is split out from the generic managed files so that the property can be set to required org wide and specific "yes" and "no" options (only) provided in a drop down, ensuring a repo either opts in or out of the license specifically.
 
 ## Manage Files
+
+`repo-content-updater managed-files --github-token ghp_xxx`
 
 Looks for the `managed-files` custom property on a repo, and parses out a comma separated list of files/groups to include. Files must be referenced by their name in the config file, and groups should be referenced by their group name, prefixed with `group:`.
 
