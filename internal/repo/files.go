@@ -25,7 +25,7 @@ func (c *Content) ManagedFiles(cfg *config.Config) error {
 	}
 	for {
 		opts.Page++
-		result, resp, err := c.githubClient.Organizations.ListCustomPropertyValues(context.TODO(), GitHubOrg, opts)
+		result, resp, err := c.githubClient.Organizations.ListCustomPropertyValues(context.TODO(), c.githubOrg, opts)
 		if err != nil {
 			return err
 		}
@@ -170,7 +170,7 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 		}
 	}
 
-	repo, _, err := c.githubClient.Repositories.Get(context.TODO(), GitHubOrg, repoName)
+	repo, _, err := c.githubClient.Repositories.Get(context.TODO(), c.githubOrg, repoName)
 	if err != nil {
 		return fmt.Errorf("error getting repo info: %w", err)
 	}

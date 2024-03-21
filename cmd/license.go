@@ -14,7 +14,14 @@ var licenseCmd = &cobra.Command{
 	Use:   "license",
 	Short: "Updates licenses in repos with license flag",
 	Run: func(cmd *cobra.Command, args []string) {
-		content, err := repo.NewContent(viper.GetString("templates"), viper.GetString("github-token"))
+		content, err := repo.NewContent(
+			viper.GetString("templates"),
+			viper.GetString("github-org"),
+			viper.GetString("committer-name"),
+			viper.GetString("committer-email"),
+			viper.GetString("review-team"),
+			viper.GetString("github-token"),
+		)
 		if err != nil {
 			log.Fatalf("Error creating content manager: %s", err.Error())
 		}
