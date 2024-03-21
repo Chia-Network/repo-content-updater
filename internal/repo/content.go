@@ -17,31 +17,28 @@ import (
 	"github.com/spf13/viper"
 )
 
-const (
-	// GitHubOrg the org in GitHub to operate within
-	GitHubOrg string = "Chia-Network"
-	// CommitterName User name for git
-	CommitterName string = "Chia Automation"
-	// CommitterEmail git email
-	CommitterEmail string = "automation@chia.net"
-	// ReviewTeamName The name of the team that should review the PRs
-	ReviewTeamName string = "content-updater-reviewers"
-)
-
 // Content the content manager object
 type Content struct {
-	templates    string
-	githubToken  string
-	githubClient *github.Client
+	templates      string
+	githubOrg      string
+	committerName  string
+	committerEmail string
+	reviewTeamName string
+	githubToken    string
+	githubClient   *github.Client
 }
 
 // NewContent returns new repo content manager
-func NewContent(templates, githubToken string) (*Content, error) {
+func NewContent(templates, githubOrg, committerName, committerEmail, reviewTeam, githubToken string) (*Content, error) {
 	client := github.NewClient(nil).WithAuthToken(githubToken)
 	return &Content{
-		templates:    templates,
-		githubToken:  githubToken,
-		githubClient: client,
+		templates:      templates,
+		githubOrg:      githubOrg,
+		committerName:  committerName,
+		committerEmail: committerEmail,
+		reviewTeamName: reviewTeam,
+		githubToken:    githubToken,
+		githubClient:   client,
 	}, nil
 }
 
@@ -51,7 +48,7 @@ func repoDir(repoName string) string {
 
 func (c *Content) cloneRepo(repoName string) (*git.Repository, *git.Worktree, error) {
 	_, err := git.PlainClone(repoDir(repoName), false, &git.CloneOptions{
-		URL:          fmt.Sprintf("https://%s@github.com/%s/%s", c.githubToken, GitHubOrg, repoName),
+		URL:          fmt.Sprintf("https://%s@github.com/%s/%s", c.githubToken, c.githubOrg, repoName),
 		SingleBranch: true,
 		Depth:        1,
 	})
@@ -160,8 +157,8 @@ func (c *Content) commit(w *git.Worktree, repoName string, message string) error
 	} else {
 		commitOptions := &git.CommitOptions{
 			Author: &object.Signature{
-				Name:  CommitterName,
-				Email: CommitterEmail,
+				Name:  c.committerName,
+				Email: c.committerEmail,
 				When:  time.Now(),
 			},
 		}
@@ -204,7 +201,7 @@ func (c *Content) pushAndPR(r *git.Repository, repoName, branchName, title strin
 	}
 
 	// Create the pull request
-	pr, _, err := c.githubClient.PullRequests.Create(context.TODO(), GitHubOrg, repoName, newPR)
+	pr, _, err := c.githubClient.PullRequests.Create(context.TODO(), c.githubOrg, repoName, newPR)
 	if err != nil {
 		return fmt.Errorf("error creating pull request: %s", err)
 	}
@@ -223,10 +220,10 @@ func (c *Content) pushAndPR(r *git.Repository, repoName, branchName, title strin
 		teamReviewer = []string{*opts.AssignGroup} // Use specified AssignGroup
 	} else if len(opts.AssignUsers) == 0 {
 		// Fallback to the default team name only if no individual users are specified
-		teamReviewer = []string{ReviewTeamName}
+		teamReviewer = []string{c.reviewTeamName}
 	}
 	// Requesting review from the specified team and individual users
-	_, _, err = c.githubClient.PullRequests.RequestReviewers(context.TODO(), GitHubOrg, repoName, pr.GetNumber(), github.ReviewersRequest{
+	_, _, err = c.githubClient.PullRequests.RequestReviewers(context.TODO(), c.githubOrg, repoName, pr.GetNumber(), github.ReviewersRequest{
 		TeamReviewers: teamReviewer,
 		Reviewers:     opts.AssignUsers, // Directly use specified individual users
 	})
@@ -238,7 +235,7 @@ func (c *Content) pushAndPR(r *git.Repository, repoName, branchName, title strin
 }
 
 func (c *Content) ensureGroupMembership(repoName string) error {
-	_, err := c.githubClient.Teams.AddTeamRepoBySlug(context.TODO(), GitHubOrg, ReviewTeamName, GitHubOrg, repoName, &github.TeamAddTeamRepoOptions{Permission: "push"})
+	_, err := c.githubClient.Teams.AddTeamRepoBySlug(context.TODO(), c.githubOrg, c.reviewTeamName, c.githubOrg, repoName, &github.TeamAddTeamRepoOptions{Permission: "push"})
 	return err
 }
 
