@@ -1,0 +1,56 @@
+# This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back
+# inline with the upstream template, unless you remove the dependabot managed file property from the repo
+
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: {{ .DEPENDABOT_GOMOD_DIRECTORY }}
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: {{ .DEPENDABOT_GOMOD_PULL_REQUEST_LIMIT }}
+    labels:
+      - dependencies
+      - go
+      - "Changed"
+    reviewers: {{ .DEPENDABOT_GOMOD_REVIEWERS }}
+    groups:
+      global:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "pip"
+    directory: {{ .DEPENDABOT_PIP_DIRECTORY }}
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: {{ .DEPENDABOT_PIP_PULL_REQUEST_LIMIT }}
+    labels:
+      - dependencies
+      - python
+      - "Changed"
+    reviewers: {{ .DEPENDABOT_PIP_REVIEWERS }}
+
+  - package-ecosystem: "github-actions"
+    directory: {{ .DEPENDABOT_ACTIONS_DIRECTORY }}
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: {{ .DEPENDABOT_ACTIONS_PULL_REQUEST_LIMIT }}
+    labels:
+      - dependencies
+      - github_actions
+      - "Changed"
+    reviewers: {{ .DEPENDABOT_ACTIONS_REVIEWERS }}
+
+  - package-ecosystem: "npm"
+    directory: {{ .DEPENDABOT_NPM_DIRECTORY }}
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: {{ .DEPENDABOT_NPM_PULL_REQUEST_LIMIT }}
+    labels:
+      - dependencies
+      - javascript
+      - "Changed"
+    reviewers: {{ .DEPENDABOT_NPM_REVIEWERS }}

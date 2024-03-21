@@ -1,0 +1,10 @@
+# This file must be present at the root of the repository
+# Add this file to a repository for the inclusion of the additional parameters below
+pr_target_branch: develop
+assign_users:
+  - johnny123
+  - max987
+assign_group: special-approver-group
+commit_prefix: "[chore]"
+var_overrides:
+  CGO_ENABLED: "1"

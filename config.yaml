@@ -1,0 +1,50 @@
+# name: Should match the template filename and the property in github
+# template_name the name of the template in the templates folder
+# repo_path: The path in the repo to write the file to
+# alternate_paths: Any paths listed here will be treated as the same file and renamed to the main repo_path
+
+# Groups allow inheriting a potentially evolving set of templates for a particular project type without needing to
+# constantly update the list of files in the repo settings
+# Just set `group:<groupname>` in the repo settings instead
+groups:
+  - name: base
+    templates:
+      - dep-review
+
+  - name: go
+    templates:
+      - go-makefile
+      - go-dependabot
+
+  - name: go-ci
+    templates:
+      - go-test
+
+files:
+  - name: go-makefile
+    template_name: go-makefile
+    repo_path: Makefile
+
+  - name: go-test
+    template_name: go-test.yml
+    repo_path: .github/workflows/go-test.yml
+    alternate_paths:
+      - .github/go-test.yaml
+
+  - name: dependabot
+    template_name: dependabot.yml
+    repo_path: .github/dependabot.yml
+    alternate_paths:
+      - .github/dependabot.yaml
+
+  - name: go-dependabot
+    template_name: go-dependabot.yml
+    repo_path: .github/dependabot.yml
+    alternate_paths:
+      - .github/dependabot.yaml
+
+  - name: dep-review
+    template_name: dependency-review.yml
+    repo_path: .github/workflows/dependency-review.yml
+    alternate_paths:
+      - .github/workflows/dependency-review.yaml

@@ -1,0 +1,13 @@
+# This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back
+# inline with the upstream template, unless you remove the go-dependabot managed file property from the repo
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      global:
+        patterns:
+          - "*"
