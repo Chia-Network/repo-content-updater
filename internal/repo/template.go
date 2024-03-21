@@ -18,21 +18,21 @@ func ProcessTemplate(templateContent []byte, overrides map[string]string) ([]byt
 	notOverridable := map[string]bool{"CURRENT_YEAR": true}
 	defaultPullRequestLimit := "10"
 	data := map[string]string{
-		"CURRENT_YEAR": strconv.Itoa(time.Now().Year()),
-		"COMPANY_NAME": "Chia Network Inc.",
-		"CGO_ENABLED":  "0",
-		"DEPENDABOT_GOMOD_PULL_REQUEST_LIMIT": defaultPullRequestLimit,
-		"DEPENDABOT_GOMOD_DIRECTORY": "/",
-		"DEPENDABOT_GOMOD_REVIEWERS": "[\"cmmarslender\", \"starttoaster\"]",
-		"DEPENDABOT_PIP_PULL_REQUEST_LIMIT": defaultPullRequestLimit,
-		"DEPENDABOT_PIP_DIRECTORY": "/",
-		"DEPENDABOT_PIP_REVIEWERS": "[\"emlowe\", \"altendky\"]",
+		"CURRENT_YEAR":                          strconv.Itoa(time.Now().Year()),
+		"COMPANY_NAME":                          "Chia Network Inc.",
+		"CGO_ENABLED":                           "0",
+		"DEPENDABOT_GOMOD_PULL_REQUEST_LIMIT":   defaultPullRequestLimit,
+		"DEPENDABOT_GOMOD_DIRECTORY":            "/",
+		"DEPENDABOT_GOMOD_REVIEWERS":            "[\"cmmarslender\", \"starttoaster\"]",
+		"DEPENDABOT_PIP_PULL_REQUEST_LIMIT":     defaultPullRequestLimit,
+		"DEPENDABOT_PIP_DIRECTORY":              "/",
+		"DEPENDABOT_PIP_REVIEWERS":              "[\"emlowe\", \"altendky\"]",
 		"DEPENDABOT_ACTIONS_PULL_REQUEST_LIMIT": defaultPullRequestLimit,
-		"DEPENDABOT_ACTIONS_DIRECTORY": "/",
-		"DEPENDABOT_ACTIONS_REVIEWERS": "[\"cmmarslender\", \"altendky\"]",
-		"DEPENDABOT_NPM_PULL_REQUEST_LIMIT": defaultPullRequestLimit,
-		"DEPENDABOT_NPM_DIRECTORY": "/",
-		"DEPENDABOT_NPM_REVIEWERS": "[\"cmmarslender\", \"emlowe\"]",
+		"DEPENDABOT_ACTIONS_DIRECTORY":          "/",
+		"DEPENDABOT_ACTIONS_REVIEWERS":          "[\"cmmarslender\", \"altendky\"]",
+		"DEPENDABOT_NPM_PULL_REQUEST_LIMIT":     defaultPullRequestLimit,
+		"DEPENDABOT_NPM_DIRECTORY":              "/",
+		"DEPENDABOT_NPM_REVIEWERS":              "[\"cmmarslender\", \"emlowe\"]",
 	}
 
 	// Merge `overrides` into `data`, with `overrides` taking precedence

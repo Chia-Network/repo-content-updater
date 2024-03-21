@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -117,7 +118,7 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 			_ = os.Remove(fmt.Sprintf("%s/%s", repoDir(repoName), form))
 		}
 
-		tmplContent, err := c.fs.ReadFile(fmt.Sprintf("templates/%s", fileinfo.TemplateName))
+		tmplContent, err := os.ReadFile(path.Join(c.templates, fileinfo.TemplateName))
 		if err != nil {
 			return err
 		}

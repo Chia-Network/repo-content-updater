@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 
 	"github.com/google/go-github/v59/github"
 )
@@ -71,7 +72,7 @@ func (c *Content) UpdateLicense(repoName string) error {
 		}
 	}
 
-	file, err := c.fs.ReadFile("templates/LICENSE")
+	file, err := os.ReadFile(path.Join(c.templates, "LICENSE"))
 	if err != nil {
 		return err
 	}

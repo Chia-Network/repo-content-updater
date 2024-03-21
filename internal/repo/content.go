@@ -2,7 +2,6 @@ package repo
 
 import (
 	"context"
-	"embed"
 	"errors"
 	"fmt"
 	"log"
@@ -31,16 +30,16 @@ const (
 
 // Content the content manager object
 type Content struct {
-	fs           *embed.FS
+	templates    string
 	githubToken  string
 	githubClient *github.Client
 }
 
 // NewContent returns new repo content manager
-func NewContent(fs *embed.FS, githubToken string) (*Content, error) {
+func NewContent(templates, githubToken string) (*Content, error) {
 	client := github.NewClient(nil).WithAuthToken(githubToken)
 	return &Content{
-		fs:           fs,
+		templates:    templates,
 		githubToken:  githubToken,
 		githubClient: client,
 	}, nil
