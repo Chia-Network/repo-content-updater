@@ -14,7 +14,7 @@ groups:
   - name: go
     templates:
       - go-makefile
-      - go-dependabot
+      - dependabot
 
   - name: go-ci
     templates:
