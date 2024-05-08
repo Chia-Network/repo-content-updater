@@ -29,7 +29,7 @@ func ProcessTemplate(templateContent []byte, overrides map[string]string) ([]byt
 		"DEPENDABOT_PIP_REVIEWERS":              "[\"emlowe\", \"altendky\"]",
 		"DEPENDABOT_ACTIONS_PULL_REQUEST_LIMIT": defaultPullRequestLimit,
 		"DEPENDABOT_ACTIONS_DIRECTORY":          "/",
-		"DEPENDABOT_ACTIONS_REVIEWERS":          "[\"cmmarslender\", \"altendky\"]",
+		"DEPENDABOT_ACTIONS_REVIEWERS":          "[\"cmmarslender\", \"Starttoaster\", \"pmaslana\"]",
 		"DEPENDABOT_NPM_PULL_REQUEST_LIMIT":     defaultPullRequestLimit,
 		"DEPENDABOT_NPM_DIRECTORY":              "/",
 		"DEPENDABOT_NPM_REVIEWERS":              "[\"cmmarslender\", \"emlowe\"]",
