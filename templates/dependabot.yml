@@ -54,3 +54,14 @@ updates:
       - javascript
       - "Changed"
     reviewers: {{ .DEPENDABOT_NPM_REVIEWERS }}
+
+  - package-ecosystem: cargo
+    directory: {{ .DEPENDABOT_CARGO_DIRECTORY }}
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: {{ .DEPENDABOT_CARGO_PULL_REQUEST_LIMIT }}
+    labels:
+      - dependencies
+      - rust
+      - "Changed"

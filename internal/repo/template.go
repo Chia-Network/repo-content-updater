@@ -33,6 +33,8 @@ func ProcessTemplate(templateContent []byte, overrides map[string]string) ([]byt
 		"DEPENDABOT_NPM_PULL_REQUEST_LIMIT":     defaultPullRequestLimit,
 		"DEPENDABOT_NPM_DIRECTORY":              "/",
 		"DEPENDABOT_NPM_REVIEWERS":              "[\"cmmarslender\", \"emlowe\"]",
+		"DEPENDABOT_CARGO_DIRECTORY":            "/",
+		"DEPENDABOT_CARGO_PULL_REQUEST_LIMIT":   defaultPullRequestLimit,
 	}
 
 	// Merge `overrides` into `data`, with `overrides` taking precedence
