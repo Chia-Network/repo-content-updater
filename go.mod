@@ -5,7 +5,7 @@ go 1.22.0
 require (
 	github.com/go-git/go-git/v5 v5.12.0
 	github.com/google/go-github/v59 v59.0.0
-	github.com/spf13/cobra v1.8.0
+	github.com/spf13/cobra v1.8.1
 	github.com/spf13/viper v1.19.0
 	github.com/stretchr/testify v1.9.0
 	gopkg.in/yaml.v3 v3.0.1
