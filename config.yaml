@@ -52,4 +52,5 @@ files:
   - name: prettier
     template_name: prettierrc.yml
     repo_path: .prettierrc.yml
+    alternate_paths:
       - .prettierrc.yaml
