@@ -48,3 +48,8 @@ files:
     repo_path: .github/workflows/dependency-review.yml
     alternate_paths:
       - .github/workflows/dependency-review.yaml
+
+  - name: prettier
+    template_name: prettierrc.yml
+    repo_path: .prettierrc.yml
+      - .prettierrc.yaml
