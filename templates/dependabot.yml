@@ -9,6 +9,7 @@ updates:
       interval: "weekly"
       day: "tuesday"
     open-pull-requests-limit: {{ .DEPENDABOT_GOMOD_PULL_REQUEST_LIMIT }}
+    rebase-strategy: {{ .DEPENDABOT_GOMOD_REBASE_STRATEGY }}
     labels:
       - dependencies
       - go
@@ -25,6 +26,7 @@ updates:
       interval: "weekly"
       day: "tuesday"
     open-pull-requests-limit: {{ .DEPENDABOT_PIP_PULL_REQUEST_LIMIT }}
+    rebase-strategy: {{ .DEPENDABOT_PIP_REBASE_STRATEGY }}
     labels:
       - dependencies
       - python
@@ -37,6 +39,7 @@ updates:
       interval: "weekly"
       day: "tuesday"
     open-pull-requests-limit: {{ .DEPENDABOT_ACTIONS_PULL_REQUEST_LIMIT }}
+    rebase-strategy: {{ .DEPENDABOT_ACTIONS_REBASE_STRATEGY }}
     labels:
       - dependencies
       - github_actions
@@ -49,6 +52,7 @@ updates:
       interval: "weekly"
       day: "tuesday"
     open-pull-requests-limit: {{ .DEPENDABOT_NPM_PULL_REQUEST_LIMIT }}
+    rebase-strategy: {{ .DEPENDABOT_NPM_REBASE_STRATEGY }}
     labels:
       - dependencies
       - javascript
@@ -61,6 +65,7 @@ updates:
       interval: "weekly"
       day: "tuesday"
     open-pull-requests-limit: {{ .DEPENDABOT_CARGO_PULL_REQUEST_LIMIT }}
+    rebase-strategy: {{ .DEPENDABOT_CARGO_REBASE_STRATEGY }}
     labels:
       - dependencies
       - rust
