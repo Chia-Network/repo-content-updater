@@ -53,4 +53,15 @@ files:
     template_name: prettierrc.yml
     repo_path: .prettierrc.yml
     alternate_paths:
+      - .prettierrc
+      - .prettierrc.json
+      - .prettierrc.json5
       - .prettierrc.yaml
+      - .prettierrc.js
+      - .prettierrc.js
+      - .prettier.config.js
+      - .prettierrc.mjs
+      - .prettier.config.mjs
+      - .prettierrc.cjs
+      - .prettier.config.cjs
+      - .prettierrc.toml
