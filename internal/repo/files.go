@@ -117,7 +117,7 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 			// Ignoring errors since these alternate file names may not exist
 			removePath := fmt.Sprintf("%s/%s", repoDir(repoName), form)
 			_ = os.Remove(removePath)
-			_, _ = w.Add(removePath)
+			_, _ = w.Add(form)
 		}
 
 		tmplContent, err := os.ReadFile(path.Join(c.templates, fileinfo.TemplateName))
