@@ -26,7 +26,7 @@ files:
     template_name: check-commit-signing.yml
     repo_path: .github/workflows/check-commit-signing.yml
     alternate_paths:
-      - .github/workflows/check-commit-signing..yaml
+      - .github/workflows/check-commit-signing.yaml
 
   - name: dep-review
     template_name: dependency-review.yml
