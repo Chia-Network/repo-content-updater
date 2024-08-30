@@ -10,6 +10,7 @@ groups:
   - name: base
     templates:
       - dep-review
+      - commit-signing
 
   - name: go
     templates:
@@ -21,15 +22,17 @@ groups:
       - go-test
 
 files:
-  - name: go-makefile
-    template_name: go-makefile
-    repo_path: Makefile
-
-  - name: go-test
-    template_name: go-test.yml
-    repo_path: .github/workflows/go-test.yml
+  - name: commit-signing
+    template_name: check-commit-signing.yml
+    repo_path: .github/workflows/check-commit-signing.yml
     alternate_paths:
-      - .github/go-test.yaml
+      - .github/workflows/check-commit-signing..yaml
+
+  - name: dep-review
+    template_name: dependency-review.yml
+    repo_path: .github/workflows/dependency-review.yml
+    alternate_paths:
+      - .github/workflows/dependency-review.yaml
 
   - name: dependabot
     template_name: dependabot.yml
@@ -43,11 +46,15 @@ files:
     alternate_paths:
       - .github/dependabot.yaml
 
-  - name: dep-review
-    template_name: dependency-review.yml
-    repo_path: .github/workflows/dependency-review.yml
+  - name: go-makefile
+    template_name: go-makefile
+    repo_path: Makefile
+
+  - name: go-test
+    template_name: go-test.yml
+    repo_path: .github/workflows/go-test.yml
     alternate_paths:
-      - .github/workflows/dependency-review.yaml
+      - .github/go-test.yaml
 
   - name: prettier
     template_name: prettierrc.yml
