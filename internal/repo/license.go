@@ -8,10 +8,12 @@ import (
 	"path"
 
 	"github.com/google/go-github/v59/github"
+
+	"github.com/chia-network/repo-content-updater/internal/config"
 )
 
 // CheckLicenses checks all repos for licenses that need to be managed/updated
-func (c *Content) CheckLicenses() error {
+func (c *Content) CheckLicenses(cfg *config.Config) error {
 	var reposToCheck []string
 
 	opts := &github.ListOptions{
@@ -40,7 +42,7 @@ func (c *Content) CheckLicenses() error {
 
 	for _, repo := range reposToCheck {
 		log.Printf("Need to check %s\n", repo)
-		err := c.UpdateLicense(repo)
+		err := c.UpdateLicense(repo, cfg)
 		if err != nil {
 			log.Printf("Error updating %s: %s\n", repo, err.Error())
 			continue
@@ -51,7 +53,7 @@ func (c *Content) CheckLicenses() error {
 }
 
 // UpdateLicense ensures the license is up to date for the given repo
-func (c *Content) UpdateLicense(repoName string) error {
+func (c *Content) UpdateLicense(repoName string, cfg *config.Config) error {
 	defer removeDirIfExists(repoDir(repoName))
 
 	r, w, err := c.cloneRepo(repoName)
@@ -76,7 +78,7 @@ func (c *Content) UpdateLicense(repoName string) error {
 	if err != nil {
 		return err
 	}
-	content, err := ProcessTemplate(file, repoConfig.VarOverrides)
+	content, err := ProcessTemplate(file, cfg.Variables, repoConfig.VarOverrides)
 	if err != nil {
 		return err
 	}

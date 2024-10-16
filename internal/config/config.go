@@ -9,8 +9,9 @@ import (
 
 // Config is the supported files config
 type Config struct {
-	Groups []Group `yaml:"groups"`
-	Files  []File  `yaml:"files"`
+	Groups    []Group           `yaml:"groups"`
+	Files     []File            `yaml:"files"`
+	Variables map[string]string `yaml:"variables"`
 }
 
 // Group is a defined group of template files to include at once

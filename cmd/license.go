@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/chia-network/repo-content-updater/internal/config"
 	"github.com/chia-network/repo-content-updater/internal/repo"
 )
 
@@ -26,7 +27,12 @@ var licenseCmd = &cobra.Command{
 			log.Fatalf("Error creating content manager: %s", err.Error())
 		}
 
-		err = content.CheckLicenses()
+		cfg, err := config.LoadConfig(viper.GetString("config"))
+		if err != nil {
+			log.Fatalf("error loading config: %s\n", err.Error())
+		}
+
+		err = content.CheckLicenses(cfg)
 		if err != nil {
 			log.Fatalln(err.Error())
 		}
