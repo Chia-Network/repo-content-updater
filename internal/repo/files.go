@@ -124,7 +124,7 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 		if err != nil {
 			return err
 		}
-		content, err := ProcessTemplate(tmplContent, repoConfig.VarOverrides)
+		content, err := ProcessTemplate(tmplContent, cfg.Variables, repoConfig.VarOverrides)
 		if err != nil {
 			return err
 		}

@@ -10,36 +10,22 @@ import (
 )
 
 // ProcessTemplate renders the given template file
-func ProcessTemplate(templateContent []byte, overrides map[string]string) ([]byte, error) {
+func ProcessTemplate(templateContent []byte, defaultVars map[string]string, overrides map[string]string) ([]byte, error) {
 	// Compute the SHA256 hash of the template content
 	hash := sha256.Sum256(templateContent)
 	hexHash := hex.EncodeToString(hash[:])
 
 	notOverridable := map[string]bool{"CURRENT_YEAR": true}
-	defaultPullRequestLimit := "10"
 	data := map[string]string{
-		"CURRENT_YEAR":                          strconv.Itoa(time.Now().Year()),
-		"COMPANY_NAME":                          "Chia Network Inc.",
-		"CGO_ENABLED":                           "0",
-		"DEPENDABOT_GOMOD_PULL_REQUEST_LIMIT":   defaultPullRequestLimit,
-		"DEPENDABOT_GOMOD_REBASE_STRATEGY":      "auto",
-		"DEPENDABOT_GOMOD_DIRECTORY":            "/",
-		"DEPENDABOT_GOMOD_REVIEWERS":            "[\"cmmarslender\", \"starttoaster\"]",
-		"DEPENDABOT_PIP_PULL_REQUEST_LIMIT":     defaultPullRequestLimit,
-		"DEPENDABOT_PIP_REBASE_STRATEGY":        "auto",
-		"DEPENDABOT_PIP_DIRECTORY":              "/",
-		"DEPENDABOT_PIP_REVIEWERS":              "[\"emlowe\", \"altendky\"]",
-		"DEPENDABOT_ACTIONS_PULL_REQUEST_LIMIT": defaultPullRequestLimit,
-		"DEPENDABOT_ACTIONS_REBASE_STRATEGY":    "auto",
-		"DEPENDABOT_ACTIONS_DIRECTORY":          "/",
-		"DEPENDABOT_ACTIONS_REVIEWERS":          "[\"cmmarslender\", \"Starttoaster\", \"pmaslana\"]",
-		"DEPENDABOT_NPM_PULL_REQUEST_LIMIT":     defaultPullRequestLimit,
-		"DEPENDABOT_NPM_REBASE_STRATEGY":        "auto",
-		"DEPENDABOT_NPM_DIRECTORY":              "/",
-		"DEPENDABOT_NPM_REVIEWERS":              "[\"cmmarslender\", \"ChiaMineJP\"]",
-		"DEPENDABOT_CARGO_DIRECTORY":            "/",
-		"DEPENDABOT_CARGO_PULL_REQUEST_LIMIT":   defaultPullRequestLimit,
-		"DEPENDABOT_CARGO_REBASE_STRATEGY":      "auto",
+		"CURRENT_YEAR": strconv.Itoa(time.Now().Year()),
+	}
+
+	// Merge `defaultVars` into `data`
+	for key, value := range defaultVars {
+		if notOverridable[key] {
+			continue
+		}
+		data[key] = value
 	}
 
 	// Merge `overrides` into `data`, with `overrides` taking precedence

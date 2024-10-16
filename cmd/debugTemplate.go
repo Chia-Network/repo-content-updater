@@ -20,7 +20,7 @@ var debugTemplateCmd = &cobra.Command{
 		if err != nil {
 			log.Fatalln(err.Error())
 		}
-		content, err := repo.ProcessTemplate(tmplContent, map[string]string{})
+		content, err := repo.ProcessTemplate(tmplContent, map[string]string{}, map[string]string{})
 		if err != nil {
 			log.Fatalln(err.Error())
 		}
