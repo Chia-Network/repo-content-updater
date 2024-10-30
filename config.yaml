@@ -11,6 +11,7 @@ groups:
     templates:
       - dep-review
       - commit-signing
+      - dependabot
 
   - name: go
     templates:
