@@ -74,6 +74,10 @@ files:
       - .prettier.config.cjs
       - .prettierrc.toml
 
+  - name: security
+    template_name: SECURITY.md
+    repo_path: SECURITY.md
+
 variables:
   COMPANY_NAME: "Chia Network Inc."
   CGO_ENABLED: "0"
