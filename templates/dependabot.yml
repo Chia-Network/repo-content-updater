@@ -34,7 +34,7 @@ updates:
     reviewers: {{ .DEPENDABOT_PIP_REVIEWERS }}
 
   - package-ecosystem: "github-actions"
-    directory: {{ .DEPENDABOT_ACTIONS_DIRECTORY }}
+    directories: {{ .DEPENDABOT_ACTIONS_DIRECTORIES }}
     schedule:
       interval: "weekly"
       day: "tuesday"
