@@ -92,7 +92,7 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 
 	headRef, err := r.Head()
 	if err != nil {
-		return fmt.Errorf("error getting head ref for %s: %w\n", repoName, err)
+		return fmt.Errorf("error getting head ref for %s: %w", repoName, err)
 	}
 	headRefName := headRef.Name()
 	if !headRefName.IsBranch() {
