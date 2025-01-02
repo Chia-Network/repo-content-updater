@@ -22,4 +22,4 @@ jobs:
         uses: actions/dependency-review-action@v4
         with:
           allow-dependencies-licenses: {{ .DEPENDENCY_REVIEW_ALLOW_DEPENDENCIES_LICENSES }}
-          deny-licenses: AGPL-1.0-only, AGPL-1.0-or-later, AGPL-1.0-or-later, AGPL-3.0-or-later, GPL-1.0-only, GPL-1.0-or-later, GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later
+          deny-licenses: {{ .DEPENDABOT_DENY_LICENSES }}
