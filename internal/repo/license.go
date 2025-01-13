@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -66,11 +67,21 @@ func (c *Content) UpdateLicense(repoName string, cfg *config.Config) error {
 		log.Printf("Error loading config for %s: %v\n", repoName, err)
 	}
 
+	headRef, err := r.Head()
+	if err != nil {
+		return fmt.Errorf("error getting head ref for %s: %w", repoName, err)
+	}
+	headRefName := headRef.Name()
+	if !headRefName.IsBranch() {
+		return errors.New("HEAD ref is not a branch")
+	}
+	defaultBranch := headRefName.Short()
+
 	// If we are targeting a different branch with PRs, then our base also needs to start from that branch
-	if repoConfig.PrTargetBranch != nil {
+	if repoConfig.PrTargetBranch != nil && *repoConfig.PrTargetBranch != defaultBranch {
 		err = c.checkoutBranch(r, w, *repoConfig.PrTargetBranch)
 		if err != nil {
-			return err
+			return fmt.Errorf("error checking out branch %s: %w", *repoConfig.PrTargetBranch, err)
 		}
 	}
 
