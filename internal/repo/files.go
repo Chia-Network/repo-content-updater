@@ -32,7 +32,7 @@ func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
 		}
 
 		for _, repo := range result {
-			if onlyRepo != "" && strings.ToLower(repo.RepositoryName) != strings.ToLower(onlyRepo) {
+			if onlyRepo != "" && !strings.EqualFold(repo.RepositoryName, onlyRepo) {
 				continue
 			}
 			for _, property := range repo.Properties {
