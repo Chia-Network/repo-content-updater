@@ -32,7 +32,7 @@ var managedFilesCmd = &cobra.Command{
 			log.Fatalf("error loading config: %s\n", err.Error())
 		}
 
-		err = content.ManagedFiles(cfg)
+		err = content.ManagedFiles(cfg, viper.GetString("repo"))
 		if err != nil {
 			log.Fatalln(err.Error())
 		}

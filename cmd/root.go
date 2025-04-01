@@ -35,6 +35,7 @@ func init() {
 	rootCmd.PersistentFlags().String("github-token", "", "The token to use to auth to GitHub API and Push to Repos")
 	rootCmd.PersistentFlags().Bool("sign-commits", true, "Whether or not to sign commits")
 	rootCmd.PersistentFlags().Bool("push", true, "Whether or not to push and create the pull request")
+	rootCmd.PersistentFlags().String("repo", "", "If set, will apply only to a specific repo")
 
 	cobra.CheckErr(viper.BindPFlag("config", rootCmd.PersistentFlags().Lookup("config")))
 	cobra.CheckErr(viper.BindPFlag("templates", rootCmd.PersistentFlags().Lookup("templates")))
@@ -45,6 +46,7 @@ func init() {
 	cobra.CheckErr(viper.BindPFlag("github-token", rootCmd.PersistentFlags().Lookup("github-token")))
 	cobra.CheckErr(viper.BindPFlag("sign-commits", rootCmd.PersistentFlags().Lookup("sign-commits")))
 	cobra.CheckErr(viper.BindPFlag("push", rootCmd.PersistentFlags().Lookup("push")))
+	cobra.CheckErr(viper.BindPFlag("repo", rootCmd.PersistentFlags().Lookup("repo")))
 }
 
 // initConfig reads in config file and ENV variables if set.
