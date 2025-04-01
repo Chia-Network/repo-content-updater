@@ -16,7 +16,7 @@ import (
 )
 
 // ManagedFiles updates all managed files in the org with current versions
-func (c *Content) ManagedFiles(cfg *config.Config) error {
+func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
 	// repo: [file, file, file]
 	reposToCheck := map[string][]string{}
 
@@ -32,6 +32,9 @@ func (c *Content) ManagedFiles(cfg *config.Config) error {
 		}
 
 		for _, repo := range result {
+			if onlyRepo != "" && !strings.EqualFold(repo.RepositoryName, onlyRepo) {
+				continue
+			}
 			for _, property := range repo.Properties {
 				if property.PropertyName == "managed-files" && property.Value != nil {
 					reposToCheck[repo.RepositoryName] = []string{}

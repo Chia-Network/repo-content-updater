@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"strings"
 
 	"github.com/google/go-github/v59/github"
 
@@ -14,7 +15,7 @@ import (
 )
 
 // CheckLicenses checks all repos for licenses that need to be managed/updated
-func (c *Content) CheckLicenses(cfg *config.Config) error {
+func (c *Content) CheckLicenses(cfg *config.Config, onlyRepo string) error {
 	var reposToCheck []string
 
 	opts := &github.ListOptions{
@@ -29,6 +30,9 @@ func (c *Content) CheckLicenses(cfg *config.Config) error {
 		}
 
 		for _, repo := range result {
+			if onlyRepo != "" && !strings.EqualFold(repo.RepositoryName, onlyRepo) {
+				continue
+			}
 			for _, property := range repo.Properties {
 				if property.PropertyName == "manage-license" && property.Value != nil && *property.Value == "yes" {
 					reposToCheck = append(reposToCheck, repo.RepositoryName)

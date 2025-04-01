@@ -32,7 +32,7 @@ var licenseCmd = &cobra.Command{
 			log.Fatalf("error loading config: %s\n", err.Error())
 		}
 
-		err = content.CheckLicenses(cfg)
+		err = content.CheckLicenses(cfg, viper.GetString("repo"))
 		if err != nil {
 			log.Fatalln(err.Error())
 		}
