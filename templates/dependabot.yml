@@ -70,3 +70,11 @@ updates:
       - dependencies
       - rust
       - "Changed"
+
+  - package-ecosystem: swift
+    directory: {{ .DEPENDABOT_SWIFT_DIRECTORY }}
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: {{ .DEPENDABOT_SWIFT_PULL_REQUEST_LIMIT }}
+    rebase-strategy: {{ .DEPENDABOT_SWIFT_REBASE_STRATEGY }}
