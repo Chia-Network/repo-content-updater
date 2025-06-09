@@ -40,10 +40,8 @@ var debugRepoCmd = &cobra.Command{
 }
 
 func init() {
-	debugRepoCmd.PersistentFlags().String("repo", "", "The repo to debug (ex: chia-blockchain)")
 	debugRepoCmd.PersistentFlags().StringSlice("file", nil, "The file(s) to debug in the repo. Use the flag multiple times for multiple files")
-
-	cobra.CheckErr(viper.BindPFlag("repo", debugRepoCmd.PersistentFlags().Lookup("repo")))
+	
 	cobra.CheckErr(viper.BindPFlag("file", debugRepoCmd.PersistentFlags().Lookup("file")))
 
 	rootCmd.AddCommand(debugRepoCmd)
