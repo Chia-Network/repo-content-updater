@@ -58,6 +58,10 @@ updates:
       - javascript
       - "Changed"
     reviewers: {{ .DEPENDABOT_NPM_REVIEWERS }}
+    groups:
+      global:
+        patterns:
+          - "*"
 
   - package-ecosystem: cargo
     directory: {{ .DEPENDABOT_CARGO_DIRECTORY }}
