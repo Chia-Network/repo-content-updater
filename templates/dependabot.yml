@@ -34,6 +34,12 @@ updates:
       - python
       - "Changed"
     reviewers: {{ .DEPENDABOT_PIP_REVIEWERS }}
+{{- if eq .DEPENDABOT_PIP_GROUP_UPDATES "1" }}
+    groups:
+      global:
+        patterns:
+          - "*"
+{{- end }}
 
   - package-ecosystem: "github-actions"
     directories: {{ .DEPENDABOT_ACTIONS_DIRECTORIES }}
@@ -47,6 +53,12 @@ updates:
       - github_actions
       - "Changed"
     reviewers: {{ .DEPENDABOT_ACTIONS_REVIEWERS }}
+{{- if eq .DEPENDABOT_ACTIONS_GROUP_UPDATES "1" }}
+    groups:
+      global:
+        patterns:
+          - "*"
+{{- end }}
 
   - package-ecosystem: "npm"
     directory: {{ .DEPENDABOT_NPM_DIRECTORY }}
@@ -78,6 +90,12 @@ updates:
       - dependencies
       - rust
       - "Changed"
+{{- if eq .DEPENDABOT_CARGO_GROUP_UPDATES "1" }}
+    groups:
+      global:
+        patterns:
+          - "*"
+{{- end }}
 
   - package-ecosystem: swift
     directory: {{ .DEPENDABOT_SWIFT_DIRECTORY }}
@@ -86,3 +104,9 @@ updates:
       day: "tuesday"
     open-pull-requests-limit: {{ .DEPENDABOT_SWIFT_PULL_REQUEST_LIMIT }}
     rebase-strategy: {{ .DEPENDABOT_SWIFT_REBASE_STRATEGY }}
+{{- if eq .DEPENDABOT_SWIFT_GROUP_UPDATES "1" }}
+    groups:
+      global:
+        patterns:
+          - "*"
+{{- end }}
