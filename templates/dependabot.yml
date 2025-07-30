@@ -15,10 +15,12 @@ updates:
       - go
       - "Changed"
     reviewers: {{ .DEPENDABOT_GOMOD_REVIEWERS }}
+{{- if eq .DEPENDABOT_GOMOD_GROUP_UPDATES "1" }}
     groups:
       global:
         patterns:
           - "*"
+{{- end }}
 
   - package-ecosystem: "pip"
     directory: {{ .DEPENDABOT_PIP_DIRECTORY }}
@@ -58,6 +60,12 @@ updates:
       - javascript
       - "Changed"
     reviewers: {{ .DEPENDABOT_NPM_REVIEWERS }}
+{{- if eq .DEPENDABOT_NPM_GROUP_UPDATES "1" }}
+    groups:
+      global:
+        patterns:
+          - "*"
+{{- end }}
 
   - package-ecosystem: cargo
     directory: {{ .DEPENDABOT_CARGO_DIRECTORY }}
