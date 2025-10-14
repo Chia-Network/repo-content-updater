@@ -130,5 +130,5 @@ keep-runtime-typing = true
 
 {{- $items := .EXTRA_RUFF_CONFIG_SECTIONS -}}
 {{- range $index, $val := $items -}}
-  {{- if gt $index 0 }}\n\n{{ end }}{{ $val }}
+  {{- if gt $index 0 }}\n{{ end }}{{ $val }}
 {{- end -}}
