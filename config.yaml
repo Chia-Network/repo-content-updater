@@ -78,6 +78,10 @@ files:
     template_name: SECURITY.md
     repo_path: SECURITY.md
 
+  - name: ruff
+    template_name: ruff.toml
+    repo_path: ruff.toml
+
 variables:
   COMPANY_NAME: "Chia Network Inc."
   CGO_ENABLED: "0"
@@ -85,22 +89,22 @@ variables:
   DEPENDABOT_GOMOD_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_GOMOD_REBASE_STRATEGY: "auto"
   DEPENDABOT_GOMOD_DIRECTORY: "/"
-  DEPENDABOT_GOMOD_REVIEWERS: "[\"cmmarslender\", \"Starttoaster\"]"
+  DEPENDABOT_GOMOD_REVIEWERS: '["cmmarslender", "Starttoaster"]'
   DEPENDABOT_GOMOD_GROUP_UPDATES: "1"
   DEPENDABOT_PIP_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_PIP_REBASE_STRATEGY: "auto"
   DEPENDABOT_PIP_DIRECTORY: "/"
-  DEPENDABOT_PIP_REVIEWERS: "[\"emlowe\", \"altendky\"]"
+  DEPENDABOT_PIP_REVIEWERS: '["emlowe"]'
   DEPENDABOT_PIP_GROUP_UPDATES: "0"
   DEPENDABOT_ACTIONS_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_ACTIONS_REBASE_STRATEGY: "auto"
-  DEPENDABOT_ACTIONS_DIRECTORIES: "[\"/\", \".github/actions/*\"]"
-  DEPENDABOT_ACTIONS_REVIEWERS: "[\"cmmarslender\", \"Starttoaster\", \"pmaslana\"]"
+  DEPENDABOT_ACTIONS_DIRECTORIES: '["/", ".github/actions/*"]'
+  DEPENDABOT_ACTIONS_REVIEWERS: '["cmmarslender", "Starttoaster", "pmaslana"]'
   DEPENDABOT_ACTIONS_GROUP_UPDATES: "0"
   DEPENDABOT_NPM_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_NPM_REBASE_STRATEGY: "auto"
   DEPENDABOT_NPM_DIRECTORY: "/"
-  DEPENDABOT_NPM_REVIEWERS: "[\"cmmarslender\", \"ChiaMineJP\"]"
+  DEPENDABOT_NPM_REVIEWERS: '["cmmarslender", "ChiaMineJP"]'
   DEPENDABOT_NPM_GROUP_UPDATES: "0"
   DEPENDABOT_CARGO_DIRECTORY: "/"
   DEPENDABOT_CARGO_PULL_REQUEST_LIMIT: "10"
