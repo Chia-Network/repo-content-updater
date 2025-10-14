@@ -105,22 +105,12 @@ ignore = [
     "FIX",  # TODOs, etc: ~400 errors
 ]
 
-{{- if -eq .REPO_NAME "chia-blockchain"}}
-[lint.per-file-ignores]
-"chia/_tests/*" = ["S106"]
-{{- end}}
-
 [lint.flake8-implicit-str-concat]
 # Found 3279 errors.
 # allow-multiline = false
 
 [lint.flake8-tidy-imports]
 ban-relative-imports = "all"
-
-{{- if -eq .REPO_NAME "chia-blockchain"}}
-[lint.flake8-tidy-imports.banned-api]
- "asyncio.create_task".msg = "Use `from chia.util.task_referencer import create_referenced_task` and `create_referenced_task()`"
-{{- end}}
 
 [lint.isort]
 required-imports = ["from __future__ import annotations"]
@@ -137,3 +127,8 @@ max-bool-expr = 5
 
 [lint.pyupgrade]
 keep-runtime-typing = true
+
+{{- $items := .EXTRA_RUFF_CONFIG_SECTIONS -}}
+{{- range $index, $val := $items -}}
+  {{- if gt $index 0 }}\n\n{{ end }}{{ $val }}
+{{- end -}}
