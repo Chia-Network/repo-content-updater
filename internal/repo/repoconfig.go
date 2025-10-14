@@ -14,7 +14,7 @@ type Config struct {
 	AssignUsers    []string          `yaml:"assign_users"`
 	AssignGroup    *string           `yaml:"assign_group"`
 	CommitPrefix   *string           `yaml:"commit_prefix"`
-	VarOverrides   map[string]string `yaml:"var_overrides"`
+	VarOverrides   map[string]interface{} `yaml:"var_overrides"`
 }
 
 // LoadRepoConfig loads the repository configuration from the .repo-content-updater.yml file.
