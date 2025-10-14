@@ -16,7 +16,7 @@ func ProcessTemplate(templateContent []byte, defaultVars map[string]interface{},
 	hexHash := hex.EncodeToString(hash[:])
 
 	notOverridable := map[string]bool{"CURRENT_YEAR": true}
-	data := map[string]string{
+	data := map[string]interface{}{
 		"CURRENT_YEAR": strconv.Itoa(time.Now().Year()),
 	}
 
