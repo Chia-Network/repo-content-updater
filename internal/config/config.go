@@ -11,7 +11,7 @@ import (
 type Config struct {
 	Groups    []Group           `yaml:"groups"`
 	Files     []File            `yaml:"files"`
-	Variables map[string]interface{} `yaml:"variables"`
+	Variables map[string]string `yaml:"variables"`
 }
 
 // Group is a defined group of template files to include at once

@@ -10,13 +10,13 @@ import (
 )
 
 // ProcessTemplate renders the given template file
-func ProcessTemplate(templateContent []byte, defaultVars map[string]interface{}, overrides map[string]interface{}) ([]byte, error) {
+func ProcessTemplate(templateContent []byte, defaultVars map[string]string, overrides map[string]string) ([]byte, error) {
 	// Compute the SHA256 hash of the template content
 	hash := sha256.Sum256(templateContent)
 	hexHash := hex.EncodeToString(hash[:])
 
 	notOverridable := map[string]bool{"CURRENT_YEAR": true}
-	data := map[string]interface{}{
+	data := map[string]string{
 		"CURRENT_YEAR": strconv.Itoa(time.Now().Year()),
 	}
 
