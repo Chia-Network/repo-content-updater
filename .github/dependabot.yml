@@ -31,7 +31,7 @@ updates:
       - dependencies
       - python
       - "Changed"
-    reviewers: ["emlowe", "altendky"]
+    reviewers: ["emlowe"]
 
   - package-ecosystem: "github-actions"
     directories: ["/", ".github/actions/*"]
