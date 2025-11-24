@@ -1,4 +1,4 @@
-aoverrides:
+overrides:
   - files: ["*.yaml", "*.yml", "*.toml", "*.json", "*.ini"]
     options:
       tabWidth: 2
