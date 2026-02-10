@@ -3,7 +3,7 @@ module github.com/chia-network/repo-content-updater
 go 1.24.0
 
 require (
-	github.com/go-git/go-git/v5 v5.16.2
+	github.com/go-git/go-git/v5 v5.16.5
 	github.com/google/go-github/v59 v59.0.0
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.20.1
