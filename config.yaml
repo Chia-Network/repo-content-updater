@@ -74,6 +74,10 @@ files:
       - .prettier.config.cjs
       - .prettierrc.toml
 
+  - name: renovate-ips
+    template_name: renovate-ips.json
+    repo_path: renovate.json
+
   - name: security
     template_name: SECURITY.md
     repo_path: SECURITY.md

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "reviewers": ["team:content-updater-reviewers"],
+  "prHourlyLimit": 10,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "TRIVY_OPERATOR_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "aquasecurity/trivy-operator",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "OAUTH2_PROXY_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "oauth2-proxy/oauth2-proxy",
+      "datasourceTemplate": "github-tags"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "CERT_MANAGER_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "cert-manager/cert-manager",
+      "datasourceTemplate": "github-tags"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "CNPG_OPERATOR_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "cloudnative-pg/charts",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^cloudnative-pg-v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "CNPG_BARMAN_PLUGIN_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "cloudnative-pg/charts",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^plugin-barman-cloud-v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "EXTERNAL_DNS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "kubernetes-sigs/external-dns",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "INGRESS_NGINX_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "kubernetes/ingress-nginx",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^helm-chart-(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "NODELOCALDNS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "kubernetes/dns",
+      "datasourceTemplate": "github-tags"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "METALLB_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "metallb/metallb",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^metallb-chart-(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "CEPH_CSI_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "ceph/ceph-csi",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    }
+  ]
+}
