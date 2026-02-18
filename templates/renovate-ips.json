@@ -122,7 +122,7 @@
       ],
       "depNameTemplate": "prometheus-operator/prometheus-operator",
       "datasourceTemplate": "github-tags",
-      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
+      "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+)$"
     },
     {
       "customType": "regex",
@@ -135,7 +135,7 @@
       ],
       "depNameTemplate": "thanos-io/thanos",
       "datasourceTemplate": "github-tags",
-      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
+      "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+)$"
     },
     {
       "customType": "regex",
