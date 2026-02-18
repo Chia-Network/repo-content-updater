@@ -153,6 +153,32 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/",
+        "/\\.github/workflows/deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "LOKI_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "grafana/loki",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/",
+        "/\\.github/workflows/deploy-alloy\\.yml$/"
+      ],
+      "matchStrings": [
+        "ALLOY_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "grafana/alloy",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
         "/\\.github/workflows/reusable-deploy\\.yml$/"
       ],
       "matchStrings": [
