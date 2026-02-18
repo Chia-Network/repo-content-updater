@@ -114,6 +114,45 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/",
+        "/\\.github/workflows/deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "PROMETHEUS_OPERATOR_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "prometheus-operator/prometheus-operator",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/",
+        "/\\.github/workflows/deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "THANOS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "thanos-io/thanos",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/reusable-deploy\\.yml$/",
+        "/\\.github/workflows/deploy\\.yml$/"
+      ],
+      "matchStrings": [
+        "TRICKSTER_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "trickstercache/trickster",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
         "/\\.github/workflows/reusable-deploy\\.yml$/"
       ],
       "matchStrings": [
