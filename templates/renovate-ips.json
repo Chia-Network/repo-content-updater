@@ -172,7 +172,7 @@
       "matchStrings": [
         "ALLOY_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
       ],
-      "depNameTemplate": "grafana/loki",
+      "depNameTemplate": "grafana/alloy",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+)$"
     },
