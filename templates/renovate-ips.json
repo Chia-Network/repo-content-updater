@@ -179,6 +179,18 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
+        "/terraform/k0s-config\\.yml$/"
+      ],
+      "matchStrings": [
+        "version:\\s*(?<currentValue>v\\S+)"
+      ],
+      "depNameTemplate": "k0sproject/k0s",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+\\+k0s\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
         "/\\.github/workflows/reusable-deploy\\.yml$/"
       ],
       "matchStrings": [
