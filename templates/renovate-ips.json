@@ -9,7 +9,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "TRIVY_OPERATOR_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -21,7 +21,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "OAUTH2_PROXY_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -32,7 +32,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "CERT_MANAGER_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -43,7 +43,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "CNPG_OPERATOR_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -55,7 +55,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "CNPG_BARMAN_PLUGIN_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -67,7 +67,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "EXTERNAL_DNS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -79,7 +79,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "INGRESS_NGINX_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -91,7 +91,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "NODELOCALDNS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -102,7 +102,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "METALLB_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -114,8 +114,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/",
-        "/\\.github/workflows/deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "PROMETHEUS_OPERATOR_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -127,8 +126,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/",
-        "/\\.github/workflows/deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "THANOS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -140,8 +138,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/",
-        "/\\.github/workflows/deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "TRICKSTER_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -153,8 +150,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/",
-        "/\\.github/workflows/deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "LOKI_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -166,8 +162,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/",
-        "/\\.github/workflows/deploy-alloy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "ALLOY_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
@@ -191,7 +186,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/\\.github/workflows/reusable-deploy\\.yml$/"
+        "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
         "CEPH_CSI_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
