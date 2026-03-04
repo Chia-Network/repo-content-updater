@@ -189,6 +189,17 @@
         "/\\.github/workflows/.+$/"
       ],
       "matchStrings": [
+        "CHIA_OPERATOR_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "Chia-Network/chia-operator",
+      "datasourceTemplate": "github-tags"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/.+$/"
+      ],
+      "matchStrings": [
         "CEPH_CSI_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
       ],
       "depNameTemplate": "ceph/ceph-csi",
