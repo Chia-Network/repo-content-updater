@@ -25,6 +25,7 @@ permissions:
 
 jobs:
   dependabot-review:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]')
     runs-on: ubuntu-latest
     steps:
       - name: Resolve target PR context
@@ -80,6 +81,7 @@ jobs:
           curl https://cursor.com/install -fsS | bash
           if [ -x "$HOME/.cursor/bin/agent" ]; then
             echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cursor/bin:$PATH"
           fi
           if ! command -v agent >/dev/null 2>&1; then
             echo "Could not locate 'agent' binary after Cursor CLI install."
