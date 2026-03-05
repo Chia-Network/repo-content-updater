@@ -6,7 +6,7 @@
 # - An upstream dependency checkout
 # - Local usage hints in the target repo
 #
-# Source repository: https://github.com/Chia-Network/chialisp-web
+# Source documentation: https://cursor.com/docs/cli/github-actions
 name: Dependabot Cursor Review
 
 on:
@@ -68,7 +68,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.target_pr.outputs.head_sha }}
+          ref: ${{`{{ steps.target_pr.outputs.head_sha }}`}}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -94,7 +94,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const body = ${{ toJSON(steps.target_pr.outputs.body) }} || '';
+            const body = ${{`{{ toJSON(steps.target_pr.outputs.body) }}`}} || '';
             const releaseMatch = body.match(
               /<details>\s*<summary>\s*Release notes\s*<\/summary>\s*([\s\S]*?)<\/details>/i
             );
@@ -108,7 +108,7 @@ jobs:
               /https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:\/|$)/i
             );
             const upstreamRepo = repoMatch ? repoMatch[1].replace(/\.git$/i, '') : '';
-            const title = ${{ toJSON(steps.target_pr.outputs.title) }} || '';
+            const title = ${{`{{ toJSON(steps.target_pr.outputs.title) }}`}} || '';
             const titleMatch = title.match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
             const packageName = titleMatch ? titleMatch[1].trim() : '';
             const fromVersion = titleMatch ? titleMatch[2].trim() : '';
@@ -120,7 +120,7 @@ jobs:
             }
 
             const out = {
-              prNumber: Number('${{ steps.target_pr.outputs.number }}'),
+              prNumber: Number('${{`{{ steps.target_pr.outputs.number }}`}}'),
               upstreamRepo,
               packageName,
               fromVersion,
@@ -142,7 +142,7 @@ jobs:
       - name: Checkout upstream repository
         uses: actions/checkout@v6
         with:
-          repository: ${{ steps.dependabot_context.outputs.upstream_repo }}
+          repository: ${{`{{ steps.dependabot_context.outputs.upstream_repo }}`}}
           path: .upstream-dependency
           fetch-depth: 0
 
@@ -156,7 +156,7 @@ jobs:
       - name: Gather local usage hints
         shell: bash
         env:
-          PACKAGE_NAME: ${{ steps.dependabot_context.outputs.package_name }}
+          PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
         run: |
           PACKAGE_REGEX="$(python3 -c 'import os, re; print(re.escape(os.getenv("PACKAGE_NAME", "")))')"
           if [ -z "$PACKAGE_REGEX" ]; then
@@ -171,12 +171,12 @@ jobs:
 
       - name: Run Cursor analysis
         env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-          PR_TITLE: ${{ steps.target_pr.outputs.title }}
-          PR_BODY: ${{ steps.target_pr.outputs.body }}
-          PACKAGE_NAME: ${{ steps.dependabot_context.outputs.package_name }}
-          FROM_VERSION: ${{ steps.dependabot_context.outputs.from_version }}
-          TO_VERSION: ${{ steps.dependabot_context.outputs.to_version }}
+          CURSOR_API_KEY: ${{`{{ secrets.CURSOR_API_KEY }}`}}
+          PR_TITLE: ${{`{{ steps.target_pr.outputs.title }}`}}
+          PR_BODY: ${{`{{ steps.target_pr.outputs.body }}`}}
+          PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
+          FROM_VERSION: ${{`{{ steps.dependabot_context.outputs.from_version }}`}}
+          TO_VERSION: ${{`{{ steps.dependabot_context.outputs.to_version }}`}}
         shell: bash
         run: |
           if [ -z "$CURSOR_API_KEY" ]; then
@@ -277,7 +277,7 @@ jobs:
             ${String(analysis).slice(0, maxLen)}`;
 
             const { owner, repo } = context.repo;
-            const issue_number = Number('${{ steps.target_pr.outputs.number }}');
+            const issue_number = Number('${{`{{ steps.target_pr.outputs.number }}`}}');
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner,
               repo,
