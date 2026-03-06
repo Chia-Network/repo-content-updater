@@ -41,7 +41,8 @@ func ghDo[T any](fn func() (T, *github.Response, error)) (T, *github.Response, e
 		}
 	}
 
-	return ghDo[T](fn) // final attempt after exhausting retries
+	// All retries were rate-limited; make one final attempt and return whatever happens.
+	return fn()
 }
 
 // ghDoNoBody is like ghDo but for GitHub API calls that return only (*Response, error),
@@ -54,5 +55,6 @@ func ghDoNoBody(fn func() (*github.Response, error)) (*github.Response, error) {
 		}
 	}
 
-	return ghDoNoBody(fn) // final attempt after exhausting retries
+	// All retries were rate-limited; make one final attempt and return whatever happens.
+	return fn()
 }
