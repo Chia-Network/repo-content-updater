@@ -23,6 +23,9 @@ func waitForRateLimit(err error, attempt int) bool {
 		return true
 	} else if errors.As(err, &abuseErr) {
 		retryAfter := abuseErr.GetRetryAfter()
+		if retryAfter == 0 {
+			retryAfter = time.Minute // conservative default when GitHub omits Retry-After
+		}
 		log.Printf("GitHub secondary rate limit (abuse) exceeded (attempt %d/%d). Waiting %s...", attempt+1, maxRetries, retryAfter.Round(time.Second))
 		time.Sleep(retryAfter)
 		return true
