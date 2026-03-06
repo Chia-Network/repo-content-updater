@@ -201,7 +201,9 @@ func (c *Content) pushAndPR(r *git.Repository, repoName, branchName, title strin
 	}
 
 	// Create the pull request
-	pr, _, err := c.githubClient.PullRequests.Create(context.TODO(), c.githubOrg, repoName, newPR)
+	pr, _, err := ghDo(func() (*github.PullRequest, *github.Response, error) {
+		return c.githubClient.PullRequests.Create(context.TODO(), c.githubOrg, repoName, newPR)
+	})
 	if err != nil {
 		return fmt.Errorf("error creating pull request: %s", err)
 	}
@@ -223,9 +225,11 @@ func (c *Content) pushAndPR(r *git.Repository, repoName, branchName, title strin
 		teamReviewer = []string{c.reviewTeamName}
 	}
 	// Requesting review from the specified team and individual users
-	_, _, err = c.githubClient.PullRequests.RequestReviewers(context.TODO(), c.githubOrg, repoName, pr.GetNumber(), github.ReviewersRequest{
-		TeamReviewers: teamReviewer,
-		Reviewers:     opts.AssignUsers, // Directly use specified individual users
+	_, _, err = ghDo(func() (*github.PullRequest, *github.Response, error) {
+		return c.githubClient.PullRequests.RequestReviewers(context.TODO(), c.githubOrg, repoName, pr.GetNumber(), github.ReviewersRequest{
+			TeamReviewers: teamReviewer,
+			Reviewers:     opts.AssignUsers, // Directly use specified individual users
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("error requesting reviewers: %w", err)
@@ -235,7 +239,9 @@ func (c *Content) pushAndPR(r *git.Repository, repoName, branchName, title strin
 }
 
 func (c *Content) ensureGroupMembership(repoName string) error {
-	_, err := c.githubClient.Teams.AddTeamRepoBySlug(context.TODO(), c.githubOrg, c.reviewTeamName, c.githubOrg, repoName, &github.TeamAddTeamRepoOptions{Permission: "push"})
+	_, err := ghDoNoBody(func() (*github.Response, error) {
+		return c.githubClient.Teams.AddTeamRepoBySlug(context.TODO(), c.githubOrg, c.reviewTeamName, c.githubOrg, repoName, &github.TeamAddTeamRepoOptions{Permission: "push"})
+	})
 	return err
 }
 
