@@ -24,7 +24,9 @@ func (c *Content) CheckLicenses(cfg *config.Config, onlyRepo string) error {
 	}
 	for {
 		opts.Page++
-		result, resp, err := c.githubClient.Organizations.ListCustomPropertyValues(context.TODO(), c.githubOrg, opts)
+		result, resp, err := ghDo(func() ([]*github.RepoCustomPropertyValue, *github.Response, error) {
+			return c.githubClient.Organizations.ListCustomPropertyValues(context.TODO(), c.githubOrg, opts)
+		})
 		if err != nil {
 			return err
 		}
@@ -146,7 +148,9 @@ func (c *Content) UpdateLicense(repoName string, cfg *config.Config) error {
 		return err
 	}
 
-	repo, _, err := c.githubClient.Repositories.Get(context.TODO(), c.githubOrg, repoName)
+	repo, _, err := ghDo(func() (*github.Repository, *github.Response, error) {
+		return c.githubClient.Repositories.Get(context.TODO(), c.githubOrg, repoName)
+	})
 	if err != nil {
 		return fmt.Errorf("error getting repo info: %w", err)
 	}
