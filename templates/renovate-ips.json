@@ -205,6 +205,18 @@
       "depNameTemplate": "ceph/ceph-csi",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/\\.github/workflows/.+$/"
+      ],
+      "matchStrings": [
+        "PROXYSQL_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "sysown/proxysql",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v(?<version>.+)$"
     }
   ]
 }
