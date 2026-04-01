@@ -3,3 +3,4 @@ bin/
 .idea/*
 *.log
 clones
+template-expanded/
