@@ -763,7 +763,47 @@ jobs:
           {common_context}
 
           Task 1: Supply-chain malware review.
-          Review the dependency update for signs of compromise (obfuscation, suspicious lifecycle scripts, dynamic URL loading, persistence writes, process spawning, credential exfiltration patterns, typosquatting, transitive dependency anomalies, lock integrity anomalies, maintainer drift, workflow tampering, invisible unicode / confusable abuse).
+          Review the dependency update for signs of compromise. Use this checklist and explicitly consider each category:
+
+          ### Classic obfuscation
+          - Obfuscated code (base64, exec, eval, XOR, encoded strings)
+          - Network calls to unexpected hosts (non-package-related URLs)
+          - File system writes to startup/persistence locations
+          - Process spawning, shell commands
+          - Steganography or data hiding in media files
+          - Credential/token exfiltration
+          - Typosquatting indicators
+          - Suspicious npm lifecycle scripts (preinstall, install, postinstall) in package.json
+          - Dynamic require() or import() of obfuscated or encoded URLs
+          - Minified or bundled payloads added outside normal build artifacts
+
+          ### Invisible Unicode / GlassWorm technique
+          This class of attack can appear blank in rendered code review. Flag:
+          - Unicode Private Use Area characters (U+FE00–U+FE0F, U+E0100–U+E01EF)
+          - Zero-width characters (U+200B, U+200C, U+200D, U+FEFF)
+          - Hangul filler characters (U+3164, U+115F, U+1160)
+          - Bidi control characters (U+202A–U+202E, U+2066–U+2069, Trojan Source)
+          - Homoglyph substitutions in operators/identifiers (e.g. ／, ∗, ǃ)
+          - Strings that look empty in diff but have non-zero bytes
+          - eval()/Function() receiving visually blank strings
+          - Decoder patterns using codePointAt()/fromCodePoint()/charCodeAt() for hidden payload assembly
+          - Commit metadata consistency anomalies suggesting force-push/rewrite concealment
+
+          ### Dependency integrity
+          - Unexpected new transitive dependencies vs prior dependency graph
+          - Known-safe packages with sudden dependency count increase (e.g., axios expected dependency count)
+          - Lock file hashes/checksums inconsistent with expected integrity formats or release metadata
+          - Version jumps skipping many semver minors, or ghost versions missing corresponding tags/releases
+          - Maintainer/publisher identity drift from historical account patterns
+
+          ### Dependabot-specific context
+          - Focus on files changed in node_modules/, vendor/, and dependency/lock manifests (package-lock.json, yarn.lock, pnpm-lock.yaml, Gemfile.lock, go.sum, Cargo.toml, Cargo.lock, .cargo/config.toml, .cargo/config, pyproject.toml, poetry.lock, Pipfile.lock, requirements.txt, requirements-dev.txt, requirements/*.txt, etc.)
+          - Flag new transitive dependencies introduced alongside the direct update
+          - Flag new preinstall/postinstall scripts that were not present previously
+          - Treat .github/workflows/ modifications as highly suspicious in a pure dependency update PR
+
+          Use the provided malware scanner report as hard evidence and incorporate it into your conclusion.
+          If scanner findings and your interpretation disagree, call that out explicitly.
 
           Start your response with exactly one line:
             Verdict: malicious
