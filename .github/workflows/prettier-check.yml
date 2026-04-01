@@ -1,0 +1,38 @@
+name: Prettier Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  prettier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build -o bin/repo-content-updater .
+
+      - name: Expand templates
+        run: |
+          mkdir -p template-expanded
+          for f in templates/*; do
+            filename=$(basename "$f")
+            ./bin/repo-content-updater debug-template "$filename" --output "template-expanded/$filename"
+          done
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install Prettier
+        run: npm install -g prettier
+
+      - name: Run Prettier Check
+        run: prettier --check --ignore-unknown template-expanded/

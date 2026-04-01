@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path"
@@ -35,13 +36,23 @@ var debugTemplateCmd = &cobra.Command{
 			log.Fatalln(err.Error())
 		}
 
-		log.Println(string(content))
+		outputPath := viper.GetString("debug-template-output")
+		if outputPath != "" {
+			if err := os.WriteFile(outputPath, content, 0644); err != nil {
+				log.Fatalf("error writing output file: %s\n", err.Error())
+			}
+		} else {
+			fmt.Print(string(content))
+		}
 	},
 }
 
 func init() {
 	debugTemplateCmd.PersistentFlags().StringToString("var", map[string]string{}, "Set override vars for the template")
 	cobra.CheckErr(viper.BindPFlag("debug-template-vars", debugTemplateCmd.PersistentFlags().Lookup("var")))
+
+	debugTemplateCmd.PersistentFlags().StringP("output", "o", "", "Write expanded template to this file path instead of stdout")
+	cobra.CheckErr(viper.BindPFlag("debug-template-output", debugTemplateCmd.PersistentFlags().Lookup("output")))
 
 	rootCmd.AddCommand(debugTemplateCmd)
 }
