@@ -1,4 +1,4 @@
-name: Prettier Check
+name: Prettier/Actionlint Check
 
 on:
   push:
