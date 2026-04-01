@@ -422,7 +422,7 @@ jobs:
             'dynamic_require_import::\b(?:require|import)\s*\(\s*(?:atob|Buffer\.from|decodeURIComponent|[\"'"'"'`].*https?://)'
             'shell_process_spawn::\b(?:child_process|spawn|exec|subprocess|os\.system)\b'
             'filesystem_persistence::(?:/etc/(?:init\\.d|rc\\.local|cron\\.)|/Library/Launch(?:Agents|Daemons)|\\.config/autostart|CurrentVersion\\\\Run|crontab)'
-            'network_c2_indicator::https?://[^\s\"'"'"')]+'
+            'network_c2_indicator::https?://(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[^/\s\"'"'"')]+(?:\.onion|\.top|\.xyz|\.click|\.gq|\.tk|\.ml|\.cf|\.ga|\.work|\.support)|(?:pastebin\.com|raw\.githubusercontent\.com|discord(?:app)?\.com/api/webhooks|api\.telegram\.org|ipfs\.io|gateway\.pinata\.cloud|tinyurl\.com|bit\.ly|sfrclak\.com))'
             'credential_exfil_indicator::(?:token|secret|api[_-]?key|authorization|cookie|passwd|password).{0,80}(?:fetch|axios|http|https|curl|wget|post|send)'
             'lifecycle_script::"(?:preinstall|install|postinstall)"\s*:'
             'obfuscation_indicator::\b(?:atob|btoa|base64|xor|decodeURIComponent)\b'
@@ -722,7 +722,7 @@ jobs:
             except FileNotFoundError:
               return ""
 
-          prompt = f"""
+          common_context = f"""
           This is a Dependabot PR review request.
 
           PR title:
@@ -757,33 +757,97 @@ jobs:
           Repository layout:
           - Current repository root: .
           - Upstream dependency repository: .upstream-dependency (full git history is available)
+          """.strip()
 
-          Please produce:
-          0) Perform a "Supply Chain Diff Review" mindset for compromise indicators.
-          1) Where in this repo the dependency appears to be used (treat rg hints as directional, not exhaustive).
-          2) Whether those usage sites intersect with likely changed APIs based on release notes, commits, and direct inspection of .upstream-dependency.
-          3) Risks / unknowns, accounting for malware scan output.
-          4) Recommendation: merge / merge-with-caveats / hold.
+          malware_prompt = f"""
+          {common_context}
+
+          Task 1: Supply-chain malware review.
+          Review the dependency update for signs of compromise (obfuscation, suspicious lifecycle scripts, dynamic URL loading, persistence writes, process spawning, credential exfiltration patterns, typosquatting, transitive dependency anomalies, lock integrity anomalies, maintainer drift, workflow tampering, invisible unicode / confusable abuse).
+
           Start your response with exactly one line:
             Verdict: malicious
           or:
             Verdict: benign
-          Then explain your reasoning briefly.
-          This is equivalent to: "Review this Dependabot PR diff for supply chain compromise".
+          Then explain your reasoning briefly with top evidence.
           Do not include intermediate reasoning or self-talk.
           Keep it concise and actionable.
           """.strip()
 
-          with open("cursor_prompt.txt", "w", encoding="utf-8") as f:
-            f.write(prompt)
+          compatibility_prompt = f"""
+          {common_context}
+
+          Task 2: Compatibility and adoption analysis.
+          1) Where in this repo the dependency appears to be used (treat rg hints as directional, not exhaustive).
+          2) Whether those usage sites intersect with likely changed APIs based on release notes, commits, and direct inspection of .upstream-dependency.
+          3) Risks / unknowns for runtime/build compatibility.
+          4) Recommendation: merge / merge-with-caveats / hold.
+          Do not include intermediate reasoning or self-talk.
+          Keep it concise and actionable.
+          """.strip()
+
+          with open("cursor_prompt_malware.txt", "w", encoding="utf-8") as f:
+            f.write(malware_prompt)
+          with open("cursor_prompt_compatibility.txt", "w", encoding="utf-8") as f:
+            f.write(compatibility_prompt)
           PY
 
-          if ! agent -f --mode ask -p --output-format json < cursor_prompt.txt > cursor_output.json; then
-            # Fallback for older CLI behavior that may require a prompt argument.
-            # Bound prompt size to avoid shell argument length limits.
-            FALLBACK_PROMPT="$(python3 -c 'from pathlib import Path; max_bytes = 60000; raw = Path("cursor_prompt.txt").read_bytes(); text = raw[:max_bytes].decode("utf-8", errors="ignore"); text += "\n\n[Prompt truncated for CLI argument compatibility.]" if len(raw) > max_bytes else ""; print(text, end="")')"
-            agent -f --mode ask -p --output-format json "$FALLBACK_PROMPT" > cursor_output.json
-          fi
+          run_agent_prompt() {
+            local prompt_file="$1"
+            local output_file="$2"
+            if ! agent -f --mode ask -p --output-format json < "$prompt_file" > "$output_file"; then
+              FALLBACK_PROMPT="$(python3 -c 'from pathlib import Path; import sys; path = sys.argv[1]; max_bytes = 60000; raw = Path(path).read_bytes(); text = raw[:max_bytes].decode("utf-8", errors="ignore"); text += "\n\n[Prompt truncated for CLI argument compatibility.]" if len(raw) > max_bytes else ""; print(text, end="")' "$prompt_file")"
+              agent -f --mode ask -p --output-format json "$FALLBACK_PROMPT" > "$output_file"
+            fi
+          }
+
+          run_agent_prompt "cursor_prompt_malware.txt" "cursor_output_malware.json"
+          run_agent_prompt "cursor_prompt_compatibility.txt" "cursor_output_compatibility.json"
+
+          python3 - <<'PY'
+          import json
+
+          def load_any(path):
+            try:
+              with open(path, "r", encoding="utf-8") as f:
+                raw = f.read()
+            except FileNotFoundError:
+              return {"result": f"Missing output file: {path}"}
+            try:
+              return json.loads(raw)
+            except Exception:
+              return {"result": raw}
+
+          def extract_text(payload):
+            for key in ("result", "output", "text", "message"):
+              val = payload.get(key)
+              if isinstance(val, str) and val.strip():
+                return val
+            try:
+              return json.dumps(payload, indent=2)
+            except Exception:
+              return str(payload)
+
+          malware_payload = load_any("cursor_output_malware.json")
+          compatibility_payload = load_any("cursor_output_compatibility.json")
+          malware_text = extract_text(malware_payload)
+          compatibility_text = extract_text(compatibility_payload)
+
+          combined_text = (
+            "## Supply-Chain Malware Review\n\n"
+            f"{malware_text}\n\n"
+            "## Compatibility Analysis\n\n"
+            f"{compatibility_text}"
+          )
+
+          combined = {
+            "result": combined_text,
+            "malware_review": malware_payload,
+            "compatibility_review": compatibility_payload,
+          }
+          with open("cursor_output.json", "w", encoding="utf-8") as f:
+            json.dump(combined, f, indent=2)
+          PY
 
       - name: Upload malware scan artifacts
         if: always()
@@ -802,7 +866,9 @@ jobs:
           script: |
             const fs = require('fs');
             const marker = '<!-- cursor-dependabot-review -->';
-            const maxLen = 60000;
+            const analysisMaxLen = 48000;
+            const malwareMaxLen = 10000;
+            const githubCommentLimit = 65536;
 
             function readText(path, fallback = '') {
               try {
@@ -835,14 +901,31 @@ jobs:
               '## Malware Scan Summary\n\n- Status: **unknown**\n- Scanner output file missing.'
             );
 
-            const body = `${marker}
+            let trimmedAnalysis = analysisText.slice(0, analysisMaxLen);
+            let trimmedMalware = malwareSummary.slice(0, malwareMaxLen);
+            let body = `${marker}
             ## 🤖 Cursor Dependency Analysis
 
-            ${analysisText.slice(0, maxLen)}
+            ${trimmedAnalysis}
 
             ---
 
-            ${malwareSummary.slice(0, 12000)}`;
+            ${trimmedMalware}`;
+            if (body.length > githubCommentLimit) {
+              const allowedAnalysis = Math.max(
+                0,
+                analysisMaxLen - (body.length - githubCommentLimit) - 256
+              );
+              trimmedAnalysis = analysisText.slice(0, allowedAnalysis);
+              body = `${marker}
+              ## 🤖 Cursor Dependency Analysis
+
+              ${trimmedAnalysis}
+
+              ---
+
+              ${trimmedMalware}`;
+            }
 
             const { owner, repo } = context.repo;
             const issue_number = Number('${{`{{ steps.target_pr.outputs.number }}`}}');
