@@ -1,16 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
-  ],
+  "extends": ["config:recommended"],
   "reviewers": ["team:content-updater-reviewers"],
   "prHourlyLimit": 10,
   "customManagers": [
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
       "matchStrings": [
         "TRIVY_OPERATOR_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
       ],
@@ -20,31 +16,21 @@
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "OAUTH2_PROXY_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["OAUTH2_PROXY_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "oauth2-proxy/oauth2-proxy",
       "datasourceTemplate": "github-tags"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "CERT_MANAGER_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["CERT_MANAGER_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "cert-manager/cert-manager",
       "datasourceTemplate": "github-tags"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
       "matchStrings": [
         "CNPG_OPERATOR_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
       ],
@@ -54,9 +40,7 @@
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
       "matchStrings": [
         "CNPG_BARMAN_PLUGIN_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
       ],
@@ -66,21 +50,15 @@
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "EXTERNAL_DNS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["EXTERNAL_DNS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "kubernetes-sigs/external-dns",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
       "matchStrings": [
         "INGRESS_NGINX_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
       ],
@@ -90,32 +68,22 @@
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "NODELOCALDNS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["NODELOCALDNS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "kubernetes/dns",
       "datasourceTemplate": "github-tags"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "METALLB_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["METALLB_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "metallb/metallb",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^metallb-chart-(?<version>.+)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
       "matchStrings": [
         "PROMETHEUS_OPERATOR_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
       ],
@@ -125,80 +93,54 @@
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "THANOS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["THANOS_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "thanos-io/thanos",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "TRICKSTER_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["TRICKSTER_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "trickstercache/trickster",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "LOKI_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["LOKI_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "grafana/loki",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "ALLOY_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["ALLOY_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "grafana/alloy",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/terraform/k0s-config\\.yml$/"
-      ],
-      "matchStrings": [
-        "version:\\s*(?<currentValue>v\\S+)"
-      ],
+      "managerFilePatterns": ["/terraform/k0s-config\\.yml$/"],
+      "matchStrings": ["version:\\s*(?<currentValue>v\\S+)"],
       "depNameTemplate": "k0sproject/k0s",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+\\.\\d+\\+k0s\\.\\d+)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "CHIA_OPERATOR_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["CHIA_OPERATOR_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "Chia-Network/chia-operator",
       "datasourceTemplate": "github-tags"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
       "matchStrings": [
         "CEPH_CSI_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
       ],
@@ -208,24 +150,16 @@
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "PROXYSQL_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["PROXYSQL_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "sysown/proxysql",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^v(?<version>.+)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": [
-        "/\\.github/workflows/.+$/"
-      ],
-      "matchStrings": [
-        "NATS_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
-      ],
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["NATS_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "nats-io/k8s",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^nats-(?<version>.+)$"
