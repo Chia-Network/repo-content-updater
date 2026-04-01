@@ -35,4 +35,17 @@ jobs:
         run: npm install -g prettier
 
       - name: Run Prettier Check
+        id: prettier
         run: prettier --check --ignore-unknown template-expanded/
+        continue-on-error: true
+
+      - name: Show Prettier diff
+        if: steps.prettier.outcome == 'failure'
+        run: |
+          cp -r template-expanded template-expanded-original
+          prettier --write --ignore-unknown template-expanded/
+          git diff --no-index template-expanded-original/ template-expanded/ || true
+
+      - name: Fail if Prettier check failed
+        if: steps.prettier.outcome == 'failure'
+        run: exit 1
