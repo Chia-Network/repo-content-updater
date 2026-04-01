@@ -211,35 +211,341 @@ jobs:
           rm -f .upstream-dependency/AGENTS.md || true
           rm -f .upstream-dependency/CLAUDE.md || true
 
+      - name: Run upstream malware scan
+        id: malware_scan
+        shell: bash
+        env:
+          PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
+          FROM_VERSION: ${{`{{ steps.dependabot_context.outputs.from_version }}`}}
+          TO_VERSION: ${{`{{ steps.dependabot_context.outputs.to_version }}`}}
+          MALWARE_WARN_ONLY: '{{ .DEPENDABOT_CURSOR_MALWARE_WARN_ONLY }}'
+          MALWARE_IOC_PATTERNS: '{{ .DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS }}'
+          MALWARE_UNICODE_ALLOWLIST: '{{ .DEPENDABOT_CURSOR_MALWARE_UNICODE_ALLOWLIST }}'
+          MALWARE_CONFUSABLE_ALLOWLIST: '{{ .DEPENDABOT_CURSOR_MALWARE_CONFUSABLE_ALLOWLIST }}'
+          MALWARE_HEURISTIC_ALLOWLIST: '{{ .DEPENDABOT_CURSOR_MALWARE_HEURISTIC_ALLOWLIST }}'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep jq
+
+          set -euo pipefail
+
+          output_json="malware_scan_report.json"
+          output_summary="malware_scan_summary.md"
+          changed_files_txt="upstream_changed_files.txt"
+          work_dir=".malware-scan"
+          rm -rf "$work_dir"
+          mkdir -p "$work_dir"
+
+          errors_file="$work_dir/errors.txt"
+          touched_file="$work_dir/changed_files_raw.txt"
+          file_list0="$work_dir/changed_files.nul"
+
+          unicode_jsonl="$work_dir/unicode.jsonl"
+          confusable_jsonl="$work_dir/confusable.jsonl"
+          ioc_jsonl="$work_dir/ioc.jsonl"
+          heuristic_jsonl="$work_dir/heuristic.jsonl"
+          : > "$errors_file"
+          : > "$touched_file"
+          : > "$file_list0"
+          : > "$unicode_jsonl"
+          : > "$confusable_jsonl"
+          : > "$ioc_jsonl"
+          : > "$heuristic_jsonl"
+
+          if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"${MALWARE_IOC_PATTERNS:-[]}"; then MALWARE_IOC_PATTERNS="[]"; fi
+          if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"${MALWARE_UNICODE_ALLOWLIST:-[]}"; then MALWARE_UNICODE_ALLOWLIST="[]"; fi
+          if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"${MALWARE_CONFUSABLE_ALLOWLIST:-[]}"; then MALWARE_CONFUSABLE_ALLOWLIST="[]"; fi
+          if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"${MALWARE_HEURISTIC_ALLOWLIST:-[]}"; then MALWARE_HEURISTIC_ALLOWLIST="[]"; fi
+
+          mapfile -t unicode_allowlist < <(jq -r '.[]?' <<<"$MALWARE_UNICODE_ALLOWLIST")
+          mapfile -t confusable_allowlist < <(jq -r '.[]?' <<<"$MALWARE_CONFUSABLE_ALLOWLIST")
+          mapfile -t heuristic_allowlist < <(jq -r '.[]?' <<<"$MALWARE_HEURISTIC_ALLOWLIST")
+          mapfile -t ioc_patterns < <(jq -r '.[]?' <<<"$MALWARE_IOC_PATTERNS")
+
+          warn_only=true
+          case "${MALWARE_WARN_ONLY:-1}" in
+            0|false|False|no) warn_only=false ;;
+          esac
+
+          resolve_ref() {
+            local version="$1"
+            local candidate
+            [ -n "$version" ] || return 1
+            for candidate in \
+              "refs/tags/${version}^{commit}" \
+              "refs/tags/v${version}^{commit}" \
+              "refs/tags/${version}" \
+              "refs/tags/v${version}" \
+              "${version}" \
+              "v${version}"
+            do
+              if git -C .upstream-dependency rev-parse --verify --quiet "$candidate" >/dev/null 2>&1; then
+                git -C .upstream-dependency rev-parse --verify --quiet "$candidate" | head -n1
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          from_ref=""
+          to_ref=""
+          resolved_range=""
+          resolution_strategy="tag_range"
+
+          from_ref="$(resolve_ref "${FROM_VERSION:-}" || true)"
+          to_ref="$(resolve_ref "${TO_VERSION:-}" || true)"
+
+          if [ -n "$from_ref" ] && [ -n "$to_ref" ]; then
+            resolved_range="${from_ref}..${to_ref}"
+            if ! git -C .upstream-dependency diff --name-only "$resolved_range" > "$touched_file" 2>>"$errors_file"; then
+              : > "$touched_file"
+            fi
+          fi
+
+          if [ ! -s "$touched_file" ] && [ -f "dependabot_commits.md" ]; then
+            resolution_strategy="commit_list"
+            while IFS= read -r sha; do
+              resolved_sha="$(git -C .upstream-dependency rev-parse --verify --quiet "${sha}^{commit}" 2>/dev/null || true)"
+              [ -n "$resolved_sha" ] || continue
+              git -C .upstream-dependency show --name-only --pretty=format: "$resolved_sha" >> "$touched_file" 2>>"$errors_file" || true
+            done < <(rg -o --pcre2 '\b[0-9a-f]{7,40}\b' dependabot_commits.md | sort -u)
+          fi
+
+          if [ ! -s "$touched_file" ] && [ -n "$to_ref" ]; then
+            resolution_strategy="to_version_single_commit"
+            git -C .upstream-dependency show --name-only --pretty=format: "$to_ref" > "$touched_file" 2>>"$errors_file" || true
+          fi
+
+          repo_abs="$(cd .upstream-dependency && pwd -P)"
+          while IFS= read -r rel; do
+            [ -n "$rel" ] || continue
+            abs_path="$(readlink -f ".upstream-dependency/$rel" 2>/dev/null || true)"
+            if [ -n "$abs_path" ] && [ -f "$abs_path" ] && [[ "$abs_path" == "$repo_abs/"* ]]; then
+              printf '%s\n' "$rel"
+            fi
+          done < "$touched_file" | sort -u > "$changed_files_txt"
+
+          while IFS= read -r rel; do
+            [ -n "$rel" ] || continue
+            printf '%s\0' ".upstream-dependency/$rel" >> "$file_list0"
+          done < "$changed_files_txt"
+
+          is_allowlisted() {
+            local entry="$1"
+            local -n patterns_ref="$2"
+            local pattern
+            for pattern in "${patterns_ref[@]}"; do
+              [ -n "$pattern" ] || continue
+              if [[ "$entry" =~ $pattern ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          append_finding() {
+            local out_file="$1"
+            local kind="$2"
+            local pattern="$3"
+            local rel="$4"
+            local line="$5"
+            local match="$6"
+            local line_num=0
+            if [[ "$line" =~ ^[0-9]+$ ]]; then
+              line_num="$line"
+            fi
+            jq -nc \
+              --arg kind "$kind" \
+              --arg pattern "$pattern" \
+              --arg file "$rel" \
+              --arg match "$match" \
+              --argjson line "$line_num" \
+              '{kind: $kind, pattern: $pattern, file: $file, line: $line, match: $match}' >> "$out_file"
+          }
+
+          scan_with_rg() {
+            local kind="$1"
+            local regex="$2"
+            local allowlist_name="$3"
+            local out_file="$4"
+            local case_flag="${5:-}"
+            local -n allow_ref="$allowlist_name"
+            local hit file rest line text rel entry
+
+            if [ ! -s "$file_list0" ]; then
+              return 0
+            fi
+
+            local rg_args=(--pcre2 --hidden -nH --no-heading --color=never)
+            if [ "$case_flag" = "i" ]; then
+              rg_args+=(-i)
+            fi
+            rg_args+=("$regex")
+
+            while IFS= read -r hit; do
+              file="${hit%%:*}"
+              rest="${hit#*:}"
+              line="${rest%%:*}"
+              text="${rest#*:}"
+              rel="${file#.upstream-dependency/}"
+              entry="${kind}:${rel}:${line}:${text}"
+              if is_allowlisted "$entry" allow_ref; then
+                continue
+              fi
+              append_finding "$out_file" "$kind" "$regex" "$rel" "$line" "$text"
+            done < <(xargs -0 rg "${rg_args[@]}" < "$file_list0" || true)
+          }
+
+          unicode_regex='[\x{FE00}-\x{FE0F}\x{E0100}-\x{E01EF}\x{200B}-\x{200D}\x{FEFF}\x{3164}\x{115F}\x{1160}\x{202A}-\x{202E}\x{2066}-\x{2069}]'
+          confusable_regex='[\x{FF0F}\x{2215}\x{2044}\x{2217}\x{066D}\x{01C3}\x{FF01}\x{FE57}\x{A789}\x{FF02}\x{FF07}\x{FF40}\x{FE68}\x{FF3C}]'
+
+          scan_with_rg "unicode" "$unicode_regex" unicode_allowlist "$unicode_jsonl"
+          scan_with_rg "confusable" "$confusable_regex" confusable_allowlist "$confusable_jsonl"
+
+          for ioc_pattern in "${ioc_patterns[@]}"; do
+            [ -n "$ioc_pattern" ] || continue
+            scan_with_rg "ioc_match" "$ioc_pattern" heuristic_allowlist "$ioc_jsonl" "i"
+          done
+
+          heuristic_specs=(
+            'eval_function_blank_arg::\b(?:eval|Function)\s*\(\s*([\"'"'"'`])\s*\1\s*\)'
+            'codepoint_decoder::(?:codePointAt|fromCodePoint|charCodeAt)\s*\('
+            'dynamic_require_import::\b(?:require|import)\s*\(\s*(?:atob|Buffer\.from|decodeURIComponent|[\"'"'"'`].*https?://)'
+            'shell_process_spawn::\b(?:child_process|spawn|exec|subprocess|os\.system)\b'
+            'network_c2_indicator::https?://[^\s\"'"'"')]+'
+            'lifecycle_script::"(?:preinstall|install|postinstall)"\s*:'
+            'obfuscation_indicator::\b(?:atob|btoa|base64|xor|decodeURIComponent)\b'
+          )
+          for spec in "${heuristic_specs[@]}"; do
+            kind="${spec%%::*}"
+            regex="${spec#*::}"
+            scan_with_rg "$kind" "$regex" heuristic_allowlist "$heuristic_jsonl" "i"
+          done
+
+          if [ -s "$changed_files_txt" ]; then
+            while IFS= read -r rel; do
+              [ -n "$rel" ] || continue
+              if [[ "$rel" == .github/workflows/* ]]; then
+                entry="workflow_path_touch:${rel}:0:path"
+                if ! is_allowlisted "$entry" heuristic_allowlist; then
+                  append_finding "$heuristic_jsonl" "workflow_path_touch" '\.github/workflows/' "$rel" "0" "path-touch"
+                fi
+              fi
+            done < "$changed_files_txt"
+          fi
+
+          unicode_json="$work_dir/unicode.json"
+          confusable_json="$work_dir/confusable.json"
+          ioc_json="$work_dir/ioc.json"
+          heuristic_json="$work_dir/heuristic.json"
+          jq -s '.' "$unicode_jsonl" > "$unicode_json"
+          jq -s '.' "$confusable_jsonl" > "$confusable_json"
+          jq -s '.' "$ioc_jsonl" > "$ioc_json"
+          jq -s '.' "$heuristic_jsonl" > "$heuristic_json"
+
+          unicode_count="$(jq 'length' "$unicode_json")"
+          confusable_count="$(jq 'length' "$confusable_json")"
+          ioc_count="$(jq 'length' "$ioc_json")"
+          heuristic_count="$(jq 'length' "$heuristic_json")"
+          total_count=$((unicode_count + confusable_count + ioc_count + heuristic_count))
+          changed_count="$(jq -Rs 'split("\n") | map(select(length > 0)) | length' "$changed_files_txt")"
+
+          status="clean"
+          if [ "$total_count" -gt 0 ]; then
+            if [ "$warn_only" = true ]; then
+              status="warn"
+            else
+              status="fail"
+            fi
+          fi
+
+          changed_files_json="$(jq -Rs 'split("\n") | map(select(length > 0))' "$changed_files_txt")"
+          errors_json="$(jq -Rs 'split("\n") | map(select(length > 0))' "$errors_file")"
+          warn_only_json=false
+          if [ "$warn_only" = true ]; then warn_only_json=true; fi
+
+          jq -n \
+            --arg status "$status" \
+            --argjson warn_only "$warn_only_json" \
+            --arg resolution_strategy "$resolution_strategy" \
+            --arg resolved_range "$resolved_range" \
+            --arg resolved_from "$from_ref" \
+            --arg resolved_to "$to_ref" \
+            --argjson changed_files_count "$changed_count" \
+            --argjson changed_files "$changed_files_json" \
+            --argjson errors "$errors_json" \
+            --slurpfile unicode "$unicode_json" \
+            --slurpfile confusable "$confusable_json" \
+            --slurpfile ioc "$ioc_json" \
+            --slurpfile heuristic "$heuristic_json" \
+            '{
+              status: $status,
+              warn_only: $warn_only,
+              resolution_strategy: $resolution_strategy,
+              resolved_range: $resolved_range,
+              resolved_from: $resolved_from,
+              resolved_to: $resolved_to,
+              changed_files_count: $changed_files_count,
+              changed_files: $changed_files,
+              errors: $errors,
+              findings: {
+                unicode: $unicode[0],
+                confusable: $confusable[0],
+                ioc: $ioc[0],
+                heuristic: $heuristic[0]
+              }
+            }' > "$output_json"
+
+          {
+            echo "## Malware Scan Summary"
+            echo
+            echo "- Status: **$status**"
+            echo "- Warn only mode: \`$warn_only\`"
+            echo "- Changed upstream files scanned: \`$changed_count\`"
+            echo "- Resolution strategy: \`$resolution_strategy\`"
+            if [ -n "$resolved_range" ]; then
+              echo "- Resolved upstream range: \`$resolved_range\`"
+            fi
+            echo "- Resolved refs: from=\`${from_ref:-n/a}\` to=\`${to_ref:-n/a}\`"
+            echo "- Unicode findings (post-allowlist): \`$unicode_count\`"
+            echo "- Confusable findings (post-allowlist): \`$confusable_count\`"
+            echo "- IOC findings (post-allowlist): \`$ioc_count\`"
+            echo "- Heuristic findings (post-allowlist): \`$heuristic_count\`"
+            if [ "$total_count" -gt 0 ]; then
+              echo
+              echo "### Top findings"
+              jq -r -s 'add | .[:20] | .[] | "- `\(.file):\(.line)` \(.kind) :: `\(.match | gsub("`"; ""))`"' \
+                "$unicode_json" "$confusable_json" "$ioc_json" "$heuristic_json"
+            fi
+          } > "$output_summary"
+
+          {
+            echo "status=$status"
+            echo "changed_files_count=$changed_count"
+            echo "summary<<EOF"
+            cat "$output_summary"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$total_count" -gt 0 ] && [ "$warn_only" = true ]; then
+            echo "::warning::Malware scan produced $total_count finding(s). Continuing because warn-only mode is enabled."
+          elif [ "$total_count" -gt 0 ] && [ "$warn_only" = false ]; then
+            echo "Malware scan failed with $total_count finding(s)." >&2
+            exit 1
+          fi
+
       - name: Gather local usage hints
         shell: bash
         env:
           PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
         run: |
-          if ! command -v rg >/dev/null 2>&1; then
-            echo "ripgrep (rg) not found; installing..."
-            if sudo apt-get update && sudo apt-get install -y ripgrep; then
-              echo "ripgrep installed successfully."
-            else
-              echo "WARNING: failed to install ripgrep; will fall back to grep."
-            fi
-          fi
-
           if [ -z "$PACKAGE_NAME" ]; then
             echo "No package detected from Dependabot metadata." > package_usage.txt
           else
             {
               echo "Search pattern: $PACKAGE_NAME"
               echo
-              if command -v rg >/dev/null 2>&1; then
-                rg -n --fixed-strings --hidden --glob '!.git' --glob '!node_modules' --glob '!.upstream-dependency/**' -- "$PACKAGE_NAME" . || true
-              elif command -v grep >/dev/null 2>&1; then
-                echo "WARNING: using grep fallback; output may include vendor files." >&2
-                grep -R -n -F --binary-files=without-match --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.upstream-dependency -- "$PACKAGE_NAME" . || true
-              else
-                echo "Neither ripgrep nor grep is available on runner." >&2
-                exit 1
-              fi
+              rg -n --fixed-strings --hidden --glob '!.git' --glob '!node_modules' --glob '!.upstream-dependency/**' -- "$PACKAGE_NAME" . || true
             } > package_usage.txt
           fi
 
@@ -292,7 +598,13 @@ jobs:
           Dependabot Commits:
           {read_file("dependabot_commits.md")}
 
-          Local usage hints (non-authoritative grep hits):
+          Malware scan summary:
+          {read_file("malware_scan_summary.md")}
+
+          Malware scan report JSON:
+          {read_file("malware_scan_report.json")[:16000]}
+
+          Local usage hints (non-authoritative rg hits):
           {read_file("package_usage.txt")[:12000]}
 
           Repository layout:
@@ -300,9 +612,9 @@ jobs:
           - Upstream dependency repository: .upstream-dependency (full git history is available)
 
           Please produce:
-          1) Where in this repo the dependency appears to be used (treat grep hints as directional, not exhaustive).
+          1) Where in this repo the dependency appears to be used (treat rg hints as directional, not exhaustive).
           2) Whether those usage sites intersect with likely changed APIs based on release notes, commits, and direct inspection of .upstream-dependency.
-          3) Risks / unknowns.
+          3) Risks / unknowns, accounting for malware scan output.
           4) Recommendation: merge / merge-with-caveats / hold.
           Do not include intermediate reasoning or self-talk.
           Keep it concise and actionable.
@@ -318,6 +630,17 @@ jobs:
             FALLBACK_PROMPT="$(python3 -c 'from pathlib import Path; max_bytes = 60000; raw = Path("cursor_prompt.txt").read_bytes(); text = raw[:max_bytes].decode("utf-8", errors="ignore"); text += "\n\n[Prompt truncated for CLI argument compatibility.]" if len(raw) > max_bytes else ""; print(text, end="")')"
             agent -f --mode ask -p --output-format json "$FALLBACK_PROMPT" > cursor_output.json
           fi
+
+      - name: Upload malware scan artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependabot-malware-scan-${{`{{ steps.target_pr.outputs.number }}`}}
+          if-no-files-found: warn
+          path: |
+            malware_scan_report.json
+            malware_scan_summary.md
+            upstream_changed_files.txt
 
       - name: Post or update PR comment
         uses: actions/github-script@v8
@@ -353,11 +676,19 @@ jobs:
               typeof analysis === 'string'
                 ? analysis
                 : JSON.stringify(analysis, null, 2) || String(analysis);
+            const malwareSummary = readText(
+              'malware_scan_summary.md',
+              '## Malware Scan Summary\n\n- Status: **unknown**\n- Scanner output file missing.'
+            );
 
             const body = `${marker}
             ## 🤖 Cursor Dependency Analysis
 
-            ${analysisText.slice(0, maxLen)}`;
+            ${analysisText.slice(0, maxLen)}
+
+            ---
+
+            ${malwareSummary.slice(0, 12000)}`;
 
             const { owner, repo } = context.repo;
             const issue_number = Number('${{`{{ steps.target_pr.outputs.number }}`}}');
