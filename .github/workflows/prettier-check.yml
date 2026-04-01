@@ -46,6 +46,21 @@ jobs:
           prettier --write --ignore-unknown template-expanded/
           git diff --no-index template-expanded-original/ template-expanded/ || true
 
-      - name: Fail if Prettier check failed
-        if: steps.prettier.outcome == 'failure'
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
+
+      - name: Run actionlint on workflow templates
+        id: actionlint
+        run: |
+          workflow_files=$(grep -rl "^jobs:" template-expanded/ || true)
+          if [ -n "$workflow_files" ]; then
+            actionlint \
+              -ignore "string should not be empty" \
+              -ignore "SC2002:" \
+              $workflow_files
+          fi
+        continue-on-error: true
+
+      - name: Fail if any check failed
+        if: steps.prettier.outcome == 'failure' || steps.actionlint.outcome == 'failure'
         run: exit 1
