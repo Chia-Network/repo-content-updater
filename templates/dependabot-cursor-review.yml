@@ -61,7 +61,7 @@ jobs:
               return;
             }
             const allowedBots = ['dependabot[bot]', 'renovate[bot]'];
-            if (context.eventName !== 'workflow_dispatch' && !allowedBots.includes(pr.user?.login)) {
+            if (!allowedBots.includes(pr.user?.login)) {
               core.setFailed(`Target PR #${pr.number} is not opened by an allowed bot. Author: ${pr.user?.login}`);
               return;
             }
@@ -146,8 +146,6 @@ jobs:
                 .trim();
             }
 
-            const releaseNotes = extractDetailsSection(body, 'Release notes');
-            const commits = extractDetailsSection(body, 'Commits');
             // Prefer the dependency link from Dependabot's lead sentence.
             // Fallback to any GitHub repo URL if that sentence format changes.
             const dependencyRepoMatch = body.match(
@@ -157,23 +155,69 @@ jobs:
               /https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=\/|$|[)\]>\s"'?#])/i
             );
             const upstreamRepo = repoMatch ? repoMatch[1].replace(/\.git$/i, '') : '';
+
+            // Release notes: Dependabot uses <details><summary>Release notes</summary>,
+            // Renovate uses <details><summary>org/repo (pkg)</summary> under a ### Release Notes heading.
+            let releaseNotes = extractDetailsSection(body, 'Release notes');
+            if (!releaseNotes && upstreamRepo) {
+              releaseNotes = extractDetailsSection(body, upstreamRepo);
+            }
+            if (!releaseNotes) {
+              const rnHeading = body.match(/###\s*Release\s+Notes?\s*\n([\s\S]*?)(?=\n---|\n###\s|$)/i);
+              if (rnHeading) releaseNotes = rnHeading[1].trim();
+            }
+
+            // Commits: Dependabot uses <details><summary>Commits</summary>.
+            // Renovate omits this section, so fall back to extracting any SHA-like hex strings from the body.
+            let commits = extractDetailsSection(body, 'Commits');
+            if (!commits) {
+              const shaMatches = body.match(/\b[0-9a-f]{7,40}\b/gi);
+              if (shaMatches && shaMatches.length > 0) commits = shaMatches.join('\n');
+            }
+
             const title = ${{`{{ toJSON(steps.target_pr.outputs.title) }}`}} || '';
+            // Dependabot-style titles (3 groups: pkg, fromVersion, toVersion).
             const titleMatch =
               title.match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
               title.match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
               title.match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
-            const packageName = titleMatch ? titleMatch[1].trim() : '';
-            const fromVersion = titleMatch ? titleMatch[2].trim() : '';
-            const toVersion = titleMatch ? titleMatch[3].trim() : '';
+            // Renovate-style titles (2 groups: pkg, toVersion — no "from" clause).
+            const renovateTitleMatch = !titleMatch && (
+              title.match(/(?:update|pin)\s+dependency\s+(.+?)\s+to\s+v?([^\s]+)/i) ||
+              title.match(/(?:update|pin)\s+(.+?)\s+(?:action|digest|docker\s+tag)\s+to\s+v?([^\s]+)/i) ||
+              title.match(/(?:update|pin)\s+(.+?)\s+to\s+v?([^\s]+)/i)
+            );
+            let packageName, fromVersion, toVersion;
+            if (titleMatch) {
+              packageName = titleMatch[1].trim();
+              fromVersion = titleMatch[2].trim();
+              toVersion = titleMatch[3].trim();
+            } else if (renovateTitleMatch) {
+              packageName = renovateTitleMatch[1].trim();
+              fromVersion = '';
+              toVersion = renovateTitleMatch[2].trim();
+            } else {
+              packageName = '';
+              fromVersion = '';
+              toVersion = '';
+            }
+            // Body-based version fallback: recover missing from/to from Renovate's table (e.g. `1.2.3` -> `1.2.4`).
+            if (!fromVersion || !toVersion) {
+              const bodyVersionMatch = body.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
+              if (bodyVersionMatch) {
+                if (!fromVersion) fromVersion = bodyVersionMatch[1].replace(/^v/i, '');
+                if (!toVersion) toVersion = bodyVersionMatch[2].replace(/^v/i, '');
+              }
+            }
 
             if (!upstreamRepo) {
-              core.setFailed('Dependabot PR body is missing an upstream GitHub repository link.');
+              core.setFailed('PR body is missing an upstream GitHub repository link.');
               return;
             }
             const normalizedReleaseNotes =
-              releaseNotes || 'Dependabot did not include a Release notes details section.';
+              releaseNotes || 'PR body did not include a Release notes details section.';
             const normalizedCommits =
-              commits || 'Dependabot did not include a Commits details section.';
+              commits || 'PR body did not include a Commits details section.';
 
             const out = {
               prNumber: Number('${{`{{ steps.target_pr.outputs.number }}`}}'),
@@ -709,7 +753,7 @@ jobs:
           PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
         run: |
           if [ -z "$PACKAGE_NAME" ]; then
-            echo "No package detected from Dependabot metadata." > package_usage.txt
+            echo "No package detected from PR metadata." > package_usage.txt
           else
             {
               echo "Search pattern: $PACKAGE_NAME"
@@ -745,7 +789,7 @@ jobs:
               return ""
 
           base_context = f"""
-          This is a Dependabot PR review request.
+          This is a dependency bot PR review request.
 
           PR title:
           {os.getenv("PR_TITLE", "")}
@@ -758,13 +802,13 @@ jobs:
           - from: {os.getenv("FROM_VERSION", "")}
           - to: {os.getenv("TO_VERSION", "")}
 
-          Dependabot comment context JSON:
+          PR context JSON:
           {read_file("dependabot_comment_context.json")}
 
-          Dependabot Release notes:
+          Release notes:
           {read_file("dependabot_release_notes.md")}
 
-          Dependabot Commits:
+          Commits:
           {read_file("dependabot_commits.md")}
 
           Local usage hints (non-authoritative rg hits):
