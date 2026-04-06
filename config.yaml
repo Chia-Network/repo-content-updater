@@ -29,11 +29,13 @@ files:
     alternate_paths:
       - .github/workflows/check-commit-signing.yaml
 
-  - name: dependabot-cursor-review
-    template_name: dependabot-cursor-review.yml
-    repo_path: .github/workflows/dependabot-cursor-review.yml
+  - name: dependency-cursor-review
+    template_name: dependency-cursor-review.yml
+    repo_path: .github/workflows/dependency-cursor-review.yml
     alternate_paths:
       - .github/workflows/dependabot-cursor-review.yaml
+      - .github/workflows/dependabot-cursor-review.yml
+      - .github/workflows/dependency-cursor-review.yaml
 
   - name: dep-review
     template_name: dependency-review.yml
