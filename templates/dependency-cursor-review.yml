@@ -732,12 +732,13 @@ jobs:
             fi
           } > "$output_summary"
 
+          _gheof="GHEOF_$(uuidgen)"
           {
             echo "status=$status"
             echo "changed_files_count=$changed_count"
-            echo "summary<<EOF"
+            echo "summary<<${_gheof}"
             cat "$output_summary"
-            echo "EOF"
+            echo "${_gheof}"
           } >> "$GITHUB_OUTPUT"
 
           if [ "$total_count" -gt 0 ] && [ "$warn_only" = true ]; then
