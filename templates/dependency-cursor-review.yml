@@ -1,5 +1,5 @@
 # Managed by repo-content-updater
-# Dependabot Cursor Review workflow
+# Dependency Cursor Review workflow
 #
 # Runs Cursor CLI analysis for Dependabot/Renovate PRs by using:
 # - Dependabot PR body release notes + commit list
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "Dependabot PR number to analyze"
+        description: "Dependabot/Renovate PR number to analyze"
         required: true
         type: number
 
@@ -28,7 +28,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  dependabot-review:
+  dependency-review:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'renovate[bot]'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -112,8 +112,9 @@ jobs:
             }
 
             function extractDetailsSection(text, summaryLabel) {
+              // Allow optional trailing text after the label (e.g. Renovate appends " (pkgalias)").
               const summaryRe = new RegExp(
-                `<details[^>]*>\\s*<summary>\\s*${escapeRegex(summaryLabel)}\\s*</summary>`,
+                `<details[^>]*>\\s*<summary>\\s*${escapeRegex(summaryLabel)}[^<]*</summary>`,
                 'i'
               );
               const summaryMatch = summaryRe.exec(text);
@@ -148,11 +149,12 @@ jobs:
 
             // Prefer the dependency link from Dependabot's lead sentence.
             // Fallback to any GitHub repo URL if that sentence format changes.
+            // Both github.com and redirect.github.com (used by Renovate) are matched.
             const dependencyRepoMatch = body.match(
-              /^\s*(?:Bumps|Update(?:s|d)?)\s+\[[^\]]+\]\(\s*https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:[\/#?][^)\s]*)?\s*\)/im
+              /^\s*(?:Bumps|Update(?:s|d)?)\s+\[[^\]]+\]\(\s*https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:[\/#?][^)\s]*)?\s*\)/im
             );
             const repoMatch = dependencyRepoMatch || body.match(
-              /https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=\/|$|[)\]>\s"'?#])/i
+              /https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=\/|$|[)\]>\s"'?#])/i
             );
             const upstreamRepo = repoMatch ? repoMatch[1].replace(/\.git$/i, '') : '';
 
