@@ -48,6 +48,8 @@ jobs:
 
       - name: Install actionlint
         run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
+        env:
+          GOTOOLCHAIN: auto
 
       - name: Run actionlint on workflow templates
         id: actionlint
