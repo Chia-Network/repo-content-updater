@@ -16,4 +16,4 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Test
-        run: make test
+        run: make -j6 -k test
