@@ -67,7 +67,14 @@ lint: | $(GOLINT) ; $(info $(M) running golint…) @ ## Run golint
 	$Q $(GOLINT) -set_exit_status $(PKGS)
 
 .PHONY: fmt
-fmt: ; $(info $(M) running gofmt…) @ ## Run gofmt on all source files
+fmt: ; $(info $(M) checking gofmt…) @ ## Verify gofmt on all source files
+	$Q out=$$(gofmt -l $$($(GO) list -f '{{.Dir}}' $(PKGS)) | sort -u); \
+	   if [ -n "$$out" ]; then \
+	     echo "files need gofmt:"; echo "$$out"; exit 1; \
+	   fi
+
+.PHONY: fmt-fix
+fmt-fix: ; $(info $(M) running gofmt…) @ ## Rewrite files in-place with gofmt
 	$Q $(GO) fmt $(PKGS)
 
 .PHONY: vet
