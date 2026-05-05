@@ -68,7 +68,7 @@ lint: | $(GOLINT) ; $(info $(M) running golint…) @ ## Run golint
 
 .PHONY: fmt
 fmt: ; $(info $(M) checking gofmt…) @ ## Verify gofmt on all source files
-	$Q out=$$(gofmt -l $$($(GO) list -f '{{.Dir}}' $(PKGS)) | sort -u); \
+	$Q out=$$(gofmt -l $$($(GO) list -f '{{`{{ .Dir }}`}}' $(PKGS)) | sort -u); \
 	   if [ -n "$$out" ]; then \
 	     echo "files need gofmt:"; echo "$$out"; exit 1; \
 	   fi
