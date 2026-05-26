@@ -16,7 +16,7 @@ import (
 
 // CheckLicenses checks all repos for licenses that need to be managed/updated
 func (c *Content) CheckLicenses(cfg *config.Config, onlyRepo string) error {
-	var reposToCheck []string
+	reposToCheck := map[string]CustomProperties{}
 
 	opts := &github.ListOptions{
 		Page:    0,
@@ -35,10 +35,14 @@ func (c *Content) CheckLicenses(cfg *config.Config, onlyRepo string) error {
 			if onlyRepo != "" && !strings.EqualFold(repo.RepositoryName, onlyRepo) {
 				continue
 			}
+			manageLicense := false
 			for _, property := range repo.Properties {
 				if property.PropertyName == "manage-license" && property.Value != nil && *property.Value == "yes" {
-					reposToCheck = append(reposToCheck, repo.RepositoryName)
+					manageLicense = true
 				}
+			}
+			if manageLicense {
+				reposToCheck[repo.RepositoryName] = parseCustomProperties(repo.Properties)
 			}
 		}
 
@@ -47,9 +51,9 @@ func (c *Content) CheckLicenses(cfg *config.Config, onlyRepo string) error {
 		}
 	}
 
-	for _, repo := range reposToCheck {
+	for repo, props := range reposToCheck {
 		log.Printf("Need to check %s\n", repo)
-		err := c.UpdateLicense(repo, cfg)
+		err := c.UpdateLicense(repo, cfg, props)
 		if err != nil {
 			log.Printf("Error updating %s: %s\n", repo, err.Error())
 			continue
@@ -60,7 +64,7 @@ func (c *Content) CheckLicenses(cfg *config.Config, onlyRepo string) error {
 }
 
 // UpdateLicense ensures the license is up to date for the given repo
-func (c *Content) UpdateLicense(repoName string, cfg *config.Config) error {
+func (c *Content) UpdateLicense(repoName string, cfg *config.Config, props CustomProperties) error {
 	defer removeDirIfExists(repoDir(repoName))
 
 	r, w, err := c.cloneRepo(repoName)
@@ -163,8 +167,9 @@ func (c *Content) UpdateLicense(repoName string, cfg *config.Config) error {
 	}
 
 	return c.pushAndPR(r, repoName, branchName, "Updated License", &pushAndPROptions{
-		PrTargetBranch: &DefaultBranch,         // Directly using the pointer from repoConfig
-		AssignUsers:    repoConfig.AssignUsers, // Assuming AssignUsers is a slice of strings
-		AssignGroup:    repoConfig.AssignGroup, // Directly using the pointer from repoConfig
+		PrTargetBranch: &DefaultBranch,
+		AssignUsers:    repoConfig.AssignUsers,
+		AssignGroup:    repoConfig.AssignGroup,
+		BypassPR:       props.BypassPR,
 	})
 }

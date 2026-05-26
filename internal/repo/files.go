@@ -15,10 +15,14 @@ import (
 	"github.com/chia-network/repo-content-updater/internal/config"
 )
 
+type repoFilesEntry struct {
+	files []string
+	props CustomProperties
+}
+
 // ManagedFiles updates all managed files in the org with current versions
 func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
-	// repo: [file, file, file]
-	reposToCheck := map[string][]string{}
+	reposToCheck := map[string]repoFilesEntry{}
 
 	opts := &github.ListOptions{
 		Page:    0,
@@ -37,10 +41,9 @@ func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
 			if onlyRepo != "" && !strings.EqualFold(repo.RepositoryName, onlyRepo) {
 				continue
 			}
+			entry := reposToCheck[repo.RepositoryName]
 			for _, property := range repo.Properties {
 				if property.PropertyName == "managed-files" && property.Value != nil {
-					reposToCheck[repo.RepositoryName] = []string{}
-
 					var finalFiles []string
 					files := strings.Split(*property.Value, ",")
 					for _, file := range files {
@@ -59,9 +62,11 @@ func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
 						}
 					}
 
-					reposToCheck[repo.RepositoryName] = finalFiles
+					entry.files = finalFiles
 				}
 			}
+			entry.props = parseCustomProperties(repo.Properties)
+			reposToCheck[repo.RepositoryName] = entry
 		}
 
 		if resp.NextPage == 0 {
@@ -69,9 +74,12 @@ func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
 		}
 	}
 
-	for repo, files := range reposToCheck {
+	for repo, entry := range reposToCheck {
+		if entry.files == nil {
+			continue
+		}
 		log.Printf("Need to check %s\n", repo)
-		err := c.CheckFiles(repo, files, cfg)
+		err := c.CheckFiles(repo, entry.files, cfg, entry.props)
 		if err != nil {
 			log.Printf("Error updating %s: %s\n", repo, err.Error())
 			continue
@@ -82,7 +90,7 @@ func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
 }
 
 // CheckFiles checks all the files for updates in the repo
-func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config) error {
+func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config, props CustomProperties) error {
 	defer removeDirIfExists(repoDir(repoName))
 
 	r, w, err := c.cloneRepo(repoName)
@@ -204,9 +212,10 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 
 	if hadChanges {
 		return c.pushAndPR(r, repoName, branchName, "Update Managed Files", &pushAndPROptions{
-			PrTargetBranch: &DefaultBranch,         // Directly using the pointer from repoConfig
-			AssignUsers:    repoConfig.AssignUsers, // Assuming AssignUsers is a slice of strings
-			AssignGroup:    repoConfig.AssignGroup, // Directly using the pointer from repoConfig
+			PrTargetBranch: &DefaultBranch,
+			AssignUsers:    repoConfig.AssignUsers,
+			AssignGroup:    repoConfig.AssignGroup,
+			BypassPR:       props.BypassPR,
 		})
 	}
 

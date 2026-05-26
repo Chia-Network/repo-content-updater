@@ -55,6 +55,12 @@ files:
 * `repo_path` is the path within the repo to place the file
 * `alternate_paths` is a list of alternate/equivalent paths this template might have been named before being managed. These files will be renamed and updated to the latest version of the template, if present
 
+## Bypass PR
+
+Set the `repo-content-updater-bypass-pr` custom property to `true` on a repo to opt into direct commits to the target branch instead of opening a pull request. This property uses GitHub's boolean custom property type. When the property is absent or `false`, the default PR-based workflow is used.
+
+This applies to both the `license` and `managed-files` commands.
+
 ## Repo Overrides
 
 If you need to override any of the default settings on a per-repo basis, you can create a [.repo-content-updater.yaml](examples/.repo-content-updater.yaml) file in the root of the repo, and configure any overrides there. It must be present in the default branch of the repo to be loaded.

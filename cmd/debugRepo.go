@@ -32,7 +32,7 @@ var debugRepoCmd = &cobra.Command{
 			log.Fatalf("error loading config: %s\n", err.Error())
 		}
 
-		err = content.CheckFiles(viper.GetString("repo"), viper.GetStringSlice("file"), cfg)
+		err = content.CheckFiles(viper.GetString("repo"), viper.GetStringSlice("file"), cfg, repo.CustomProperties{})
 		if err != nil {
 			log.Fatalf("Error checking repo: %s", err.Error())
 		}

@@ -170,10 +170,18 @@ func (c *Content) commit(w *git.Worktree, repoName string, message string) error
 	return nil
 }
 
+// CustomProperties holds org custom property values for a single repo that
+// are relevant to this tool. It is intentionally a struct so additional
+// properties can be added here without changing call sites.
+type CustomProperties struct {
+	BypassPR bool
+}
+
 type pushAndPROptions struct {
 	PrTargetBranch *string
 	AssignUsers    []string
 	AssignGroup    *string
+	BypassPR       bool
 }
 
 func (c *Content) pushAndPR(r *git.Repository, repoName, branchName, title string, opts *pushAndPROptions) error {
@@ -181,6 +189,23 @@ func (c *Content) pushAndPR(r *git.Repository, repoName, branchName, title strin
 		log.Println("Skipping push, complete")
 		return nil
 	}
+
+	if opts.BypassPR {
+		err := r.Push(&git.PushOptions{
+			RefSpecs: []config.RefSpec{
+				config.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", branchName, *opts.PrTargetBranch)),
+			},
+		})
+		if err != nil {
+			if errors.Is(err, git.NoErrAlreadyUpToDate) {
+				return fmt.Errorf("branch was already up to date even though there were changes")
+			}
+			return err
+		}
+		log.Printf("Pushed directly to %s (bypass PR)\n", *opts.PrTargetBranch)
+		return nil
+	}
+
 	// Push the new branch to the remote
 	err := r.Push(&git.PushOptions{
 		Force: true, // Force push in case there are updates to an old unmerged existing version of this branch
