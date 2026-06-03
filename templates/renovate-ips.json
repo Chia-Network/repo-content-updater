@@ -118,6 +118,14 @@
     {
       "customType": "regex",
       "managerFilePatterns": ["/\\.github/workflows/.+$/"],
+      "matchStrings": ["LOKI_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "grafana-community/helm-charts",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^loki-(?<version>\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/\\.github/workflows/.+$/"],
       "matchStrings": ["ALLOY_VERSION:\\s*\"(?<currentValue>[^\"]+)\""],
       "depNameTemplate": "grafana/alloy",
       "datasourceTemplate": "github-tags",
