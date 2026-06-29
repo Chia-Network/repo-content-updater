@@ -72,9 +72,9 @@
       "matchStrings": [
         "CONTOUR_CHART_VERSION:\\s*\"(?<currentValue>[^\"]+)\""
       ],
-      "depNameTemplate": "projectcontour/contour",
+      "depNameTemplate": "projectcontour/helm-charts",
       "datasourceTemplate": "github-tags",
-      "extractVersionTemplate": "^chart-v(?<version>.+)$"
+      "extractVersionTemplate": "^contour-(?<version>.+)$"
     },
     {
       "customType": "regex",
