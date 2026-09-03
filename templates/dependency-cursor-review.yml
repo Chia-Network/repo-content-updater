@@ -924,22 +924,72 @@ jobs:
           import re
 
           VERDICT_RE = re.compile(
-              r"(?<!\w)(\*\*)?\s*Verdict\s*:\s*(benign|malicious)\b(\*\*)?",
+              r"(?m)(?:"
+              r"^[ \t]*(?:\*\*Verdict[ \t]*:[ \t]*(benign|malicious)(?:[ \t]*\*\*|(?=\b))|Verdict[ \t]*:[ \t]*(benign|malicious)\b)"
+              r"|"
+              r"(?<=[.!?:;])(?:\*\*Verdict[ \t]*:[ \t]*(benign|malicious)[ \t]*\*\*|Verdict[ \t]*:[ \t]*(benign|malicious)\b)"
+              r")",
               re.IGNORECASE,
           )
+
+          def _verdict_value(match: re.Match) -> str:
+            for idx in (1, 2, 3, 4):
+              token = match.group(idx)
+              if token:
+                return token.lower()
+            raise ValueError("missing verdict token")
+
+          def _removal_span(text: str, match: re.Match) -> tuple[int, int]:
+            return match.start(), match.end()
+
+          def _orphan_trailing_bold_span(text: str, match: re.Match) -> tuple[int, int] | None:
+            matched = text[match.start() : match.end()]
+            stripped = matched.lstrip(" \t")
+            if not (stripped.startswith("**") and not stripped.endswith("**")):
+              return None
+
+            line_end = text.find("\n", match.end())
+            if line_end == -1:
+              line_end = len(text)
+            suffix = text[match.end() : line_end]
+            trailing = re.search(r"\*\*[ \t]*$", suffix)
+            if not trailing:
+              return None
+            return match.end() + trailing.start(), match.end() + trailing.end()
+
+          def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+            if not spans:
+              return []
+
+            ordered = sorted(spans)
+            merged = [ordered[0]]
+            for start, end in ordered[1:]:
+              prev_start, prev_end = merged[-1]
+              if start <= prev_end:
+                merged[-1] = (prev_start, max(prev_end, end))
+              else:
+                merged.append((start, end))
+            return merged
 
           def format_malware_review_verdict(text: str) -> str:
             if not text or not text.strip():
               return text
 
-            match = VERDICT_RE.search(text)
-            if not match:
+            matches = list(VERDICT_RE.finditer(text))
+            if not matches:
               return text
 
-            verdict_value = match.group(2).lower()
+            verdict_value = _verdict_value(matches[-1])
+            spans: list[tuple[int, int]] = []
+            for found in matches:
+              spans.append(_removal_span(text, found))
+              orphan = _orphan_trailing_bold_span(text, found)
+              if orphan:
+                spans.append(orphan)
+
             cleaned = text
-            for found in reversed(list(VERDICT_RE.finditer(text))):
-              cleaned = cleaned[: found.start()] + cleaned[found.end() :]
+            for start, end in reversed(_merge_spans(spans)):
+              cleaned = cleaned[:start] + cleaned[end:]
             cleaned = re.sub(r"\n{3,}", "\n\n", cleaned.strip())
 
             bold_line = f"**Verdict: {verdict_value}**"
