@@ -944,7 +944,8 @@ jobs:
 
           def _orphan_trailing_bold_span(text: str, match: re.Match) -> tuple[int, int] | None:
             matched = text[match.start() : match.end()]
-            if not (matched.startswith("**") and not matched.endswith("**")):
+            stripped = matched.lstrip(" \t")
+            if not (stripped.startswith("**") and not stripped.endswith("**")):
               return None
 
             line_end = text.find("\n", match.end())
