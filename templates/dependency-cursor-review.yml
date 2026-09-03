@@ -923,8 +923,8 @@ jobs:
           import json
           import re
 
-          VERDICT_LINE_RE = re.compile(
-              r"(?<!\w)(\*\*)?\s*Verdict\s*:\s*([^\n*]+?)(\*\*)?(?=\s*(?:\n|$))",
+          VERDICT_RE = re.compile(
+              r"(?<!\w)(\*\*)?\s*Verdict\s*:\s*(benign|malicious)\b(\*\*)?",
               re.IGNORECASE,
           )
 
@@ -932,14 +932,14 @@ jobs:
             if not text or not text.strip():
               return text
 
-            matches = list(VERDICT_LINE_RE.finditer(text))
-            if not matches:
+            match = VERDICT_RE.search(text)
+            if not match:
               return text
 
-            verdict_value = matches[0].group(2).strip()
+            verdict_value = match.group(2).lower()
             cleaned = text
-            for match in reversed(matches):
-              cleaned = cleaned[: match.start()] + cleaned[match.end() :]
+            for found in reversed(list(VERDICT_RE.finditer(text))):
+              cleaned = cleaned[: found.start()] + cleaned[found.end() :]
             cleaned = re.sub(r"\n{3,}", "\n\n", cleaned.strip())
 
             bold_line = f"**Verdict: {verdict_value}**"
