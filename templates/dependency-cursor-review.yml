@@ -924,9 +924,23 @@ jobs:
           import re
 
           VERDICT_RE = re.compile(
-              r"(?m)(?:^[ \t]*|(?<=[^\w \t\n*]))(?:\*\*[ \t]*)?Verdict[ \t]*:[ \t]*(benign|malicious)\b(?:[ \t]*\*\*)?",
+              r"(?m)(?:"
+              r"^[ \t]*(?:\*\*Verdict[ \t]*:[ \t]*(benign|malicious)(?:[ \t]*\*\*|(?=\b))|Verdict[ \t]*:[ \t]*(benign|malicious)\b)"
+              r"|"
+              r"(?<=[.!?:;])(?:\*\*Verdict[ \t]*:[ \t]*(benign|malicious)[ \t]*\*\*|Verdict[ \t]*:[ \t]*(benign|malicious)\b)"
+              r")",
               re.IGNORECASE,
           )
+
+          def _verdict_value(match: re.Match) -> str:
+            for idx in (1, 2, 3, 4):
+              token = match.group(idx)
+              if token:
+                return token.lower()
+            raise ValueError("missing verdict token")
+
+          def _removal_span(text: str, match: re.Match) -> tuple[int, int]:
+            return match.start(), match.end()
 
           def format_malware_review_verdict(text: str) -> str:
             if not text or not text.strip():
@@ -936,11 +950,13 @@ jobs:
             if not matches:
               return text
 
-            verdict_value = matches[-1].group(1).lower()
+            verdict_value = _verdict_value(matches[-1])
             cleaned = text
             for found in reversed(matches):
-              cleaned = cleaned[: found.start()] + cleaned[found.end() :]
+              start, end = _removal_span(text, found)
+              cleaned = cleaned[:start] + cleaned[end:]
             cleaned = re.sub(r"\n{3,}", "\n\n", cleaned.strip())
+            cleaned = re.sub(r"(?m)\*\*[ \t]*$", "", cleaned)
 
             bold_line = f"**Verdict: {verdict_value}**"
             if cleaned:
