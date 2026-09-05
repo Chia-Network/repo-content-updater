@@ -971,15 +971,61 @@ jobs:
                 merged.append((start, end))
             return merged
 
+          STANDALONE_TRAILING_RE = re.compile(r"^[ \t]*(?:\*\*[ \t]*)?[.!?]?[ \t]*$")
+          FORMAT_CONTEXT_RE = re.compile(r"\b(example|format|template)\b", re.IGNORECASE)
+
+          def _line_end(text: str, pos: int) -> int:
+            line_end = text.find("\n", pos)
+            return len(text) if line_end == -1 else line_end
+
+          def _preceding_line(text: str, line_start: int) -> str:
+            if line_start <= 0:
+              return ""
+            prev_end = line_start - 1
+            prev_start = text.rfind("\n", 0, prev_end) + 1
+            return text[prev_start:prev_end]
+
           def _is_line_start_match(text: str, match: re.Match) -> bool:
             line_start = text.rfind("\n", 0, match.start()) + 1
             return text[line_start:match.start()].strip() == ""
 
-          def _official_verdict_match(text: str, matches: list[re.Match]) -> re.Match:
+          def _is_glued_verdict_match(text: str, match: re.Match) -> bool:
+            if _is_line_start_match(text, match):
+              return False
+            return match.start() > 0 and text[match.start() - 1] in ".!?:;"
+
+          def _is_standalone_verdict_line(text: str, match: re.Match) -> bool:
+            line_end = _line_end(text, match.end())
+            after = text[match.end() : line_end]
+            return STANDALONE_TRAILING_RE.match(after) is not None
+
+          def _is_format_example_line(text: str, match: re.Match) -> bool:
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            preceding = _preceding_line(text, line_start)
+            return bool(FORMAT_CONTEXT_RE.search(preceding))
+
+          def _is_official_candidate(text: str, match: re.Match) -> bool:
+            if _is_format_example_line(text, match):
+              return False
+            if _is_line_start_match(text, match):
+              return _is_standalone_verdict_line(text, match)
+            if _is_glued_verdict_match(text, match):
+              return True
+            return False
+
+          def _should_strip_from_body(text: str, match: re.Match) -> bool:
+            if _is_line_start_match(text, match):
+              return _is_standalone_verdict_line(text, match)
+            return _is_glued_verdict_match(text, match)
+
+          def _official_verdict_match(text: str, matches: list[re.Match]) -> re.Match | None:
             for found in matches:
-              if _is_line_start_match(text, found):
+              if _is_line_start_match(text, found) and _is_official_candidate(text, found):
                 return found
-            return matches[0]
+            for found in matches:
+              if _is_official_candidate(text, found):
+                return found
+            return None
 
           def format_malware_review_verdict(text: str) -> str:
             if not text or not text.strip():
@@ -990,11 +1036,18 @@ jobs:
               return text
 
             official = _official_verdict_match(text, matches)
+            if official is None:
+              return text
+
             verdict_value = _verdict_value(official)
-            spans: list[tuple[int, int]] = [_removal_span(text, official)]
-            orphan = _orphan_trailing_bold_span(text, official)
-            if orphan:
-              spans.append(orphan)
+            spans: list[tuple[int, int]] = []
+            for found in matches:
+              if not _should_strip_from_body(text, found):
+                continue
+              spans.append(_removal_span(text, found))
+              orphan = _orphan_trailing_bold_span(text, found)
+              if orphan:
+                spans.append(orphan)
 
             cleaned = text
             for start, end in reversed(_merge_spans(spans)):
