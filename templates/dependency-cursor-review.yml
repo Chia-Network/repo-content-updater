@@ -993,6 +993,7 @@ jobs:
               r"|(?:example\s+)?template"
               r")\s*:?"
               r"(?:\*\*)?"
+              r"\s*:?"
               r"[ \t]*$",
               re.IGNORECASE,
           )
