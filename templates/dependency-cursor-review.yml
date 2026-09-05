@@ -978,16 +978,22 @@ jobs:
           STANDALONE_LINE_RE = re.compile(
               r"^(?:"
               r"\*\*Verdict[ \t]*:[ \t]*(benign|malicious)[ \t]*(?:[.!?])?[ \t]*\*\*(?:[.!?])?[ \t]*"
+              r"|\*\*Verdict[ \t]*:[ \t]*(benign|malicious)[ \t]*(?:[.!?])?[ \t]*"
               r"|Verdict[ \t]*:[ \t]*(benign|malicious)[ \t]*(?:[.!?])?[ \t]*"
               r")$",
               re.IGNORECASE,
           )
           FORMAT_HEADING_RE = re.compile(
-              r"^\s*(?:"
+              r"^\s*"
+              r"(?:#+[ \t]+)?"
+              r"(?:\*\*)?"
+              r"(?:"
               r"(?:example|output|required)\s+format"
               r"|format\s+example"
               r"|(?:example\s+)?template"
-              r")\s*:?\s*$",
+              r")\s*:?"
+              r"(?:\*\*)?"
+              r"[ \t]*$",
               re.IGNORECASE,
           )
 
