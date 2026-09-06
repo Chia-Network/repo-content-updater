@@ -940,6 +940,8 @@ jobs:
             raise ValueError("missing verdict token")
 
           GLUED_TERMINAL_RE = re.compile(r"^[ \t]*(?:\*\*[ \t]*)?[.!?]?[ \t]*$")
+          GLUED_TRAILING_PUNCT_RE = re.compile(r"^[ \t]*[.!?][ \t]*$")
+          NUMBERED_LIST_MARKER_RE = re.compile(r"^[ \t]*\d+\.$")
 
           def _removal_span(text: str, match: re.Match) -> tuple[int, int]:
             if _is_line_start_match(text, match) and _is_standalone_verdict_line(text, match):
@@ -949,8 +951,8 @@ jobs:
             start, end = match.start(), match.end()
             if _is_glued_verdict_match(text, match):
               remainder = text[match.end() : _line_end(text, match.end())]
-              trailing = GLUED_TERMINAL_RE.match(remainder)
-              if trailing and trailing.group(0).strip(" \t"):
+              trailing = GLUED_TRAILING_PUNCT_RE.match(remainder)
+              if trailing:
                 end = match.end() + trailing.end()
             return start, end
 
@@ -1030,6 +1032,12 @@ jobs:
             line_start = text.rfind("\n", 0, match.start()) + 1
             return text[line_start:match.start()].strip() == ""
 
+          def _is_numbered_list_glue_anchor(text: str, anchor_pos: int, line_start: int) -> bool:
+            if anchor_pos < 0 or text[anchor_pos] != ".":
+              return False
+            prefix = text[line_start : anchor_pos + 1]
+            return NUMBERED_LIST_MARKER_RE.match(prefix) is not None
+
           def _is_glued_verdict_match(text: str, match: re.Match) -> bool:
             if _is_line_start_match(text, match):
               return False
@@ -1039,11 +1047,12 @@ jobs:
             line_start = text.rfind("\n", 0, match.start()) + 1
             if pos <= line_start:
               return False
-            anchor = text[pos - 1]
+            anchor_pos = pos - 1
+            anchor = text[anchor_pos]
             if match.start() < len(text) and text[match.start()] in " \t":
               if anchor not in ".!?":
                 return False
-              if anchor == "." and pos >= 2 and text[pos - 2].isdigit():
+              if _is_numbered_list_glue_anchor(text, anchor_pos, line_start):
                 return False
               remainder = text[match.end() : _line_end(text, match.end())]
               return GLUED_TERMINAL_RE.match(remainder) is not None
