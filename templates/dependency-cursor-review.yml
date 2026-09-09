@@ -1013,10 +1013,13 @@ jobs:
           OR_FORMAT_LINE_RE = re.compile(r"^\s*or\s*:\s*$", re.IGNORECASE)
           LINE_START_TRAILER_RE = re.compile(
               r"^[ \t]*(?:"
+              r"(?:"
               r"\*\*"
               r"|[.!?]"
               r"|\([^)]*\)"
               r"|[-–—][ \t]+[^\n]*"
+              r")"
+              r"[ \t]*"
               r")*[ \t]*$",
               re.IGNORECASE,
           )
