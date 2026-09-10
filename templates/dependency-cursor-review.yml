@@ -943,6 +943,15 @@ jobs:
           GLUED_TRAILING_PUNCT_RE = re.compile(r"^[ \t]*[.!?][ \t]*$")
           NUMBERED_LIST_MARKER_RE = re.compile(r"^[ \t]*\d+\.$")
 
+          def _formatting_suffix_end(remainder: str) -> int:
+            pos = 0
+            while pos < len(remainder):
+              chunk = re.match(r"^[ \t]*(?:\*\*|[.!?])[ \t]*", remainder[pos:])
+              if not chunk:
+                break
+              pos += chunk.end()
+            return pos
+
           def _removal_span(text: str, match: re.Match) -> tuple[int, int]:
             line_start = text.rfind("\n", 0, match.start()) + 1
             line_end = _line_end(text, match.end())
@@ -951,10 +960,10 @@ jobs:
             if _is_line_start_match(text, match) and _is_line_start_official_with_trailer(text, match):
               end = match.end()
               remainder = text[end:line_end]
-              formatting = re.match(r"^[ \t]*(?:\*\*[ \t]*)?[.!?][ \t]*", remainder)
-              if formatting:
-                end += formatting.end()
-              if not remainder[formatting.end() if formatting else 0 :].strip():
+              formatting_end = _formatting_suffix_end(remainder)
+              if formatting_end:
+                end += formatting_end
+              if not remainder[formatting_end:].strip():
                 return line_start, line_end
               return line_start, end
             start, end = match.start(), match.end()
@@ -1124,9 +1133,14 @@ jobs:
             return LINE_START_TRAILER_RE.match(remainder) is not None
 
           def _is_indented_verdict_match(text: str, match: re.Match) -> bool:
-            matched = text[match.start() : match.end()]
-            indent = len(matched) - len(matched.lstrip(" \t"))
-            return indent >= 2
+            if not _is_line_start_match(text, match):
+              return False
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            segment = text[line_start : match.end()]
+            verdict_pos = re.search(r"(?i)(?:\*\*)?verdict", segment)
+            if verdict_pos is None:
+              return False
+            return verdict_pos.start() >= 2
 
           def _is_because_line_start_verdict(text: str, match: re.Match) -> bool:
             if not _is_line_start_match(text, match):
@@ -1136,21 +1150,6 @@ jobs:
             remainder = line[match.end() - line_start :].lstrip()
             return bool(re.match(r"(?i)^because\b", remainder))
 
-          def _has_later_standalone_line_start_verdict(
-            text: str, matches: list[re.Match], after: re.Match
-          ) -> bool:
-            for found in matches:
-              if found.start() <= after.start():
-                continue
-              if not _is_line_start_match(text, found):
-                continue
-              if not _is_standalone_verdict_line(text, found):
-                continue
-              if _is_format_example_line(text, found):
-                continue
-              return True
-            return False
-
           def _has_later_glued_verdict(text: str, matches: list[re.Match], after: re.Match) -> bool:
             for found in matches:
               if found.start() <= after.start():
@@ -1158,6 +1157,22 @@ jobs:
               if _is_format_example_line(text, found):
                 continue
               if _is_glued_verdict_match(text, found):
+                return True
+            return False
+
+          def _has_later_line_start_official_verdict(
+            text: str, matches: list[re.Match], after: re.Match
+          ) -> bool:
+            for found in matches:
+              if found.start() <= after.start():
+                continue
+              if not _is_line_start_match(text, found):
+                continue
+              if _is_format_example_line(text, found):
+                continue
+              if _is_standalone_verdict_line(text, found):
+                return True
+              if _is_line_start_official_with_trailer(text, found):
                 return True
             return False
 
@@ -1190,7 +1205,7 @@ jobs:
               if _is_standalone_verdict_line(text, match):
                 return True
               if _is_because_line_start_verdict(text, match):
-                if _has_later_standalone_line_start_verdict(text, matches, match):
+                if _has_later_line_start_official_verdict(text, matches, match):
                   return False
                 return _has_later_glued_verdict(text, matches, match)
               if _has_line_start_reasoning_continuation(text, match):
@@ -1200,12 +1215,19 @@ jobs:
               return True
             return False
 
-          def _should_strip_from_body(text: str, match: re.Match, matches: list[re.Match]) -> bool:
-            if _is_line_start_match(text, match):
-              if _is_standalone_verdict_line(text, match):
-                return True
-              return _is_official_candidate(text, match, matches)
-            return _is_glued_verdict_match(text, match)
+          def _is_same_match(left: re.Match, right: re.Match) -> bool:
+            return left.start() == right.start() and left.end() == right.end()
+
+          def _should_strip_from_body(
+            text: str, match: re.Match, matches: list[re.Match], official: re.Match
+          ) -> bool:
+            if _is_same_match(match, official):
+              return True
+            if _is_line_start_match(text, match) and _is_standalone_verdict_line(text, match):
+              return True
+            if not _is_line_start_match(text, match) and _is_glued_verdict_match(text, match):
+              return True
+            return False
 
           def _official_verdict_match(text: str, matches: list[re.Match]) -> re.Match | None:
             for found in matches:
@@ -1231,7 +1253,7 @@ jobs:
             verdict_value = _verdict_value(official)
             spans: list[tuple[int, int]] = []
             for found in matches:
-              if not _should_strip_from_body(text, found, matches):
+              if not _should_strip_from_body(text, found, matches, official):
                 continue
               spans.append(_removal_span(text, found))
               orphan = _orphan_trailing_bold_span(text, found)
