@@ -946,18 +946,33 @@ jobs:
           def _formatting_suffix_end(remainder: str) -> int:
             pos = 0
             while pos < len(remainder):
-              chunk = re.match(r"^[ \t]*(?:\*\*|[.!?])[ \t]*", remainder[pos:])
-              if not chunk:
-                break
-              pos += chunk.end()
+              punct = re.match(r"^[ \t]*[.!?][ \t]*", remainder[pos:])
+              if punct:
+                pos += punct.end()
+                closer = re.match(r"^[ \t]*\*\*", remainder[pos:])
+                if closer:
+                  pos += closer.end()
+                continue
+              opener = re.match(r"^[ \t]*\*\*", remainder[pos:])
+              if opener:
+                after = remainder[pos + opener.end() :].lstrip()
+                if after and (after[0] in "(-–—" or after[0].isalpha()):
+                  break
+                pos += opener.end()
+                continue
+              break
             return pos
 
-          def _removal_span(text: str, match: re.Match) -> tuple[int, int]:
+          def _removal_span(
+            text: str, match: re.Match, official: re.Match | None = None
+          ) -> tuple[int, int]:
             line_start = text.rfind("\n", 0, match.start()) + 1
             line_end = _line_end(text, match.end())
             if _is_line_start_match(text, match) and _is_standalone_verdict_line(text, match):
               return line_start, line_end
             if _is_line_start_match(text, match) and _is_line_start_official_with_trailer(text, match):
+              if official is not None and not _is_same_match(match, official):
+                return line_start, line_end
               end = match.end()
               remainder = text[end:line_end]
               formatting_end = _formatting_suffix_end(remainder)
@@ -1225,6 +1240,12 @@ jobs:
               return True
             if _is_line_start_match(text, match) and _is_standalone_verdict_line(text, match):
               return True
+            if (
+              _is_line_start_match(text, match)
+              and _is_line_start_official_with_trailer(text, match)
+              and not _is_format_example_line(text, match)
+            ):
+              return True
             if not _is_line_start_match(text, match) and _is_glued_verdict_match(text, match):
               return True
             return False
@@ -1255,7 +1276,7 @@ jobs:
             for found in matches:
               if not _should_strip_from_body(text, found, matches, official):
                 continue
-              spans.append(_removal_span(text, found))
+              spans.append(_removal_span(text, found, official))
               orphan = _orphan_trailing_bold_span(text, found)
               if orphan:
                 spans.append(orphan)
