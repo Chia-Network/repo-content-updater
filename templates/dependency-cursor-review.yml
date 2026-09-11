@@ -1042,8 +1042,8 @@ jobs:
               r"[ \t]*$",
               re.IGNORECASE,
           )
-          OR_FORMAT_LINE_RE = re.compile(r"^\s*or\s*:?\s*$", re.IGNORECASE)
-          OR_FORMAT_LINE_PREFIX_RE = re.compile(r"^\s*or\s*:?", re.IGNORECASE)
+          OR_FORMAT_LINE_RE = re.compile(r"^\s*or\b\s*:?\s*$", re.IGNORECASE)
+          OR_FORMAT_LINE_PREFIX_RE = re.compile(r"^\s*or\b\s*:", re.IGNORECASE)
           EVIDENCE_PREFIX_RE = re.compile(
               r"(?i)^(?:based on|with|given|due to|per|after|following)\b"
           )
