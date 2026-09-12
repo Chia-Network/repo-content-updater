@@ -1351,7 +1351,9 @@ jobs:
             if not _is_line_start_official_with_trailer(text, match):
               return False
             if re.match(r"^[.!?][ \t]+[A-Z]", remainder):
-              return False
+              after_bridge = re.sub(r"^[.!?][ \t]+", "", remainder, count=1)
+              if not EVIDENCE_PREFIX_RE.match(after_bridge):
+                return False
             stripped = remainder.lstrip()
             if re.match(r"^[\(\[-–—]", stripped):
               return True
