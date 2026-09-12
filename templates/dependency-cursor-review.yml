@@ -964,14 +964,32 @@ jobs:
             return pos
 
           def _removal_span(
-            text: str, match: re.Match, official: re.Match | None = None
+            text: str,
+            match: re.Match,
+            official: re.Match | None = None,
+            matches: list[re.Match] | None = None,
           ) -> tuple[int, int]:
             line_start = text.rfind("\n", 0, match.start()) + 1
             line_end = _line_end(text, match.end())
+            if (
+              official is not None
+              and matches is not None
+              and _because_demoted_by_later_official(text, matches, match, official)
+            ):
+              return line_start, line_end
             if _is_line_start_match(text, match) and _is_standalone_verdict_line(text, match):
               return line_start, line_end
             if _is_line_start_match(text, match) and _is_line_start_official_with_trailer(text, match):
               if official is not None and not _is_same_match(match, official):
+                if _verdict_value(match) != _verdict_value(official):
+                  end = match.end()
+                  remainder = text[end:line_end]
+                  formatting_end = _formatting_suffix_end(remainder)
+                  if formatting_end:
+                    end += formatting_end
+                  if not remainder[formatting_end:].strip():
+                    return line_start, line_end
+                  return line_start, end
                 return line_start, line_end
               end = match.end()
               remainder = text[end:line_end]
@@ -1189,20 +1207,81 @@ jobs:
             matched = text[match.start() : match.end()]
             return "**" in matched
 
-          def _has_later_contradictory_formatted_glued_verdict(
+          def _is_contradicting_verdict_match(
+            text: str, match: re.Match, matches: list[re.Match]
+          ) -> bool:
+            if _is_format_example_line(text, match):
+              return False
+            if _is_line_start_match(text, match):
+              if _is_standalone_verdict_line(text, match):
+                return True
+              if _is_line_start_official_with_trailer(text, match):
+                return True
+              if _is_because_line_start_verdict(text, match):
+                return True
+              return False
+            if _is_glued_verdict_match(text, match):
+              return True
+            return False
+
+          def _plain_glued_demotes_because_line(
+            text: str, because_match: re.Match, glued_match: re.Match
+          ) -> bool:
+            if not _is_because_line_start_verdict(text, because_match):
+              return False
+            if not _is_glued_verdict_match(text, glued_match):
+              return False
+            if _is_formatted_glued_verdict_match(text, glued_match):
+              return _verdict_value(because_match) != _verdict_value(glued_match)
+            because_value = _verdict_value(because_match)
+            glued_value = _verdict_value(glued_match)
+            if because_value == glued_value:
+              return False
+            return because_value == "benign" and glued_value == "malicious"
+
+          def _has_later_contradiction_demoting_because(
+            text: str, matches: list[re.Match], because_match: re.Match
+          ) -> bool:
+            because_value = _verdict_value(because_match)
+            for found in matches:
+              if found.start() <= because_match.start():
+                continue
+              if _is_format_example_line(text, found):
+                continue
+              if _is_line_start_match(text, found) and (
+                _is_standalone_verdict_line(text, found)
+                or _has_line_start_trailer_evidence(text, found)
+              ):
+                if _verdict_value(found) != because_value:
+                  return True
+                continue
+              if _is_formatted_glued_verdict_match(text, found):
+                if _verdict_value(found) != because_value:
+                  return True
+                continue
+              if _plain_glued_demotes_because_line(text, because_match, found):
+                return True
+            return False
+
+          def _has_later_contradictory_verdict(
             text: str, matches: list[re.Match], after: re.Match
           ) -> bool:
+            if _is_because_line_start_verdict(text, after):
+              return _has_later_contradiction_demoting_because(text, matches, after)
             because_value = _verdict_value(after)
             for found in matches:
               if found.start() <= after.start():
                 continue
-              if _is_format_example_line(text, found):
-                continue
-              if not _is_formatted_glued_verdict_match(text, found):
+              if not _is_contradicting_verdict_match(text, found, matches):
                 continue
               if _verdict_value(found) != because_value:
                 return True
             return False
+
+          def _has_later_contradictory_formatted_glued_verdict(
+            text: str, matches: list[re.Match], after: re.Match
+          ) -> bool:
+            return _has_later_contradictory_verdict(text, matches, after)
 
           def _has_later_line_start_official_verdict(
             text: str, matches: list[re.Match], after: re.Match
@@ -1242,6 +1321,105 @@ jobs:
             line = _line_text(text, match).lstrip(" \t")
             return bool(OR_FORMAT_LINE_PREFIX_RE.match(line))
 
+          def _line_start_trailer_remainder(text: str, match: re.Match) -> str:
+            line = _line_text(text, match)
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            return line[match.end() - line_start :].strip()
+
+          def _has_line_start_trailer_evidence(text: str, match: re.Match) -> bool:
+            if not _is_line_start_match(text, match):
+              return False
+            remainder = _line_start_trailer_remainder(text, match)
+            if not remainder:
+              return False
+            return _is_line_start_official_with_trailer(text, match)
+
+          def _is_line_start_analysis_blocking_glued(
+            text: str, match: re.Match, matches: list[re.Match]
+          ) -> bool:
+            if not _is_line_start_match(text, match):
+              return False
+            if _is_format_example_line(text, match):
+              return False
+            if _is_official_candidate(text, match, matches):
+              return True
+            line = _line_text(text, match)
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            remainder = line[match.end() - line_start :].lstrip()
+            if re.match(r"(?i)^because\b", remainder):
+              return False
+            if re.match(r"^[.!?][ \t]+[A-Z]", remainder):
+              return True
+            return False
+
+          def _should_later_contradiction_override_earlier(
+            text: str, earlier: re.Match, later: re.Match
+          ) -> bool:
+            earlier_value = _verdict_value(earlier)
+            later_value = _verdict_value(later)
+            if earlier_value == later_value:
+              return False
+            if later_value != "malicious":
+              return False
+            if _has_line_start_trailer_evidence(text, later):
+              return True
+            later_line = _line_text(text, later)
+            earlier_line = _line_text(text, earlier)
+            if _is_standalone_verdict_line(text, later) and "**" in later_line:
+              if _is_standalone_verdict_line(text, earlier) and "**" in earlier_line:
+                return False
+              return True
+            if _is_standalone_verdict_line(text, later) and _is_standalone_verdict_line(text, earlier):
+              if "**" in earlier_line and "**" not in later_line:
+                return False
+            if _is_formatted_glued_verdict_match(text, later):
+              return True
+            if _is_glued_verdict_match(text, later) and not _is_line_start_match(text, later):
+              return True
+            return False
+
+          def _select_among_line_start_officials(
+            text: str, matches: list[re.Match], candidates: list[re.Match]
+          ) -> re.Match:
+            chosen = candidates[0]
+            for candidate in candidates[1:]:
+              if not _should_later_contradiction_override_earlier(text, chosen, candidate):
+                continue
+              chosen = candidate
+            return chosen
+
+          def _is_incidental_glued_verdict(
+            text: str, match: re.Match, matches: list[re.Match]
+          ) -> bool:
+            if not _is_glued_verdict_match(text, match):
+              return False
+            if _is_format_example_line(text, match):
+              return True
+            if _is_formatted_glued_verdict_match(text, match):
+              return False
+            for found in matches:
+              if found.start() >= match.start():
+                break
+              if _is_line_start_analysis_blocking_glued(text, found, matches):
+                return True
+            return False
+
+          def _because_demoted_by_later_official(
+            text: str,
+            matches: list[re.Match],
+            because_match: re.Match,
+            official: re.Match,
+          ) -> bool:
+            if not _is_because_line_start_verdict(text, because_match):
+              return False
+            if _verdict_value(because_match) == _verdict_value(official):
+              return False
+            if because_match.start() >= official.start():
+              return False
+            return _has_later_contradiction_demoting_because(
+              text, matches, because_match
+            ) or _has_later_line_start_official_verdict(text, matches, because_match)
+
           def _is_official_candidate(text: str, match: re.Match, matches: list[re.Match]) -> bool:
             if _is_format_example_line(text, match):
               return False
@@ -1251,14 +1429,14 @@ jobs:
               if _is_because_line_start_verdict(text, match):
                 if _has_later_line_start_official_verdict(text, matches, match):
                   return False
-                if _has_later_contradictory_formatted_glued_verdict(text, matches, match):
+                if _has_later_contradiction_demoting_because(text, matches, match):
                   return False
                 return _has_later_glued_verdict(text, matches, match)
               if _has_line_start_reasoning_continuation(text, match):
                 return False
               return _is_line_start_official_with_trailer(text, match)
             if _is_glued_verdict_match(text, match):
-              return True
+              return not _is_incidental_glued_verdict(text, match, matches)
             return False
 
           def _is_same_match(left: re.Match, right: re.Match) -> bool:
@@ -1268,6 +1446,8 @@ jobs:
             text: str, match: re.Match, matches: list[re.Match], official: re.Match
           ) -> bool:
             if _is_same_match(match, official):
+              return True
+            if _because_demoted_by_later_official(text, matches, match, official):
               return True
             if _is_line_start_match(text, match) and _is_standalone_verdict_line(text, match):
               return True
@@ -1282,9 +1462,24 @@ jobs:
             return False
 
           def _official_verdict_match(text: str, matches: list[re.Match]) -> re.Match | None:
-            for found in matches:
-              if _is_line_start_match(text, found) and _is_official_candidate(text, found, matches):
-                return found
+            line_start_officials = [
+              found
+              for found in matches
+              if _is_line_start_match(text, found)
+              and _is_official_candidate(text, found, matches)
+            ]
+            if line_start_officials:
+              return _select_among_line_start_officials(text, matches, line_start_officials)
+
+            blocking = [
+              found
+              for found in matches
+              if _is_line_start_analysis_blocking_glued(text, found, matches)
+              and not _is_official_candidate(text, found, matches)
+            ]
+            if blocking:
+              return _select_among_line_start_officials(text, matches, blocking)
+
             for found in matches:
               if _is_official_candidate(text, found, matches):
                 return found
@@ -1307,7 +1502,7 @@ jobs:
             for found in matches:
               if not _should_strip_from_body(text, found, matches, official):
                 continue
-              spans.append(_removal_span(text, found, official))
+              spans.append(_removal_span(text, found, official, matches))
               orphan = _orphan_trailing_bold_span(text, found)
               if orphan:
                 spans.append(orphan)
