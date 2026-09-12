@@ -979,6 +979,15 @@ jobs:
               return line_start, line_end
             if _is_line_start_match(text, match) and _is_standalone_verdict_line(text, match):
               return line_start, line_end
+            if (
+              official is not None
+              and _is_same_match(match, official)
+              and _is_line_start_match(text, match)
+            ):
+              rel_after = text[match.end() : line_end]
+              punct_gap = re.match(r"^[.!?][ \t]+(?=[A-Z])", rel_after)
+              if punct_gap:
+                return line_start, match.end() + punct_gap.end()
             if _is_line_start_match(text, match) and _is_line_start_official_with_trailer(text, match):
               if official is not None and not _is_same_match(match, official):
                 if _verdict_value(match) != _verdict_value(official):
@@ -999,6 +1008,13 @@ jobs:
               if not remainder[formatting_end:].strip():
                 return line_start, line_end
               return line_start, end
+            if (
+              matches is not None
+              and _is_line_start_match(text, match)
+              and _is_line_start_analysis_blocking_glued(text, match, matches)
+              and not _is_official_candidate(text, match, matches)
+            ):
+              return line_start, line_end
             start, end = match.start(), match.end()
             if _is_glued_verdict_match(text, match):
               remainder = text[match.end() : _line_end(text, match.end())]
@@ -1295,7 +1311,7 @@ jobs:
                 continue
               if _is_standalone_verdict_line(text, found):
                 return True
-              if _is_line_start_official_with_trailer(text, found):
+              if _has_line_start_trailer_evidence(text, found):
                 return True
             return False
 
@@ -1332,7 +1348,21 @@ jobs:
             remainder = _line_start_trailer_remainder(text, match)
             if not remainder:
               return False
-            return _is_line_start_official_with_trailer(text, match)
+            if not _is_line_start_official_with_trailer(text, match):
+              return False
+            if re.match(r"^[.!?][ \t]+[A-Z]", remainder):
+              return False
+            stripped = remainder.lstrip()
+            if re.match(r"^[\(\[-–—]", stripped):
+              return True
+            if EVIDENCE_PREFIX_RE.match(stripped):
+              return True
+            if re.match(r"^[-–—][ \t]+", stripped):
+              return True
+            without_leading_punct = re.sub(
+              r"^(?:\*\*|[.!?])+[ \t]*", "", stripped
+            ).strip()
+            return bool(without_leading_punct)
 
           def _is_line_start_analysis_blocking_glued(
             text: str, match: re.Match, matches: list[re.Match]
@@ -1459,6 +1489,14 @@ jobs:
               return True
             if not _is_line_start_match(text, match) and _is_glued_verdict_match(text, match):
               return True
+            if (
+              _is_line_start_match(text, match)
+              and not _is_same_match(match, official)
+              and _verdict_value(match) != _verdict_value(official)
+              and _is_line_start_analysis_blocking_glued(text, match, matches)
+              and not _is_official_candidate(text, match, matches)
+            ):
+              return True
             return False
 
           def _official_verdict_match(text: str, matches: list[re.Match]) -> re.Match | None:
@@ -1471,6 +1509,10 @@ jobs:
             if line_start_officials:
               return _select_among_line_start_officials(text, matches, line_start_officials)
 
+            for found in matches:
+              if _is_official_candidate(text, found, matches):
+                return found
+
             blocking = [
               found
               for found in matches
@@ -1480,9 +1522,6 @@ jobs:
             if blocking:
               return _select_among_line_start_officials(text, matches, blocking)
 
-            for found in matches:
-              if _is_official_candidate(text, found, matches):
-                return found
             return None
 
           def format_malware_review_verdict(text: str) -> str:
