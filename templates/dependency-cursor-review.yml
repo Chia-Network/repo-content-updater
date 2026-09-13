@@ -1085,6 +1085,7 @@ jobs:
               r"^\s*your response must begin\b.*$",
               re.IGNORECASE,
           )
+          SAME_LINE_EG_IE_RE = re.compile(r"(?i)\b(?:e\.g\.|i\.e\.)")
           LINE_START_TRAILER_RE = re.compile(
               r"^[ \t]*(?:"
               r"(?:"
@@ -1315,8 +1316,16 @@ jobs:
                 return True
             return False
 
+          def _is_same_line_eg_ie_format_example(text: str, match: re.Match) -> bool:
+            line = _line_text(text, match)
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            before = line[: match.start() - line_start]
+            return SAME_LINE_EG_IE_RE.search(before) is not None
+
           def _is_format_example_line(text: str, match: re.Match) -> bool:
             if _is_indented_verdict_match(text, match):
+              return True
+            if _is_same_line_eg_ie_format_example(text, match):
               return True
             line_start = text.rfind("\n", 0, match.start()) + 1
             line_end = _line_end(text, match.end())
@@ -1394,6 +1403,11 @@ jobs:
             if later_value != "malicious":
               return False
             if _has_line_start_trailer_evidence(text, later):
+              return True
+            if (
+              _is_standalone_verdict_line(text, later)
+              and _has_line_start_trailer_evidence(text, earlier)
+            ):
               return True
             later_line = _line_text(text, later)
             earlier_line = _line_text(text, earlier)
