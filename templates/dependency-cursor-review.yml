@@ -1086,6 +1086,9 @@ jobs:
               re.IGNORECASE,
           )
           SAME_LINE_EG_IE_RE = re.compile(r"(?i)\b(?:e\.g\.|i\.e\.)")
+          IMMEDIATE_EG_IE_SAMPLE_BRIDGE_RE = re.compile(
+              r"^[ \t,]*(?:\*\*|[`\"'([])?[ \t]*$"
+          )
           LINE_START_TRAILER_RE = re.compile(
               r"^[ \t]*(?:"
               r"(?:"
@@ -1320,7 +1323,11 @@ jobs:
             line = _line_text(text, match)
             line_start = text.rfind("\n", 0, match.start()) + 1
             before = line[: match.start() - line_start]
-            return SAME_LINE_EG_IE_RE.search(before) is not None
+            eg_ie_hits = list(SAME_LINE_EG_IE_RE.finditer(before))
+            if not eg_ie_hits:
+              return False
+            bridge = before[eg_ie_hits[-1].end() :]
+            return IMMEDIATE_EG_IE_SAMPLE_BRIDGE_RE.match(bridge) is not None
 
           def _is_format_example_line(text: str, match: re.Match) -> bool:
             if _is_indented_verdict_match(text, match):
