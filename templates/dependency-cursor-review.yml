@@ -1532,9 +1532,13 @@ jobs:
             if line_start_officials:
               return _select_among_line_start_officials(text, matches, line_start_officials)
 
-            for found in matches:
-              if _is_official_candidate(text, found, matches):
-                return found
+            glued_officials = [
+              found
+              for found in matches
+              if _is_official_candidate(text, found, matches)
+            ]
+            if glued_officials:
+              return _select_among_line_start_officials(text, matches, glued_officials)
 
             blocking = [
               found
