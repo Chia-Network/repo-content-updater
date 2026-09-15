@@ -1394,7 +1394,10 @@ jobs:
             if not remainder:
               return False
             if _line_start_has_sentence_trailer(text, match):
-              return _verdict_value(match) == "malicious"
+              if _verdict_value(match) == "malicious":
+                return True
+              after_bridge = re.sub(r"^[.!?][ \t]+", "", remainder, count=1)
+              return bool(EVIDENCE_PREFIX_RE.match(after_bridge))
             if not _is_line_start_official_with_trailer(text, match):
               return False
             if re.match(r"^[.!?][ \t]+[A-Z]", remainder):
