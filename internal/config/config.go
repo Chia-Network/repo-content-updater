@@ -85,7 +85,7 @@ func (c *Config) ExpandManagedFileEntries(entries []string) ([]string, error) {
 			group := name[len("group:"):]
 			groupFiles, err := c.ExpandGroup(group)
 			if err != nil {
-				return err
+				return nil
 			}
 			for _, gf := range groupFiles {
 				if err := addName(gf); err != nil {

@@ -45,10 +45,30 @@ func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
 			for _, property := range repo.Properties {
 				if property.PropertyName == "managed-files" && property.Value != nil {
 					rawEntries := strings.Split(*property.Value, ",")
-					finalFiles, err := cfg.ExpandManagedFileEntries(rawEntries)
-					if err != nil {
-						log.Printf("Error expanding managed-files for %s: %s\n", repo.RepositoryName, err.Error())
-						continue
+					seen := map[string]bool{}
+					var finalFiles []string
+					for _, rawEntry := range rawEntries {
+						rawEntry = strings.TrimSpace(rawEntry)
+						if rawEntry == "" {
+							continue
+						}
+						expanded, err := cfg.ExpandManagedFileEntries([]string{rawEntry})
+						if err != nil {
+							log.Printf(
+								"Error expanding managed-files entry %q for %s: %s\n",
+								rawEntry,
+								repo.RepositoryName,
+								err.Error(),
+							)
+							continue
+						}
+						for _, file := range expanded {
+							if seen[file] {
+								continue
+							}
+							seen[file] = true
+							finalFiles = append(finalFiles, file)
+						}
 					}
 
 					entry.files = finalFiles
