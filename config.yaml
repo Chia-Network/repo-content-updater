@@ -37,6 +37,10 @@ files:
       - .github/workflows/dependabot-cursor-review.yml
       - .github/workflows/dependency-cursor-review.yaml
 
+  - name: malware-verdict-formatter
+    template_name: malware-verdict-formatter.py
+    repo_path: .github/scripts/malware_verdict_formatter.py
+
   - name: dep-review
     template_name: dependency-review.yml
     repo_path: .github/workflows/dependency-review.yml
