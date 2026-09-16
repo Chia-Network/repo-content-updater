@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,6 +27,7 @@ type File struct {
 	TemplateName   string   `yaml:"template_name"`
 	RepoPath       string   `yaml:"repo_path"`
 	AlternatePaths []string `yaml:"alternate_paths"`
+	CompanionFiles []string `yaml:"companion_files"`
 }
 
 // LoadConfig loads config from the given path
@@ -65,4 +67,54 @@ func (c *Config) GetFileInfo(name string) *File {
 	}
 
 	return nil
+}
+
+// ExpandManagedFileEntries expands group: references and companion_files into a
+// deduplicated file name list (stable order: first mention wins placement, companions append).
+func (c *Config) ExpandManagedFileEntries(entries []string) ([]string, error) {
+	var expanded []string
+	seen := map[string]bool{}
+
+	var addName func(string) error
+	addName = func(name string) error {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			return nil
+		}
+		if strings.HasPrefix(name, "group:") {
+			group := name[len("group:"):]
+			groupFiles, err := c.ExpandGroup(group)
+			if err != nil {
+				return err
+			}
+			for _, gf := range groupFiles {
+				if err := addName(gf); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		fileinfo := c.GetFileInfo(name)
+		if fileinfo == nil {
+			return nil
+		}
+		seen[name] = true
+		expanded = append(expanded, name)
+		for _, companion := range fileinfo.CompanionFiles {
+			if c.GetFileInfo(companion) == nil {
+				return fmt.Errorf("unknown companion file %q for %q", companion, name)
+			}
+			if err := addName(companion); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, entry := range entries {
+		if err := addName(entry); err != nil {
+			return nil, err
+		}
+	}
+	return expanded, nil
 }

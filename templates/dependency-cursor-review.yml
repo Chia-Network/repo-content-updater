@@ -933,10 +933,10 @@ jobs:
               break
           else:
             raise RuntimeError(
-              "malware_verdict_formatter.py not found. "
-              "Sync managed file malware-verdict-formatter "
-              "(.github/scripts/malware_verdict_formatter.py) together with "
-              "dependency-cursor-review workflow — a workflow-only update will fail here."
+              "malware_verdict_formatter.py not found under .github/scripts/. "
+              "Run repo-content-updater managed-files for dependency-cursor-review "
+              "(config companion_files pulls in malware-verdict-formatter automatically) "
+              "or use managed-files group:dependency-cursor-review."
             )
 
           from malware_verdict_formatter import format_malware_review_verdict

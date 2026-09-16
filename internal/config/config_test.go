@@ -17,4 +17,12 @@ func TestConfigIsValid(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, len(group.Templates), len(files))
 	}
+
+	expanded, err := cfg.ExpandManagedFileEntries([]string{"dependency-cursor-review"})
+	assert.Nil(t, err)
+	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter"}, expanded)
+
+	groupExpanded, err := cfg.ExpandManagedFileEntries([]string{"group:dependency-cursor-review"})
+	assert.Nil(t, err)
+	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter"}, groupExpanded)
 }

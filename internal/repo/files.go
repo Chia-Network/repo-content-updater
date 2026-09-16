@@ -44,22 +44,11 @@ func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
 			entry := reposToCheck[repo.RepositoryName]
 			for _, property := range repo.Properties {
 				if property.PropertyName == "managed-files" && property.Value != nil {
-					var finalFiles []string
-					files := strings.Split(*property.Value, ",")
-					for _, file := range files {
-						file = strings.TrimSpace(file)
-						if strings.HasPrefix(file, "group:") {
-							group := file[len("group:"):]
-							groupFiles, err := cfg.ExpandGroup(group)
-							if err != nil {
-								log.Printf("Error expanding group %s: %s\n", group, err.Error())
-								continue
-							}
-
-							finalFiles = append(finalFiles, groupFiles...)
-						} else {
-							finalFiles = append(finalFiles, file)
-						}
+					rawEntries := strings.Split(*property.Value, ",")
+					finalFiles, err := cfg.ExpandManagedFileEntries(rawEntries)
+					if err != nil {
+						log.Printf("Error expanding managed-files for %s: %s\n", repo.RepositoryName, err.Error())
+						continue
 					}
 
 					entry.files = finalFiles
