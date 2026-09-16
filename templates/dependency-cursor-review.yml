@@ -932,7 +932,12 @@ jobs:
               sys.path.insert(0, str(_script_dir.resolve()))
               break
           else:
-            raise RuntimeError("malware_verdict_formatter.py not found")
+            raise RuntimeError(
+              "malware_verdict_formatter.py not found. "
+              "Sync managed file malware-verdict-formatter "
+              "(.github/scripts/malware_verdict_formatter.py) together with "
+              "dependency-cursor-review workflow — a workflow-only update will fail here."
+            )
 
           from malware_verdict_formatter import format_malware_review_verdict
 
