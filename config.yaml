@@ -22,6 +22,12 @@ groups:
     templates:
       - go-test
 
+  # Cursor Dependabot review workflow and its Python formatter script must ship together.
+  - name: dependency-cursor-review
+    templates:
+      - dependency-cursor-review
+      - malware-verdict-formatter
+
 files:
   - name: commit-signing
     template_name: check-commit-signing.yml
@@ -32,10 +38,16 @@ files:
   - name: dependency-cursor-review
     template_name: dependency-cursor-review.yml
     repo_path: .github/workflows/dependency-cursor-review.yml
+    companion_files:
+      - malware-verdict-formatter
     alternate_paths:
       - .github/workflows/dependabot-cursor-review.yaml
       - .github/workflows/dependabot-cursor-review.yml
       - .github/workflows/dependency-cursor-review.yaml
+
+  - name: malware-verdict-formatter
+    template_name: malware-verdict-formatter.py
+    repo_path: .github/scripts/malware_verdict_formatter.py
 
   - name: dep-review
     template_name: dependency-review.yml
