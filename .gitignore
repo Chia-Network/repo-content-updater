@@ -4,3 +4,5 @@ bin/
 *.log
 clones
 template-expanded/
+__pycache__/
+*.pyc

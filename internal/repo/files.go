@@ -71,6 +71,16 @@ func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
 						}
 					}
 
+					finalFiles, err = cfg.EnsureCompanionFiles(finalFiles)
+					if err != nil {
+						log.Printf(
+							"Error ensuring companion files for %s: %s\n",
+							repo.RepositoryName,
+							err.Error(),
+						)
+						continue
+					}
+
 					entry.files = finalFiles
 				}
 			}
@@ -100,6 +110,12 @@ func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
 
 // CheckFiles checks all the files for updates in the repo
 func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config, props CustomProperties) error {
+	var err error
+	files, err = cfg.EnsureCompanionFiles(files)
+	if err != nil {
+		return fmt.Errorf("error ensuring companion files for %s: %w", repoName, err)
+	}
+
 	defer removeDirIfExists(repoDir(repoName))
 
 	r, w, err := c.cloneRepo(repoName)
