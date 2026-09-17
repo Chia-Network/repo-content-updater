@@ -68,15 +68,35 @@ func (c *Config) registerManagedFileLookup(key, canonicalName string) {
 
 func (c *Config) buildManagedFileLookup() {
 	c.managedFileLookup = map[string]string{}
+
+	pathOwners := map[string]map[string]struct{}{}
 	for i := range c.Files {
 		file := &c.Files[i]
 		c.registerManagedFileLookup(file.Name, file.Name)
-		c.registerManagedFileLookup(file.RepoPath, file.Name)
 		for _, alias := range file.Aliases {
 			c.registerManagedFileLookup(alias, file.Name)
 		}
-		for _, altPath := range file.AlternatePaths {
-			c.registerManagedFileLookup(altPath, file.Name)
+
+		paths := append([]string{file.RepoPath}, file.AlternatePaths...)
+		for _, path := range paths {
+			key := normalizeManagedFileKey(path)
+			if key == "" {
+				continue
+			}
+			if pathOwners[key] == nil {
+				pathOwners[key] = map[string]struct{}{}
+			}
+			pathOwners[key][file.Name] = struct{}{}
+		}
+	}
+
+	for path, owners := range pathOwners {
+		if len(owners) != 1 {
+			continue
+		}
+		for name := range owners {
+			c.registerManagedFileLookup(path, name)
+			break
 		}
 	}
 }

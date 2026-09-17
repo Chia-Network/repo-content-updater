@@ -65,3 +65,29 @@ func TestEnsureCompanionFilesPairsWorkflowWithFormatter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter"}, legacyFinalized)
 }
+
+func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	for _, sharedPath := range []string{
+		".github/dependabot.yml",
+		".github/dependabot.yaml",
+	} {
+		canonical, ok := cfg.ResolveManagedFileName(sharedPath)
+		assert.False(t, ok, "path %q must not resolve when shared by dependabot and go-dependabot", sharedPath)
+		assert.Empty(t, canonical)
+	}
+
+	canonical, ok := cfg.ResolveManagedFileName("dependabot")
+	assert.True(t, ok)
+	assert.Equal(t, "dependabot", canonical)
+
+	goCanonical, ok := cfg.ResolveManagedFileName("go-dependabot")
+	assert.True(t, ok)
+	assert.Equal(t, "go-dependabot", goCanonical)
+
+	expanded, err := cfg.ExpandManagedFileEntries([]string{".github/dependabot.yml"})
+	assert.Nil(t, err)
+	assert.Empty(t, expanded)
+}
