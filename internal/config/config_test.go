@@ -30,3 +30,38 @@ func TestConfigIsValid(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, []string{"dependabot"}, mixed)
 }
+
+func TestManagedFileAliasesAndPathsIncludeCompanions(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	for _, entry := range []string{
+		"dependabot-cursor-review",
+		".github/workflows/dependency-cursor-review.yml",
+		".github/workflows/dependabot-cursor-review.yml",
+	} {
+		expanded, err := cfg.ExpandManagedFileEntries([]string{entry})
+		assert.Nil(t, err, entry)
+		assert.Equal(
+			t,
+			[]string{"dependency-cursor-review", "malware-verdict-formatter"},
+			expanded,
+			entry,
+		)
+	}
+}
+
+func TestEnsureCompanionFilesPairsWorkflowWithFormatter(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	// Simulates pre-#163 managed-files binaries that pass a flat file list without
+	// ExpandManagedFileEntries companion expansion.
+	finalized, err := cfg.EnsureCompanionFiles([]string{"dependency-cursor-review"})
+	assert.Nil(t, err)
+	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter"}, finalized)
+
+	legacyFinalized, err := cfg.EnsureCompanionFiles([]string{"dependabot-cursor-review"})
+	assert.Nil(t, err)
+	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter"}, legacyFinalized)
+}

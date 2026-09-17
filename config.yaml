@@ -38,6 +38,8 @@ files:
   - name: dependency-cursor-review
     template_name: dependency-cursor-review.yml
     repo_path: .github/workflows/dependency-cursor-review.yml
+    aliases:
+      - dependabot-cursor-review
     companion_files:
       - malware-verdict-formatter
     alternate_paths:
