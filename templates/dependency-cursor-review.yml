@@ -84,18 +84,18 @@ jobs:
         run: |
           set -euo pipefail
           script=".github/scripts/malware_verdict_formatter.py"
-          if [ -f "$script" ]; then
-            echo "Formatter script present on PR head."
-            exit 0
-          fi
           default_branch="${{`{{ github.event.repository.default_branch }}`}}"
-          echo "Formatter missing on PR head; retrieving from origin/${default_branch}."
+          echo "Installing trusted formatter from origin/${default_branch} (never executing PR head copy)."
           # checkout uses persist-credentials: false; one-shot Basic auth for this fetch only.
           auth_basic="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
           git -c "http.extraheader=AUTHORIZATION: basic ${auth_basic}" \
             fetch --no-tags --depth=1 origin "${default_branch}"
           mkdir -p .github/scripts
           git checkout "FETCH_HEAD" -- "${script}"
+          if [ ! -f "$script" ]; then
+            echo "Trusted formatter missing on origin/${default_branch} at ${script}."
+            exit 1
+          fi
 
       - name: Install Cursor CLI
         shell: bash
