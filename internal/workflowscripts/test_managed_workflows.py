@@ -14,19 +14,42 @@ _TRUSTED_GIT_CHECKOUT_ACTION = (
 
 
 class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
-    def test_ensure_step_uses_trusted_git_path_checkout_action(self) -> None:
-        self.assertTrue(_DEPENDENCY_CURSOR_REVIEW.is_file())
+    def _post_checkout_section(self) -> str:
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
-        self.assertNotIn("Formatter script present on PR head.", workflow)
-        ensure_block = workflow.split("Ensure malware verdict formatter script", 1)[1]
-        ensure_block = ensure_block.split("Install Cursor CLI", 1)[0]
+        return workflow.split("Checkout repository", 1)[1]
+
+    def test_composite_action_bootstrapped_from_trusted_ref_before_uses(self) -> None:
+        self.assertTrue(_DEPENDENCY_CURSOR_REVIEW.is_file())
+        section = self._post_checkout_section()
+        bootstrap = section.split(
+            "Install trusted git path checkout action definition", 1
+        )[1].split("Ensure malware verdict formatter script", 1)[0]
+        ensure = section.split("Ensure malware verdict formatter script", 1)[1].split(
+            "Install Cursor CLI", 1
+        )[0]
+        self.assertNotIn("Formatter script present on PR head.", section)
+        self.assertIn(
+            "not PR head definition",
+            bootstrap,
+            msg="bootstrap must overwrite composite action from trusted ref",
+        )
+        self.assertIn('http.extraheader=AUTHORIZATION: basic ${auth_basic}', bootstrap)
+        self.assertIn(
+            'git checkout "FETCH_HEAD" -- "${action_file}"',
+            bootstrap,
+        )
+        self.assertIn(".github/actions/trusted-git-path-checkout/action.yml", bootstrap)
+        self.assertNotIn("http.extraheader=AUTHORIZATION", ensure)
         self.assertIn(
             "./.github/actions/trusted-git-path-checkout",
-            ensure_block,
-            msg="ensure step must call the trusted checkout composite action",
+            ensure,
+            msg="formatter ensure uses composite after trusted bootstrap",
         )
-        self.assertNotIn("http.extraheader=AUTHORIZATION", ensure_block)
-        self.assertIn(".github/scripts/malware_verdict_formatter.py", ensure_block)
+        self.assertIn(".github/scripts/malware_verdict_formatter.py", ensure)
+        self.assertLess(
+            section.index("Install trusted git path checkout action definition"),
+            section.index("Ensure malware verdict formatter script"),
+        )
 
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
         self.assertTrue(_TRUSTED_GIT_CHECKOUT_ACTION.is_file())
@@ -35,7 +58,10 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn('http.extraheader=AUTHORIZATION: basic ${auth_basic}', action)
         self.assertIn('git checkout "FETCH_HEAD" -- "${script}"', action)
         self.assertIn("x-access-token:", action)
-        self.assertNotRegex(action, r'if\s+\[\s*-f\s+"?\$?\{?script\}?"?\s*\];\s*then[\s\S]*?exit\s+0')
+        self.assertNotRegex(
+            action,
+            r'if\s+\[\s*-f\s+"?\$?\{?script\}?"?\s*\];\s*then[\s\S]*?exit\s+0',
+        )
         self.assertRegex(
             action,
             re.compile(r"Trusted file missing on origin/\$\{default_branch\}", re.MULTILINE),

@@ -77,6 +77,26 @@ jobs:
           ref: ${{`{{ steps.target_pr.outputs.head_sha }}`}}
           persist-credentials: false
 
+      # PR head is untrusted: overwrite composite action.yml from default branch before uses: ./…
+      - name: Install trusted git path checkout action definition
+        shell: bash
+        env:
+          GH_TOKEN: ${{`{{ github.token }}`}}
+        run: |
+          set -euo pipefail
+          action_file=".github/actions/trusted-git-path-checkout/action.yml"
+          default_branch="${{`{{ github.event.repository.default_branch }}`}}"
+          echo "Installing trusted composite action from origin/${default_branch} (not PR head definition)."
+          auth_basic="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          git -c "http.extraheader=AUTHORIZATION: basic ${auth_basic}" \
+            fetch --no-tags --depth=1 origin "${default_branch}"
+          mkdir -p .github/actions/trusted-git-path-checkout
+          git checkout "FETCH_HEAD" -- "${action_file}"
+          if [ ! -f "$action_file" ]; then
+            echo "Trusted composite action missing on origin/${default_branch} at ${action_file}."
+            exit 1
+          fi
+
       - name: Ensure malware verdict formatter script
         uses: ./.github/actions/trusted-git-path-checkout
         with:
