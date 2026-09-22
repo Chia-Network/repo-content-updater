@@ -27,6 +27,7 @@ groups:
     templates:
       - dependency-cursor-review
       - malware-verdict-formatter
+      - trusted-git-path-checkout-action
 
 files:
   - name: commit-signing
@@ -42,10 +43,15 @@ files:
       - dependabot-cursor-review
     companion_files:
       - malware-verdict-formatter
+      - trusted-git-path-checkout-action
     alternate_paths:
       - .github/workflows/dependabot-cursor-review.yaml
       - .github/workflows/dependabot-cursor-review.yml
       - .github/workflows/dependency-cursor-review.yaml
+
+  - name: trusted-git-path-checkout-action
+    template_name: trusted-git-path-checkout-action.yml
+    repo_path: .github/actions/trusted-git-path-checkout/action.yml
 
   - name: malware-verdict-formatter
     template_name: malware-verdict-formatter.py

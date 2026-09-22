@@ -20,11 +20,11 @@ func TestConfigIsValid(t *testing.T) {
 
 	expanded, err := cfg.ExpandManagedFileEntries([]string{"dependency-cursor-review"})
 	assert.Nil(t, err)
-	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter"}, expanded)
+	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter", "trusted-git-path-checkout-action"}, expanded)
 
 	groupExpanded, err := cfg.ExpandManagedFileEntries([]string{"group:dependency-cursor-review"})
 	assert.Nil(t, err)
-	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter"}, groupExpanded)
+	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter", "trusted-git-path-checkout-action"}, groupExpanded)
 
 	mixed, err := cfg.ExpandManagedFileEntries([]string{"group:does-not-exist", "dependabot"})
 	assert.Nil(t, err)
@@ -44,7 +44,7 @@ func TestManagedFileAliasesAndPathsIncludeCompanions(t *testing.T) {
 		assert.Nil(t, err, entry)
 		assert.Equal(
 			t,
-			[]string{"dependency-cursor-review", "malware-verdict-formatter"},
+			[]string{"dependency-cursor-review", "malware-verdict-formatter", "trusted-git-path-checkout-action"},
 			expanded,
 			entry,
 		)
@@ -59,11 +59,11 @@ func TestEnsureCompanionFilesPairsWorkflowWithFormatter(t *testing.T) {
 	// ExpandManagedFileEntries companion expansion.
 	finalized, err := cfg.EnsureCompanionFiles([]string{"dependency-cursor-review"})
 	assert.Nil(t, err)
-	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter"}, finalized)
+	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter", "trusted-git-path-checkout-action"}, finalized)
 
 	legacyFinalized, err := cfg.EnsureCompanionFiles([]string{"dependabot-cursor-review"})
 	assert.Nil(t, err)
-	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter"}, legacyFinalized)
+	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter", "trusted-git-path-checkout-action"}, legacyFinalized)
 }
 
 func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
