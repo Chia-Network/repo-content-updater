@@ -55,7 +55,8 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
         formatter_block = workflow.split("run_agent_prompt \"cursor_prompt_malware.txt\"", 1)[1]
         self.assertIn("importlib.util.spec_from_file_location", formatter_block)
-        self.assertIn("trusted_malware_verdict_formatter", formatter_block)
+        self.assertIn("_TRUSTED_FORMATTER_MODULE", formatter_block)
+        self.assertIn("spec_from_file_location", formatter_block)
         self.assertNotIn("sys.path.insert(0, str(_script_dir", formatter_block)
         self.assertNotIn(
             "from malware_verdict_formatter import format_malware_review_verdict",

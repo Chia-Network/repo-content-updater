@@ -949,7 +949,10 @@ jobs:
           python3 - <<'PY'
           import importlib.util
           import json
+          import sys
           from pathlib import Path
+
+          _TRUSTED_FORMATTER_MODULE = "trusted_malware_verdict_formatter"
 
           def _load_trusted_malware_verdict_formatter():
             for _script_dir in (
@@ -960,16 +963,20 @@ jobs:
               if not script_path.is_file():
                 continue
               spec = importlib.util.spec_from_file_location(
-                "trusted_malware_verdict_formatter",
+                _TRUSTED_FORMATTER_MODULE,
                 script_path,
               )
               if spec is None or spec.loader is None:
                 raise RuntimeError(f"Could not load formatter spec from {script_path}")
               module = importlib.util.module_from_spec(spec)
-              import sys
               sys.modules[spec.name] = module
               spec.loader.exec_module(module)
-              return module.format_malware_review_verdict
+              formatter = getattr(module, "format_malware_review_verdict", None)
+              if not callable(formatter):
+                raise RuntimeError(
+                  f"{script_path} missing format_malware_review_verdict"
+                )
+              return formatter
             raise RuntimeError(
               "malware_verdict_formatter.py not found under .github/scripts/. "
               "Run repo-content-updater managed-files for dependency-cursor-review "
