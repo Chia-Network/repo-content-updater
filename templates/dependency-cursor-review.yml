@@ -947,18 +947,29 @@ jobs:
           run_agent_prompt "cursor_prompt_compatibility.txt" "cursor_output_compatibility.json"
 
           python3 - <<'PY'
+          import importlib.util
           import json
-          import sys
           from pathlib import Path
 
-          for _script_dir in (
-            Path(".github/scripts"),
-            Path("internal/workflowscripts"),
-          ):
-            if (_script_dir / "malware_verdict_formatter.py").is_file():
-              sys.path.insert(0, str(_script_dir.resolve()))
-              break
-          else:
+          def _load_trusted_malware_verdict_formatter():
+            for _script_dir in (
+              Path(".github/scripts"),
+              Path("internal/workflowscripts"),
+            ):
+              script_path = (_script_dir / "malware_verdict_formatter.py").resolve()
+              if not script_path.is_file():
+                continue
+              spec = importlib.util.spec_from_file_location(
+                "trusted_malware_verdict_formatter",
+                script_path,
+              )
+              if spec is None or spec.loader is None:
+                raise RuntimeError(f"Could not load formatter spec from {script_path}")
+              module = importlib.util.module_from_spec(spec)
+              import sys
+              sys.modules[spec.name] = module
+              spec.loader.exec_module(module)
+              return module.format_malware_review_verdict
             raise RuntimeError(
               "malware_verdict_formatter.py not found under .github/scripts/. "
               "Run repo-content-updater managed-files for dependency-cursor-review "
@@ -966,7 +977,7 @@ jobs:
               "or use managed-files group:dependency-cursor-review."
             )
 
-          from malware_verdict_formatter import format_malware_review_verdict
+          format_malware_review_verdict = _load_trusted_malware_verdict_formatter()
 
           def load_any(path):
             try:
