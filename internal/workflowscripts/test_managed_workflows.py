@@ -51,6 +51,17 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             section.index("Ensure malware verdict formatter script"),
         )
 
+    def test_malware_formatter_imported_from_trusted_file_not_scripts_syspath(self) -> None:
+        workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
+        formatter_block = workflow.split("run_agent_prompt \"cursor_prompt_malware.txt\"", 1)[1]
+        self.assertIn("importlib.util.spec_from_file_location", formatter_block)
+        self.assertIn("trusted_malware_verdict_formatter", formatter_block)
+        self.assertNotIn("sys.path.insert(0, str(_script_dir", formatter_block)
+        self.assertNotIn(
+            "from malware_verdict_formatter import format_malware_review_verdict",
+            formatter_block,
+        )
+
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
         self.assertTrue(_TRUSTED_GIT_CHECKOUT_ACTION.is_file())
         action = _TRUSTED_GIT_CHECKOUT_ACTION.read_text(encoding="utf-8")
