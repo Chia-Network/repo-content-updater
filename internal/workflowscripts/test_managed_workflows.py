@@ -62,6 +62,8 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             "from malware_verdict_formatter import format_malware_review_verdict",
             formatter_block,
         )
+        self.assertIn("getattr(module, \"format_malware_review_verdict\"", formatter_block)
+        self.assertNotIn("import malware_verdict_formatter", formatter_block)
 
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
         self.assertTrue(_TRUSTED_GIT_CHECKOUT_ACTION.is_file())
