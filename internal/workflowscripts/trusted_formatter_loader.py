@@ -12,6 +12,7 @@ TRUSTED_FORMATTER_MODULE_NAME = "trusted_malware_verdict_formatter"
 
 def load_format_malware_review_verdict(script_path: Path) -> Callable[[str], str]:
     script_path = script_path.resolve()
+    script_dir = str(script_path.parent)
     spec = importlib.util.spec_from_file_location(
         TRUSTED_FORMATTER_MODULE_NAME,
         script_path,
@@ -20,7 +21,12 @@ def load_format_malware_review_verdict(script_path: Path) -> Callable[[str], str
         raise RuntimeError(f"Could not load formatter spec from {script_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    saved_path = sys.path.copy()
+    try:
+        sys.path = [entry for entry in sys.path if entry != script_dir]
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = saved_path
     formatter = getattr(module, "format_malware_review_verdict", None)
     if not callable(formatter):
         raise RuntimeError(f"{script_path} missing format_malware_review_verdict")
