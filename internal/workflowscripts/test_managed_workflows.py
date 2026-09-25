@@ -24,7 +24,10 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         bootstrap = section.split(
             "Install trusted git path checkout action definition", 1
         )[1].split("Ensure malware verdict formatter script", 1)[0]
-        ensure = section.split("Ensure malware verdict formatter script", 1)[1].split(
+        ensure_formatter = section.split("Ensure malware verdict formatter script", 1)[1].split(
+            "Ensure trusted formatter loader script", 1
+        )[0]
+        ensure_loader = section.split("Ensure trusted formatter loader script", 1)[1].split(
             "Install Cursor CLI", 1
         )[0]
         self.assertNotIn("Formatter script present on PR head.", section)
@@ -39,30 +42,40 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             bootstrap,
         )
         self.assertIn(".github/actions/trusted-git-path-checkout/action.yml", bootstrap)
-        self.assertNotIn("http.extraheader=AUTHORIZATION", ensure)
+        self.assertNotIn("http.extraheader=AUTHORIZATION", ensure_formatter)
+        self.assertNotIn("http.extraheader=AUTHORIZATION", ensure_loader)
         self.assertIn(
             "./.github/actions/trusted-git-path-checkout",
-            ensure,
+            ensure_formatter,
             msg="formatter ensure uses composite after trusted bootstrap",
         )
-        self.assertIn(".github/scripts/malware_verdict_formatter.py", ensure)
+        self.assertIn(".github/scripts/malware_verdict_formatter.py", ensure_formatter)
+        self.assertIn(
+            "./.github/actions/trusted-git-path-checkout",
+            ensure_loader,
+        )
+        self.assertIn(".github/scripts/trusted_formatter_loader.py", ensure_loader)
         self.assertLess(
             section.index("Install trusted git path checkout action definition"),
             section.index("Ensure malware verdict formatter script"),
+        )
+        self.assertLess(
+            section.index("Ensure malware verdict formatter script"),
+            section.index("Ensure trusted formatter loader script"),
         )
 
     def test_malware_formatter_imported_from_trusted_file_not_scripts_syspath(self) -> None:
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
         formatter_block = workflow.split("run_agent_prompt \"cursor_prompt_malware.txt\"", 1)[1]
         self.assertIn("importlib.util.spec_from_file_location", formatter_block)
-        self.assertIn("_TRUSTED_FORMATTER_MODULE", formatter_block)
-        self.assertIn("spec_from_file_location", formatter_block)
+        self.assertIn("_import_module_from_trusted_script", formatter_block)
+        self.assertIn("trusted_formatter_loader.py", formatter_block)
+        self.assertIn("load_format_malware_review_verdict(formatter_path)", formatter_block)
         self.assertNotIn("sys.path.insert(0, str(_script_dir", formatter_block)
         self.assertNotIn(
             "from malware_verdict_formatter import format_malware_review_verdict",
             formatter_block,
         )
-        self.assertIn("getattr(module, \"format_malware_review_verdict\"", formatter_block)
         self.assertNotIn("import malware_verdict_formatter", formatter_block)
         self.assertIn("sys.path = [entry for entry in sys.path if entry != script_dir]", formatter_block)
 

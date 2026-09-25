@@ -13,10 +13,20 @@ from trusted_formatter_loader import (
 )
 
 _SCRIPTS = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPTS.parents[1]
 _CANONICAL = _SCRIPTS / "malware_verdict_formatter.py"
+_LOADER_TEMPLATE = _REPO_ROOT / "templates" / "trusted-formatter-loader.py"
+_CANONICAL_LOADER = _SCRIPTS / "trusted_formatter_loader.py"
 
 
 class TrustedFormatterLoaderTest(unittest.TestCase):
+    def test_managed_loader_template_matches_canonical_module(self) -> None:
+        self.assertTrue(_LOADER_TEMPLATE.is_file())
+        self.assertEqual(
+            _LOADER_TEMPLATE.read_text(encoding="utf-8"),
+            _CANONICAL_LOADER.read_text(encoding="utf-8"),
+        )
+
     def test_find_and_load_internal_canonical_formatter(self) -> None:
         format_fn = find_and_load_format_malware_review_verdict(_SCRIPTS)
         result = format_fn("Verdict: benign\n\nDetails.")

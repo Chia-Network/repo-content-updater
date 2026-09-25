@@ -27,6 +27,7 @@ groups:
     templates:
       - dependency-cursor-review
       - malware-verdict-formatter
+      - trusted-formatter-loader
       - trusted-git-path-checkout-action
 
 files:
@@ -43,6 +44,7 @@ files:
       - dependabot-cursor-review
     companion_files:
       - malware-verdict-formatter
+      - trusted-formatter-loader
       - trusted-git-path-checkout-action
     alternate_paths:
       - .github/workflows/dependabot-cursor-review.yaml
@@ -56,6 +58,10 @@ files:
   - name: malware-verdict-formatter
     template_name: malware-verdict-formatter.py
     repo_path: .github/scripts/malware_verdict_formatter.py
+
+  - name: trusted-formatter-loader
+    template_name: trusted-formatter-loader.py
+    repo_path: .github/scripts/trusted_formatter_loader.py
 
   - name: dep-review
     template_name: dependency-review.yml
