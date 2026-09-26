@@ -104,6 +104,34 @@ jobs:
           ref: ${{`{{ github.event.repository.default_branch }}`}}
           path: .github/scripts/malware_verdict_formatter.py
 
+      - name: Ensure malware verdict formatter patterns module
+        uses: ./.github/actions/trusted-git-path-checkout
+        with:
+          token: ${{`{{ github.token }}`}}
+          ref: ${{`{{ github.event.repository.default_branch }}`}}
+          path: .github/scripts/malware_verdict_patterns.py
+
+      - name: Ensure malware verdict formatter classification module
+        uses: ./.github/actions/trusted-git-path-checkout
+        with:
+          token: ${{`{{ github.token }}`}}
+          ref: ${{`{{ github.event.repository.default_branch }}`}}
+          path: .github/scripts/malware_verdict_classification.py
+
+      - name: Ensure malware verdict formatter precedence module
+        uses: ./.github/actions/trusted-git-path-checkout
+        with:
+          token: ${{`{{ github.token }}`}}
+          ref: ${{`{{ github.event.repository.default_branch }}`}}
+          path: .github/scripts/malware_verdict_precedence.py
+
+      - name: Ensure trusted formatter loader script
+        uses: ./.github/actions/trusted-git-path-checkout
+        with:
+          token: ${{`{{ github.token }}`}}
+          ref: ${{`{{ github.event.repository.default_branch }}`}}
+          path: .github/scripts/trusted_formatter_loader.py
+
       - name: Install Cursor CLI
         shell: bash
         run: |
@@ -947,26 +975,49 @@ jobs:
           run_agent_prompt "cursor_prompt_compatibility.txt" "cursor_output_compatibility.json"
 
           python3 - <<'PY'
+          import importlib.util
           import json
           import sys
           from pathlib import Path
 
-          for _script_dir in (
-            Path(".github/scripts"),
-            Path("internal/workflowscripts"),
-          ):
-            if (_script_dir / "malware_verdict_formatter.py").is_file():
-              sys.path.insert(0, str(_script_dir.resolve()))
-              break
-          else:
+          # Canonical isolated exec: trusted_formatter_loader.exec_module_isolated_from_scripts_dir
+          def _import_module_from_trusted_script(script_path, module_name):
+            spec = importlib.util.spec_from_file_location(module_name, script_path)
+            if spec is None or spec.loader is None:
+              raise RuntimeError(f"Could not load module spec from {script_path}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            script_dir = str(script_path.parent)
+            saved_path = sys.path.copy()
+            try:
+              sys.path = [entry for entry in sys.path if entry != script_dir]
+              spec.loader.exec_module(module)
+            finally:
+              sys.path[:] = saved_path
+            return module
+
+          def _load_trusted_malware_verdict_formatter():
+            for _script_dir in (
+              Path(".github/scripts"),
+              Path("internal/workflowscripts"),
+            ):
+              loader_path = (_script_dir / "trusted_formatter_loader.py").resolve()
+              formatter_path = (_script_dir / "malware_verdict_formatter.py").resolve()
+              if not loader_path.is_file() or not formatter_path.is_file():
+                continue
+              loader_mod = _import_module_from_trusted_script(
+                loader_path,
+                "trusted_formatter_loader",
+              )
+              return loader_mod.load_format_malware_review_verdict(formatter_path)
             raise RuntimeError(
-              "malware_verdict_formatter.py not found under .github/scripts/. "
-              "Run repo-content-updater managed-files for dependency-cursor-review "
-              "(config companion_files pulls in malware-verdict-formatter automatically) "
-              "or use managed-files group:dependency-cursor-review."
+              "malware_verdict_formatter.py and trusted_formatter_loader.py not found "
+              "under .github/scripts/. Run repo-content-updater managed-files for "
+              "dependency-cursor-review (companion_files include malware-verdict-formatter "
+              "and trusted-formatter-loader) or use group:dependency-cursor-review."
             )
 
-          from malware_verdict_formatter import format_malware_review_verdict
+          format_malware_review_verdict = _load_trusted_malware_verdict_formatter()
 
           def load_any(path):
             try:
