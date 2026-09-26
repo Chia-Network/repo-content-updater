@@ -104,6 +104,27 @@ jobs:
           ref: ${{`{{ github.event.repository.default_branch }}`}}
           path: .github/scripts/malware_verdict_formatter.py
 
+      - name: Ensure malware verdict formatter patterns module
+        uses: ./.github/actions/trusted-git-path-checkout
+        with:
+          token: ${{`{{ github.token }}`}}
+          ref: ${{`{{ github.event.repository.default_branch }}`}}
+          path: .github/scripts/malware_verdict_patterns.py
+
+      - name: Ensure malware verdict formatter classification module
+        uses: ./.github/actions/trusted-git-path-checkout
+        with:
+          token: ${{`{{ github.token }}`}}
+          ref: ${{`{{ github.event.repository.default_branch }}`}}
+          path: .github/scripts/malware_verdict_classification.py
+
+      - name: Ensure malware verdict formatter precedence module
+        uses: ./.github/actions/trusted-git-path-checkout
+        with:
+          token: ${{`{{ github.token }}`}}
+          ref: ${{`{{ github.event.repository.default_branch }}`}}
+          path: .github/scripts/malware_verdict_precedence.py
+
       - name: Ensure trusted formatter loader script
         uses: ./.github/actions/trusted-git-path-checkout
         with:
@@ -959,6 +980,7 @@ jobs:
           import sys
           from pathlib import Path
 
+          # Canonical isolated exec: trusted_formatter_loader.exec_module_isolated_from_scripts_dir
           def _import_module_from_trusted_script(script_path, module_name):
             spec = importlib.util.spec_from_file_location(module_name, script_path)
             if spec is None or spec.loader is None:

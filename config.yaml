@@ -27,6 +27,9 @@ groups:
     templates:
       - dependency-cursor-review
       - malware-verdict-formatter
+      - malware-verdict-patterns
+      - malware-verdict-classification
+      - malware-verdict-precedence
       - trusted-formatter-loader
       - trusted-git-path-checkout-action
 
@@ -44,6 +47,9 @@ files:
       - dependabot-cursor-review
     companion_files:
       - malware-verdict-formatter
+      - malware-verdict-patterns
+      - malware-verdict-classification
+      - malware-verdict-precedence
       - trusted-formatter-loader
       - trusted-git-path-checkout-action
     alternate_paths:
@@ -58,6 +64,18 @@ files:
   - name: malware-verdict-formatter
     template_name: malware-verdict-formatter.py
     repo_path: .github/scripts/malware_verdict_formatter.py
+
+  - name: malware-verdict-patterns
+    template_name: malware-verdict-patterns.py
+    repo_path: .github/scripts/malware_verdict_patterns.py
+
+  - name: malware-verdict-classification
+    template_name: malware-verdict-classification.py
+    repo_path: .github/scripts/malware_verdict_classification.py
+
+  - name: malware-verdict-precedence
+    template_name: malware-verdict-precedence.py
+    repo_path: .github/scripts/malware_verdict_precedence.py
 
   - name: trusted-formatter-loader
     template_name: trusted-formatter-loader.py
