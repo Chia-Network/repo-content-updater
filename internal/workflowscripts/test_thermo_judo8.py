@@ -2,25 +2,30 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
 import subprocess
 import unittest
 from pathlib import Path
+
+import trusted_formatter_loader_cold_start as cold_start
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPTS = Path(__file__).resolve().parent
 
 _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy.py", 25),
-    ("malware_verdict_policy_lexical.py", 90),
-    ("malware_verdict_policy_context.py", 430),
-    ("scripts_dir_module_loader.py", 70),
+    ("malware_verdict_policy_view.py", 350),
+    ("malware_verdict_policy_context.py", 100),
+    ("scripts_dir_path_scrub.py", 45),
+    ("scripts_dir_module_loader.py", 45),
     ("formatter_runtime_bundle.py", 40),
     ("formatter_bundle_inventory.py", 220),
-    ("malware_verdict_policy_rules.py", 660),
-    ("malware_verdict_policy_analysis.py", 60),
-    ("malware_verdict_patterns.py", 500),
-    ("isolated_module_exec.py", 75),
-    ("trusted_formatter_loader_cold_start.py", 100),
+    ("malware_verdict_policy_rules.py", 680),
+    ("malware_verdict_policy_analysis.py", 55),
+    ("malware_verdict_patterns.py", 530),
+    ("isolated_module_exec.py", 120),
+    ("trusted_formatter_loader_cold_start.py", 110),
 )
 
 
@@ -33,6 +38,15 @@ class ThermoJudo8Test(unittest.TestCase):
             _SCRIPTS / "trusted_formatter_loader_cold_start.py"
         ).read_text(encoding="utf-8")
         iso_src = (_SCRIPTS / "isolated_module_exec.py").read_text(encoding="utf-8")
+        hop_src = inspect.getsource(cold_start._cold_start_hop_load_scripts_dir_module_loader)
+        hop_tree = ast.parse(hop_src)
+        hop_exec_calls = [
+            node
+            for node in ast.walk(hop_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "exec_scripts_dir_module"
+        ]
         self.assertNotIn("def _exec_module_isolated", combine)
         self.assertIn("runpy.run_path", combine)
         self.assertIn("resolve_loader_bundle", combine)
@@ -42,7 +56,10 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("cold_start_hop_load_self", cold_src)
         self.assertIn("_cold_start_hop_load_scripts_dir_module_loader", cold_src)
         self.assertNotIn("def _module_exec_scrub", cold_src)
-        self.assertIn("scripts_dir_module_loader._exec_scripts_dir_module", cold_src)
+        self.assertTrue(
+            hop_exec_calls,
+            msg="cold-start loader hop must call scripts_dir_path_scrub.exec_scripts_dir_module",
+        )
         self.assertNotIn("register_util_from_disk", cold_src)
         self.assertIn("register_util_from_scripts_dir", cold_src)
         self.assertFalse(
@@ -50,12 +67,14 @@ class ThermoJudo8Test(unittest.TestCase):
         )
         self.assertFalse((_SCRIPTS / "companion_isolated_exec.py").exists())
         self.assertFalse((_SCRIPTS / "script_dir_isolated_load.py").exists())
+        self.assertFalse((_SCRIPTS / "malware_verdict_policy_lexical.py").exists())
 
     def test_policy_split_semantics_and_module_size_caps(self) -> None:
         deploy = (_SCRIPTS / "malware_verdict_policy.py").read_text(encoding="utf-8")
         analysis = (_SCRIPTS / "malware_verdict_policy_analysis.py").read_text(
             encoding="utf-8"
         )
+        view = (_SCRIPTS / "malware_verdict_policy_view.py").read_text(encoding="utf-8")
         context = (_SCRIPTS / "malware_verdict_policy_context.py").read_text(
             encoding="utf-8"
         )
@@ -68,8 +87,11 @@ class ThermoJudo8Test(unittest.TestCase):
             deploy.split("def format_verdict_text")[0],
         )
         self.assertIn("class VerdictAnalysis", analysis)
-        self.assertIn("OfficialSelectionContext", context)
-        self.assertIn("build_official_selection_context", context)
+        self.assertIn("collect_body_strip_spans", rules)
+        self.assertNotIn("_BODY_STRIP_SPAN", analysis)
+        self.assertIn("OfficialSelectionContext", view)
+        self.assertIn("build_official_selection_context", view)
+        self.assertIn("mention_loses_to_official", context)
         self.assertIn("_OFFICIAL_SELECT_PIPELINE", rules)
         self.assertIn("_BODY_STRIP_RULES", rules)
         self.assertNotIn("from malware_verdict_classification import", deploy)
@@ -137,6 +159,7 @@ class ThermoJudo8Test(unittest.TestCase):
             ".github/scripts/malware_verdict_policy_rules_select.py", manifest_text
         )
         self.assertNotIn(".github/scripts/script_dir_isolated_load.py", manifest_text)
+        self.assertNotIn(".github/scripts/malware_verdict_policy_lexical.py", manifest_text)
 
 
 if __name__ == "__main__":

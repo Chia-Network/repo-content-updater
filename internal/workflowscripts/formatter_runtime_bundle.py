@@ -9,7 +9,7 @@ LOADER_RESOLVE_MARKER_FILENAMES: tuple[str, ...] = (
 
 FORMATTER_SIBLING_MODULE_STEMS: tuple[str, ...] = (
     "malware_verdict_patterns",
-    "malware_verdict_policy_lexical",
+    "malware_verdict_policy_view",
     "malware_verdict_policy_context",
     "malware_verdict_policy_rules",
     "malware_verdict_policy_analysis",
@@ -17,6 +17,7 @@ FORMATTER_SIBLING_MODULE_STEMS: tuple[str, ...] = (
 )
 
 FORMATTER_RUNTIME_FILENAMES: tuple[str, ...] = (
+    "scripts_dir_path_scrub.py",
     "scripts_dir_module_loader.py",
     *LOADER_RESOLVE_MARKER_FILENAMES,
     "trusted_formatter_loader_cold_start.py",

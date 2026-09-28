@@ -1,8 +1,8 @@
 """Stdlib-only cold start for python3 -I (one scrub hop → resolve_loader_bundle).
 
 Load sequence under python3 -I:
-  resolve_loader_bundle → scrub hop (scripts_dir_module_loader) → isolated_module_exec
-  → resolve_trusted_formatter_loader_for_dir → sibling preload.
+  resolve_loader_bundle → bootstrap scripts_dir_path_scrub (once) → exec loader
+  → isolated_module_exec → resolve_trusted_formatter_loader_for_dir → sibling preload.
 """
 
 from __future__ import annotations
@@ -18,28 +18,24 @@ DEFAULT_SCRIPT_CANDIDATES: tuple[Path, ...] = (
 )
 
 _LOADER = "scripts_dir_module_loader"
+_SCRUB = "scripts_dir_path_scrub"
 _ISO = "isolated_module_exec"
 
 
-def _cold_start_hop_load_scripts_dir_module_loader(script_dir: Path) -> types.ModuleType:
-    """Chicken-and-egg hop: scrub-load loader from script_dir, then cold_start_hop_load_self.
-
-    python3 -I does not put the scripts directory on sys.path, so this is the one site that
-    inlines the same scrub+exec algorithm as scripts_dir_module_loader._exec_scripts_dir_module
-    before the loader module can be imported by name.
-    """
+def _bootstrap_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
+    """Chicken-and-egg: load scripts_dir_path_scrub (one inline scrub exec; see path_scrub module)."""
     script_dir = script_dir.resolve()
-    path = script_dir / f"{_LOADER}.py"
-    existing = sys.modules.get(_LOADER)
+    scrub_path = script_dir / f"{_SCRUB}.py"
+    existing = sys.modules.get(_SCRUB)
     if existing is not None:
         existing_file = getattr(existing, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == path.resolve():
-            return existing.cold_start_hop_load_self(script_dir)
-    spec = importlib.util.spec_from_file_location(_LOADER, path)
+        if existing_file and Path(existing_file).resolve() == scrub_path.resolve():
+            return existing
+    spec = importlib.util.spec_from_file_location(_SCRUB, scrub_path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {path}")
+        raise RuntimeError(f"Could not load module spec from {scrub_path}")
     module = importlib.util.module_from_spec(spec)
-    sys.modules[_LOADER] = module
+    sys.modules[_SCRUB] = module
     script_dir_s = str(script_dir)
     saved_path = sys.path.copy()
     try:
@@ -47,6 +43,20 @@ def _cold_start_hop_load_scripts_dir_module_loader(script_dir: Path) -> types.Mo
         spec.loader.exec_module(module)
     finally:
         sys.path[:] = saved_path
+    return module
+
+
+def _cold_start_hop_load_scripts_dir_module_loader(script_dir: Path) -> types.ModuleType:
+    """Scrub-load scripts_dir_module_loader, then cold_start_hop_load_self."""
+    script_dir = script_dir.resolve()
+    path = script_dir / f"{_LOADER}.py"
+    existing = sys.modules.get(_LOADER)
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file and Path(existing_file).resolve() == path.resolve():
+            return existing.cold_start_hop_load_self(script_dir)
+    scrub = _bootstrap_scripts_dir_path_scrub(script_dir)
+    module = scrub.exec_scripts_dir_module(script_dir, path, _LOADER)
     return module.cold_start_hop_load_self(script_dir)
 
 

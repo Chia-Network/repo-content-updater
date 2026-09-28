@@ -1,28 +1,45 @@
-"""Regression: cold_start scrub hop matches scripts_dir_module_loader primitive."""
+"""Regression: cold_start scrub hop matches scripts_dir_path_scrub primitive."""
 
 from __future__ import annotations
 
+import ast
 import inspect
 import sys
 import unittest
 from pathlib import Path
 
 import scripts_dir_module_loader
+import scripts_dir_path_scrub
 import trusted_formatter_loader_cold_start as cold_start
 
 _SCRIPTS = Path(__file__).resolve().parent
 
 
 class ColdStartLoaderHopTest(unittest.TestCase):
-    def test_cold_start_hop_delegates_to_cold_start_hop_load_self(self) -> None:
+    def test_cold_start_hop_delegates_to_path_scrub_exec(self) -> None:
         hop_src = inspect.getsource(cold_start._cold_start_hop_load_scripts_dir_module_loader)
+        tree = ast.parse(hop_src)
+        exec_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "exec_scripts_dir_module"
+        ]
+        self.assertTrue(
+            exec_calls,
+            msg="loader cold-start hop must call scripts_dir_path_scrub.exec_scripts_dir_module",
+        )
         self.assertIn("cold_start_hop_load_self", hop_src)
-        exec_src = inspect.getsource(scripts_dir_module_loader._exec_scripts_dir_module)
+
+    def test_bootstrap_path_scrub_matches_exec_helper(self) -> None:
+        bootstrap_src = inspect.getsource(cold_start._bootstrap_scripts_dir_path_scrub)
+        exec_src = inspect.getsource(scripts_dir_path_scrub.exec_scripts_dir_module)
         for needle in (
             "sys.path = [entry for entry in sys.path if entry != script_dir_s]",
             "sys.path[:] = saved_path",
         ):
-            self.assertIn(needle, hop_src, msg="hop scrub must match _exec_scripts_dir_module")
+            self.assertIn(needle, bootstrap_src, msg="bootstrap scrub must match exec helper")
             self.assertIn(needle, exec_src)
 
     def test_cold_start_has_single_documented_hop(self) -> None:
@@ -34,6 +51,7 @@ class ColdStartLoaderHopTest(unittest.TestCase):
         script_dir = _SCRIPTS
         loader_name = "scripts_dir_module_loader"
         saved = sys.modules.pop(loader_name, None)
+        scrub_saved = sys.modules.pop("scripts_dir_path_scrub", None)
         try:
             via_cold_start = cold_start._cold_start_hop_load_scripts_dir_module_loader(script_dir)
             sys.modules.pop(loader_name, None)
@@ -58,6 +76,8 @@ class ColdStartLoaderHopTest(unittest.TestCase):
         finally:
             if saved is not None:
                 sys.modules[loader_name] = saved
+            if scrub_saved is not None:
+                sys.modules["scripts_dir_path_scrub"] = scrub_saved
 
     def test_load_module_isolated_delegates_to_bootstrap(self) -> None:
         from isolated_module_exec import load_module_isolated

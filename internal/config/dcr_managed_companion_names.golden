@@ -2,8 +2,9 @@ dependency-cursor-review
 malware-verdict-formatter
 malware-verdict-patterns
 malware-verdict-policy
-malware-verdict-policy-lexical
+malware-verdict-policy-view
 malware-verdict-policy-context
+scripts-dir-path-scrub
 scripts-dir-module-loader
 formatter-runtime-bundle
 malware-verdict-policy-rules

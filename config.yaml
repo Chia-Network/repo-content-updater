@@ -29,8 +29,9 @@ groups:
       - malware-verdict-formatter
       - malware-verdict-patterns
       - malware-verdict-policy
-      - malware-verdict-policy-lexical
+      - malware-verdict-policy-view
       - malware-verdict-policy-context
+      - scripts-dir-path-scrub
       - scripts-dir-module-loader
       - formatter-runtime-bundle
       - malware-verdict-policy-rules
@@ -65,8 +66,9 @@ files:
       - malware-verdict-formatter
       - malware-verdict-patterns
       - malware-verdict-policy
-      - malware-verdict-policy-lexical
+      - malware-verdict-policy-view
       - malware-verdict-policy-context
+      - scripts-dir-path-scrub
       - scripts-dir-module-loader
       - formatter-runtime-bundle
       - malware-verdict-policy-rules
@@ -105,9 +107,9 @@ files:
     template_name: malware-verdict-policy.py
     repo_path: .github/scripts/malware_verdict_policy.py
 
-  - name: malware-verdict-policy-lexical
-    template_name: malware-verdict-policy-lexical.py
-    repo_path: .github/scripts/malware_verdict_policy_lexical.py
+  - name: malware-verdict-policy-view
+    template_name: malware-verdict-policy-view.py
+    repo_path: .github/scripts/malware_verdict_policy_view.py
 
   - name: malware-verdict-policy-context
     template_name: malware-verdict-policy-context.py
@@ -120,6 +122,10 @@ files:
   - name: malware-verdict-policy-analysis
     template_name: malware-verdict-policy-analysis.py
     repo_path: .github/scripts/malware_verdict_policy_analysis.py
+
+  - name: scripts-dir-path-scrub
+    template_name: scripts-dir-path-scrub.py
+    repo_path: .github/scripts/scripts_dir_path_scrub.py
 
   - name: scripts-dir-module-loader
     template_name: scripts-dir-module-loader.py

@@ -2,8 +2,9 @@
 .github/scripts/malware_verdict_formatter.py
 .github/scripts/malware_verdict_patterns.py
 .github/scripts/malware_verdict_policy.py
-.github/scripts/malware_verdict_policy_lexical.py
+.github/scripts/malware_verdict_policy_view.py
 .github/scripts/malware_verdict_policy_context.py
+.github/scripts/scripts_dir_path_scrub.py
 .github/scripts/scripts_dir_module_loader.py
 .github/scripts/formatter_runtime_bundle.py
 .github/scripts/malware_verdict_policy_rules.py
