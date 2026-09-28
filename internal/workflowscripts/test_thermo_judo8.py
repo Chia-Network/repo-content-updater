@@ -32,6 +32,10 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertNotIn("from malware_verdict_precedence import", policy)
         self.assertGreater(len(policy.splitlines()), 900)
 
+    def test_shim_modules_not_present_in_workflowscripts(self) -> None:
+        self.assertFalse((_SCRIPTS / "malware_verdict_classification.py").exists())
+        self.assertFalse((_SCRIPTS / "malware_verdict_precedence.py").exists())
+
     def test_generated_companion_mirrors_gitignored(self) -> None:
         gitignore = (_REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
         for pattern in (

@@ -28,8 +28,6 @@ groups:
       - dependency-cursor-review
       - malware-verdict-formatter
       - malware-verdict-patterns
-      - malware-verdict-classification
-      - malware-verdict-precedence
       - malware-verdict-policy
       - companion-isolated-exec
       - trusted-formatter-loader
@@ -59,8 +57,6 @@ files:
     companion_files:
       - malware-verdict-formatter
       - malware-verdict-patterns
-      - malware-verdict-classification
-      - malware-verdict-precedence
       - malware-verdict-policy
       - companion-isolated-exec
       - trusted-formatter-loader
@@ -90,14 +86,6 @@ files:
   - name: malware-verdict-patterns
     template_name: malware-verdict-patterns.py
     repo_path: .github/scripts/malware_verdict_patterns.py
-
-  - name: malware-verdict-classification
-    template_name: malware-verdict-classification.py
-    repo_path: .github/scripts/malware_verdict_classification.py
-
-  - name: malware-verdict-precedence
-    template_name: malware-verdict-precedence.py
-    repo_path: .github/scripts/malware_verdict_precedence.py
 
   - name: malware-verdict-policy
     template_name: malware-verdict-policy.py

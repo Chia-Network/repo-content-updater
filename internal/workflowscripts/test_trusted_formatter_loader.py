@@ -66,8 +66,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             "trusted_malware_verdict_formatter",
             "malware_verdict_formatter",
             "malware_verdict_patterns",
-            "malware_verdict_precedence",
-            "malware_verdict_classification",
+            "malware_verdict_policy",
         )
         saved = {name: sys.modules.pop(name, None) for name in purge}
         try:
@@ -92,8 +91,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             "trusted_malware_verdict_formatter",
             "malware_verdict_formatter",
             "malware_verdict_patterns",
-            "malware_verdict_precedence",
-            "malware_verdict_classification",
+            "malware_verdict_policy",
         )
         saved = {name: sys.modules.pop(name, None) for name in purge}
         try:

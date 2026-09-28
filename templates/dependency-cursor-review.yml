@@ -105,8 +105,6 @@ jobs:
           paths: |
             .github/scripts/malware_verdict_formatter.py
             .github/scripts/malware_verdict_patterns.py
-            .github/scripts/malware_verdict_classification.py
-            .github/scripts/malware_verdict_precedence.py
             .github/scripts/malware_verdict_policy.py
             .github/scripts/companion_isolated_exec.py
             .github/scripts/trusted_formatter_loader.py

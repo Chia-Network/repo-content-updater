@@ -22,8 +22,6 @@ _BUNDLE_STEMS = (
     "trusted_formatter_loader.py",
     "malware_verdict_formatter.py",
     "malware_verdict_patterns.py",
-    "malware_verdict_classification.py",
-    "malware_verdict_precedence.py",
     "malware_verdict_policy.py",
 )
 

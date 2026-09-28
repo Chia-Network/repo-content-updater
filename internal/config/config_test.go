@@ -13,8 +13,6 @@ func dependencyCursorReviewCompanionFiles() []string {
 		"dependency-cursor-review",
 		"malware-verdict-formatter",
 		"malware-verdict-patterns",
-		"malware-verdict-classification",
-		"malware-verdict-precedence",
 		"malware-verdict-policy",
 		"companion-isolated-exec",
 		"trusted-formatter-loader",

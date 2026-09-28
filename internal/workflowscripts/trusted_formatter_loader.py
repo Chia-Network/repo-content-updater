@@ -15,8 +15,6 @@ FORMATTER_SIBLING_MODULE_STEMS = (
     "companion_isolated_exec",
     "malware_verdict_patterns",
     "malware_verdict_policy",
-    "malware_verdict_classification",
-    "malware_verdict_precedence",
 )
 
 _FORMATTER_ENV_PRIMED: set[Path] = set()
@@ -86,7 +84,7 @@ def load_format_malware_review_verdict(script_path: Path) -> Callable[[str], str
     """Return format_malware_review_verdict loaded from an explicit trusted file path.
 
     This is the supported entrypoint: it primes trusted_formatter_loader and formatter
-    sibling modules (patterns/classification/precedence) before executing the formatter
+    sibling modules (patterns/policy) before executing the formatter
     module, so callers never depend on undocumented sys.modules priming.
     """
     script_path = script_path.resolve()
