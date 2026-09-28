@@ -83,9 +83,17 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             / "workflowscripts"
             / "dependency_cursor_review_combine_outputs.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("resolve_trusted_formatter_loader_module", combine)
+        trusted_loader = (
+            _REPO_ROOT
+            / "internal"
+            / "workflowscripts"
+            / "dependency_cursor_review_trusted_loader.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("dependency_cursor_review_trusted_loader", combine)
+        self.assertIn("resolve_trusted_formatter_loader_module", trusted_loader)
+        self.assertNotIn("_bootstrap_module_for", combine)
         self.assertNotIn("_exec_module_isolated", combine)
-        self.assertNotIn("sys.path.insert(0,", combine)
+        self.assertIn("dependency-cursor-review-dependabot-context.js", workflow)
 
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
         self.assertTrue(_TRUSTED_GIT_CHECKOUT_ACTION.is_file())

@@ -20,6 +20,11 @@ func dependencyCursorReviewCompanionFiles() []string {
 		"upstream-malware-scan",
 		"dependency-cursor-review-prompts",
 		"dependency-cursor-review-combine-outputs",
+		"dependency-cursor-review-trusted-loader",
+		"dependency-cursor-review-dependabot-context",
+		"dependency-cursor-review-post-comment",
+		"upstream-malware-scan-lib",
+		"upstream-malware-scan-findings",
 		"trusted-git-path-checkout-action",
 	}
 }

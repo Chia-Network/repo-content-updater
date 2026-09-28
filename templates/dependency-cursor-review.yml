@@ -112,6 +112,11 @@ jobs:
             .github/scripts/upstream_malware_scan.sh
             .github/scripts/dependency_cursor_review_prompts.py
             .github/scripts/dependency_cursor_review_combine_outputs.py
+            .github/scripts/dependency_cursor_review_trusted_loader.py
+            .github/scripts/dependency-cursor-review-dependabot-context.js
+            .github/scripts/dependency-cursor-review-post-comment.js
+            .github/scripts/upstream_malware_scan_lib.sh
+            .github/scripts/upstream_malware_scan_findings.sh
 
       - name: Install Cursor CLI
         shell: bash
@@ -138,142 +143,14 @@ jobs:
       - name: Extract Dependabot comment context
         id: dependabot_context
         uses: actions/github-script@v9
+        env:
+          PR_TITLE: ${{`{{ steps.target_pr.outputs.title }}`}}
+          PR_BODY: ${{`{{ steps.target_pr.outputs.body }}`}}
+          PR_NUMBER: ${{`{{ steps.target_pr.outputs.number }}`}}
         with:
           script: |
-            const fs = require('fs');
-            const body = ${{`{{ toJSON(steps.target_pr.outputs.body) }}`}} || '';
-
-            function escapeRegex(text) {
-              return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            }
-
-            function extractDetailsSection(text, summaryLabel) {
-              // Allow optional trailing text after the label (e.g. Renovate appends " (pkgalias)").
-              const summaryRe = new RegExp(
-                `<details[^>]*>\\s*<summary>\\s*${escapeRegex(summaryLabel)}[^<]*</summary>`,
-                'i'
-              );
-              const summaryMatch = summaryRe.exec(text);
-              if (!summaryMatch) return '';
-
-              const start = summaryMatch.index;
-              const tagRe = /<details\b[^>]*>|<\/details>/gi;
-              tagRe.lastIndex = start;
-              let depth = 0;
-              let end = -1;
-              let tag;
-
-              while ((tag = tagRe.exec(text)) !== null) {
-                if (tag[0].toLowerCase().startsWith('<details')) {
-                  depth += 1;
-                } else {
-                  depth -= 1;
-                }
-                if (depth === 0) {
-                  end = tagRe.lastIndex;
-                  break;
-                }
-              }
-
-              if (end === -1) return '';
-              const block = text.slice(start, end);
-              return block
-                .replace(summaryRe, '')
-                .replace(/<\/details>\s*$/i, '')
-                .trim();
-            }
-
-            // Prefer the dependency link from Dependabot's lead sentence.
-            // Fallback to any GitHub repo URL if that sentence format changes.
-            // Both github.com and redirect.github.com (used by Renovate) are matched.
-            const dependencyRepoMatch = body.match(
-              /^\s*(?:Bumps|Update(?:s|d)?)\s+\[[^\]]+\]\(\s*https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:[\/#?][^)\s]*)?\s*\)/im
-            );
-            const repoMatch = dependencyRepoMatch || body.match(
-              /https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=\/|$|[)\]>\s"'?#])/i
-            );
-            const upstreamRepo = repoMatch ? repoMatch[1].replace(/\.git$/i, '') : '';
-
-            // Release notes: Dependabot uses <details><summary>Release notes</summary>,
-            // Renovate uses <details><summary>org/repo (pkg)</summary> under a ### Release Notes heading.
-            let releaseNotes = extractDetailsSection(body, 'Release notes');
-            if (!releaseNotes && upstreamRepo) {
-              releaseNotes = extractDetailsSection(body, upstreamRepo);
-            }
-            if (!releaseNotes) {
-              const rnHeading = body.match(/###\s*Release\s+Notes?\s*\n([\s\S]*?)(?=\n---|\n###\s|$)/i);
-              if (rnHeading) releaseNotes = rnHeading[1].trim();
-            }
-
-            // Commits: Dependabot uses <details><summary>Commits</summary>.
-            // Renovate omits this section, so fall back to extracting any SHA-like hex strings from the body.
-            let commits = extractDetailsSection(body, 'Commits');
-            if (!commits) {
-              const shaMatches = body.match(/\b[0-9a-f]{7,40}\b/gi);
-              if (shaMatches && shaMatches.length > 0) commits = shaMatches.join('\n');
-            }
-
-            const title = ${{`{{ toJSON(steps.target_pr.outputs.title) }}`}} || '';
-            // Dependabot-style titles (3 groups: pkg, fromVersion, toVersion).
-            const titleMatch =
-              title.match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-              title.match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-              title.match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
-            // Renovate-style titles (2 groups: pkg, toVersion — no "from" clause).
-            const renovateTitleMatch = !titleMatch && (
-              title.match(/(?:update|pin)\s+dependency\s+(.+?)\s+to\s+v?([^\s]+)/i) ||
-              title.match(/(?:update|pin)\s+(.+?)\s+(?:action|digest|docker\s+tag)\s+to\s+v?([^\s]+)/i) ||
-              title.match(/(?:update|pin)\s+(.+?)\s+to\s+v?([^\s]+)/i)
-            );
-            let packageName, fromVersion, toVersion;
-            if (titleMatch) {
-              packageName = titleMatch[1].trim();
-              fromVersion = titleMatch[2].trim();
-              toVersion = titleMatch[3].trim();
-            } else if (renovateTitleMatch) {
-              packageName = renovateTitleMatch[1].trim();
-              fromVersion = '';
-              toVersion = renovateTitleMatch[2].trim();
-            } else {
-              packageName = '';
-              fromVersion = '';
-              toVersion = '';
-            }
-            // Body-based version fallback: recover missing from/to from Renovate's table (e.g. `1.2.3` -> `1.2.4`).
-            if (!fromVersion || !toVersion) {
-              const bodyVersionMatch = body.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
-              if (bodyVersionMatch) {
-                if (!fromVersion) fromVersion = bodyVersionMatch[1].replace(/^v/i, '');
-                if (!toVersion) toVersion = bodyVersionMatch[2].replace(/^v/i, '');
-              }
-            }
-
-            if (!upstreamRepo) {
-              core.setFailed('PR body is missing an upstream GitHub repository link.');
-              return;
-            }
-            const normalizedReleaseNotes =
-              releaseNotes || 'PR body did not include a Release notes details section.';
-            const normalizedCommits =
-              commits || 'PR body did not include a Commits details section.';
-
-            const out = {
-              prNumber: Number('${{`{{ steps.target_pr.outputs.number }}`}}'),
-              upstreamRepo,
-              packageName,
-              fromVersion,
-              toVersion,
-              releaseNotes: normalizedReleaseNotes,
-              commits: normalizedCommits,
-            };
-            fs.writeFileSync('dependabot_comment_context.json', JSON.stringify(out, null, 2));
-            fs.writeFileSync('dependabot_release_notes.md', normalizedReleaseNotes);
-            fs.writeFileSync('dependabot_commits.md', normalizedCommits);
-            core.setOutput('upstream_repo', upstreamRepo);
-            core.setOutput('package_name', packageName);
-            core.setOutput('from_version', fromVersion);
-            core.setOutput('to_version', toVersion);
-
+            const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-dependabot-context.js`);
+            await run({ github, context, core });
       - name: Prepare upstream checkout directory
         run: mkdir -p ".upstream-dependency"
 
@@ -376,114 +253,12 @@ jobs:
 
       - name: Post or update PR comment
         uses: actions/github-script@v9
+        env:
+          PR_NUMBER: ${{`{{ steps.target_pr.outputs.number }}`}}
+          MALWARE_SCAN_STATUS: ${{`{{ steps.malware_scan.outputs.status }}`}}
+          MALWARE_SCAN_CHANGED_COUNT: ${{`{{ steps.malware_scan.outputs.changed_files_count }}`}}
+          MALWARE_SCAN_SUMMARY: ${{`{{ steps.malware_scan.outputs.summary }}`}}
         with:
           script: |
-            const fs = require('fs');
-            const marker = '<!-- cursor-dependabot-review -->';
-            const analysisMaxLen = 48000;
-            const malwareMaxLen = 10000;
-            const githubCommentLimit = 65536;
-            const malwareScanStatus = ${{`{{ toJSON(steps.malware_scan.outputs.status) }}`}} || '';
-            const malwareScanChangedCount = ${{`{{ toJSON(steps.malware_scan.outputs.changed_files_count) }}`}} || '';
-            const malwareScanSummaryOutput = ${{`{{ toJSON(steps.malware_scan.outputs.summary) }}`}} || '';
-
-            function readText(path, fallback = '') {
-              try {
-                return fs.readFileSync(path, 'utf8');
-              } catch (_) {
-                return fallback;
-              }
-            }
-
-            const raw = readText('cursor_output.json', '{"result":"No Cursor output generated."}');
-            let parsed;
-            try {
-              parsed = JSON.parse(raw);
-            } catch (_) {
-              parsed = { result: raw };
-            }
-
-            const analysis =
-              parsed.result ||
-              parsed.output ||
-              parsed.text ||
-              parsed.message ||
-              raw;
-            const analysisText =
-              typeof analysis === 'string'
-                ? analysis
-                : JSON.stringify(analysis, null, 2) || String(analysis);
-            const malwareSummaryFallback =
-              (typeof malwareScanSummaryOutput === 'string' && malwareScanSummaryOutput.trim()) ||
-              [
-                '## Malware Scan Summary',
-                '',
-                `- Status: **${malwareScanStatus || 'unknown'}**`,
-                `- Changed upstream files scanned: \`${malwareScanChangedCount || 'unknown'}\``,
-                '- Scanner output file missing.',
-              ].join('\n');
-            const malwareSummary = readText('malware_scan_summary.md', malwareSummaryFallback);
-
-            let trimmedAnalysis = analysisText.slice(0, analysisMaxLen);
-            let trimmedMalware = malwareSummary.slice(0, malwareMaxLen);
-            const renderBody = (analysisPart, malwarePart) =>
-              [
-                marker,
-                '## 🤖 Cursor Dependency Analysis',
-                '',
-                analysisPart,
-                '',
-                '---',
-                '',
-                malwarePart,
-              ].join('\n');
-            let body = renderBody(trimmedAnalysis, trimmedMalware);
-            if (body.length > githubCommentLimit) {
-              const allowedAnalysis = Math.max(
-                0,
-                analysisMaxLen - (body.length - githubCommentLimit) - 256
-              );
-              trimmedAnalysis = analysisText.slice(0, allowedAnalysis);
-              body = renderBody(trimmedAnalysis, trimmedMalware);
-            }
-
-            const { owner, repo } = context.repo;
-            const issue_number = Number('${{`{{ steps.target_pr.outputs.number }}`}}');
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number,
-              per_page: 100,
-            });
-            const markerComments = comments
-              .filter((c) => typeof c.body === 'string' && c.body.includes(marker))
-              .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-            const latestMarker = markerComments.length > 0 ? markerComments[markerComments.length - 1] : null;
-
-            // Hybrid policy: default to updating the latest managed marker comment.
-            // If any non-managed commentary (human or bot) appears after it, create a
-            // new managed comment so prior discussion stays anchored to older analysis.
-            const hasNonManagedCommentaryAfterLatest =
-              latestMarker &&
-              comments.some(
-                (c) =>
-                  c.id !== latestMarker.id &&
-                  !(typeof c.body === 'string' && c.body.includes(marker)) &&
-                  new Date(c.created_at).getTime() > new Date(latestMarker.created_at).getTime()
-              );
-
-            if (latestMarker && !hasNonManagedCommentaryAfterLatest) {
-              await github.rest.issues.updateComment({
-                owner,
-                repo,
-                comment_id: latestMarker.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body,
-              });
-            }
+            const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-post-comment.js`);
+            await run({ github, context, core });

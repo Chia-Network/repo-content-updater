@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -9,6 +12,25 @@ import (
 	"github.com/chia-network/repo-content-updater/internal/config"
 	"github.com/chia-network/repo-content-updater/internal/repo"
 )
+
+func syncFormatterTemplatesFromConfig(configPath string) {
+	absConfig, err := filepath.Abs(configPath)
+	if err != nil {
+		return
+	}
+	repoRoot := filepath.Dir(absConfig)
+	script := filepath.Join(repoRoot, "internal", "workflowscripts", "sync_malware_formatter_templates.py")
+	if _, err := os.Stat(script); err != nil {
+		return
+	}
+	cmd := exec.Command("python3", script)
+	cmd.Dir = repoRoot
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("formatter template sync failed: %s", err)
+	}
+}
 
 // managedFilesCmd represents the managedFiles command
 var managedFilesCmd = &cobra.Command{
@@ -31,6 +53,8 @@ var managedFilesCmd = &cobra.Command{
 		if err != nil {
 			log.Fatalf("error loading config: %s\n", err.Error())
 		}
+
+		syncFormatterTemplatesFromConfig(viper.GetString("config"))
 
 		err = content.ManagedFiles(cfg, viper.GetString("repo"))
 		if err != nil {

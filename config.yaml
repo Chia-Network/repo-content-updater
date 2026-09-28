@@ -56,6 +56,11 @@ files:
       - upstream-malware-scan
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
+      - dependency-cursor-review-trusted-loader
+      - dependency-cursor-review-dependabot-context
+      - dependency-cursor-review-post-comment
+      - upstream-malware-scan-lib
+      - upstream-malware-scan-findings
       - trusted-git-path-checkout-action
     alternate_paths:
       - .github/workflows/dependabot-cursor-review.yaml
@@ -101,6 +106,26 @@ files:
   - name: dependency-cursor-review-combine-outputs
     template_name: dependency-cursor-review-combine-outputs.py
     repo_path: .github/scripts/dependency_cursor_review_combine_outputs.py
+
+  - name: dependency-cursor-review-trusted-loader
+    template_name: dependency-cursor-review-trusted-loader.py
+    repo_path: .github/scripts/dependency_cursor_review_trusted_loader.py
+
+  - name: dependency-cursor-review-dependabot-context
+    template_name: dependency-cursor-review-dependabot-context.js
+    repo_path: .github/scripts/dependency-cursor-review-dependabot-context.js
+
+  - name: dependency-cursor-review-post-comment
+    template_name: dependency-cursor-review-post-comment.js
+    repo_path: .github/scripts/dependency-cursor-review-post-comment.js
+
+  - name: upstream-malware-scan-lib
+    template_name: upstream-malware-scan-lib.sh
+    repo_path: .github/scripts/upstream_malware_scan_lib.sh
+
+  - name: upstream-malware-scan-findings
+    template_name: upstream-malware-scan-findings.sh
+    repo_path: .github/scripts/upstream_malware_scan_findings.sh
 
   - name: dep-review
     template_name: dependency-review.yml

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import sys
 from pathlib import Path
 
 _SCRIPT_CANDIDATES = (
@@ -14,29 +13,21 @@ _SCRIPT_CANDIDATES = (
 )
 
 
-def _bootstrap_module_for(script_dir: Path):
-    bootstrap_path = script_dir / "trusted_formatter_loader_bootstrap.py"
-    spec = importlib.util.spec_from_file_location(
-        "trusted_formatter_loader_bootstrap", bootstrap_path
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {bootstrap_path}")
-    bootstrap = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = bootstrap
-    spec.loader.exec_module(bootstrap)
-    return bootstrap
-
-
-def _resolve_trusted_formatter_loader_module():
-    """Single bootstrap entry: resolve_trusted_formatter_loader_module (stdlib bootstrap exec)."""
-    for script_dir in _SCRIPT_CANDIDATES:
-        if not (script_dir / "trusted_formatter_loader_bootstrap.py").is_file():
+def _import_trusted_loader_entry():
+    for base in _SCRIPT_CANDIDATES:
+        path = base / "dependency_cursor_review_trusted_loader.py"
+        if not path.is_file():
             continue
-        bootstrap = _bootstrap_module_for(script_dir)
-        return bootstrap.resolve_trusted_formatter_loader_module(*_SCRIPT_CANDIDATES)
+        spec = importlib.util.spec_from_file_location(
+            "dependency_cursor_review_trusted_loader", path
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Could not load module spec from {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
     raise RuntimeError(
-        "trusted_formatter_loader.py not found under .github/scripts/. "
-        "Run repo-content-updater managed-files for dependency-cursor-review."
+        "dependency_cursor_review_trusted_loader.py not found under .github/scripts/."
     )
 
 
@@ -68,7 +59,8 @@ def _extract_text(payload) -> str:
 
 
 def main() -> None:
-    loader = _resolve_trusted_formatter_loader_module()
+    trusted_loader = _import_trusted_loader_entry()
+    loader = trusted_loader.resolve_trusted_formatter_loader_module(_SCRIPT_CANDIDATES)
     format_malware_review_verdict = loader.find_and_load_format_malware_review_verdict(
         *_SCRIPT_CANDIDATES
     )
