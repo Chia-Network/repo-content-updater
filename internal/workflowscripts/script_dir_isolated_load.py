@@ -8,11 +8,6 @@ import sys
 import types
 from pathlib import Path
 
-DEFAULT_SCRIPT_CANDIDATES: tuple[Path, ...] = (
-    Path(".github/scripts"),
-    Path("internal/workflowscripts"),
-)
-
 
 def exec_module_scrubbing_script_dir(
     spec: importlib.machinery.ModuleSpec,
@@ -73,12 +68,12 @@ def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:
         raise RuntimeError(f"Could not load module spec from {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    exec_module_scrubbing_script_dir(spec, module, path)
     return module
 
 
 def resolve_trusted_formatter_loader_for_dir(script_dir: Path) -> types.ModuleType:
-    """Isolated companion + bootstrap + trusted_formatter_loader for one scripts dir."""
+    """Isolated companion + bootstrap + loader + formatter sibling modules."""
     script_dir = script_dir.resolve()
     util = register_util_from_scripts_dir(script_dir)
     util.load_module_isolated(
@@ -91,26 +86,6 @@ def resolve_trusted_formatter_loader_for_dir(script_dir: Path) -> types.ModuleTy
     loader_path = script_dir / "trusted_formatter_loader.py"
     if not loader_path.is_file():
         raise RuntimeError(f"Missing {loader_path}")
-    return bootstrap.load_loader_module(loader_path)
-
-
-def resolve_trusted_formatter_loader_module(
-    candidate_script_dirs: tuple[Path, ...] = DEFAULT_SCRIPT_CANDIDATES,
-) -> types.ModuleType:
-    """Find a trusted scripts directory and return trusted_formatter_loader."""
-    for script_dir in candidate_script_dirs:
-        script_dir = script_dir.resolve()
-        bootstrap_path = script_dir / "trusted_formatter_loader_bootstrap.py"
-        loader_path = script_dir / "trusted_formatter_loader.py"
-        util_path = script_dir / "script_dir_isolated_load.py"
-        if not (
-            util_path.is_file()
-            and bootstrap_path.is_file()
-            and loader_path.is_file()
-        ):
-            continue
-        return resolve_trusted_formatter_loader_for_dir(script_dir)
-    raise RuntimeError(
-        "trusted_formatter_loader.py not found under .github/scripts/. "
-        "Run repo-content-updater managed-files for dependency-cursor-review."
-    )
+    loader_mod = bootstrap.load_loader_module(loader_path)
+    loader_mod.ensure_formatter_sibling_modules(script_dir)
+    return loader_mod

@@ -29,7 +29,13 @@ def _util(script_dir: Path):
         raise RuntimeError(f"Could not load module spec from {path}")
     mod = importlib.util.module_from_spec(spec)
     sys.modules["script_dir_isolated_load"] = mod
-    spec.loader.exec_module(mod)
+    script_dir_str = str(path.parent)
+    saved_path = sys.path.copy()
+    try:
+        sys.path = [entry for entry in sys.path if entry != script_dir_str]
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path[:] = saved_path
     return mod.register_util_from_scripts_dir(script_dir.resolve())
 
 
@@ -72,7 +78,7 @@ def load_loader_module(loader_path: Path) -> types.ModuleType:
 
 
 def load_trusted_formatter_loader_module(script_dir: Path) -> types.ModuleType:
-    """Canonical workflow entry: isolated bootstrap + isolated loader."""
+    """Canonical workflow entry: isolated bootstrap + isolated loader (+ formatter siblings)."""
     util = _util(script_dir)
     return util.resolve_trusted_formatter_loader_for_dir(script_dir.resolve())
 

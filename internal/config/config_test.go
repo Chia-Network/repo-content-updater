@@ -22,6 +22,7 @@ func dependencyCursorReviewCompanionFiles() []string {
 		"companion-isolated-exec",
 		"trusted-formatter-loader",
 		"trusted-formatter-loader-bootstrap",
+		"trusted-formatter-loader-cold-start",
 		"upstream-malware-scan",
 		"dependency-cursor-review-prompts",
 		"dependency-cursor-review-combine-outputs",

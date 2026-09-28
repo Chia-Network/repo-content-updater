@@ -34,7 +34,11 @@ class ThermoJudo8Test(unittest.TestCase):
         util_src = (_SCRIPTS / "script_dir_isolated_load.py").read_text(encoding="utf-8")
         self.assertIn("exec_module_scrubbing_script_dir", util_src)
         self.assertIn("exec_module_scrubbing_script_dir", companion_src)
-        self.assertIn("resolve_trusted_formatter_loader_module", util_src)
+        cold_src = (
+            _SCRIPTS / "trusted_formatter_loader_cold_start.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("resolve_loader_module", cold_src)
+        self.assertNotIn("resolve_trusted_formatter_loader_module", util_src)
         self.assertIn("load_module_isolated", util_src)
 
     def test_policy_split_semantics_and_module_size_caps(self) -> None:

@@ -14,31 +14,30 @@ _SCRIPT_CANDIDATES = (
 )
 
 
-def _util_via_bootstrap(script_dir: Path):
-    """Cold-start under python3 -I: bootstrap registers script_dir_isolated_load."""
-    script_dir = script_dir.resolve()
-    boot_name = "trusted_formatter_loader_bootstrap"
-    boot_path = script_dir / "trusted_formatter_loader_bootstrap.py"
-    boot = sys.modules.get(boot_name)
-    if boot is not None:
-        boot_file = getattr(boot, "__file__", None)
-        if boot_file and Path(boot_file).resolve() == boot_path.resolve():
-            return boot.cold_start_util(script_dir)
-    if not boot_path.is_file():
-        raise RuntimeError(f"Missing {boot_path}")
-    spec = importlib.util.spec_from_file_location(boot_name, boot_path)
+def _cold_start_module(install_dir: Path | None = None):
+    """Load trusted_formatter_loader_cold_start under python3 -I (no sibling imports)."""
+    install = (install_dir or Path(__file__).resolve().parent).resolve()
+    name = "trusted_formatter_loader_cold_start"
+    path = install / f"{name}.py"
+    existing = sys.modules.get(name)
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file and Path(existing_file).resolve() == path.resolve():
+            return existing
+    if not path.is_file():
+        raise RuntimeError(f"Missing {path}")
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {boot_path}")
-    boot = importlib.util.module_from_spec(spec)
-    sys.modules[boot_name] = boot
-    spec.loader.exec_module(boot)
-    return boot.cold_start_util(script_dir)
+        raise RuntimeError(f"Could not load module spec from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_trusted_formatter_loader_module(base: Path):
-    """Resolve loader for one scripts directory (canonical util.resolve path)."""
-    util = _util_via_bootstrap(base)
-    return util.resolve_trusted_formatter_loader_for_dir(base.resolve())
+    """Resolve loader for one scripts directory (in-process / security tests)."""
+    return _cold_start_module(base).resolve_loader_for_dir(base.resolve())
 
 
 def _load_any(path: str) -> dict:
@@ -69,18 +68,22 @@ def _extract_text(payload) -> str:
 
 
 def main() -> None:
+    cold_start = _cold_start_module()
     loader = None
     script_dirs: tuple[Path, ...] = ()
     for base in _SCRIPT_CANDIDATES:
         base = base.resolve()
         if (base / "trusted_formatter_loader_bootstrap.py").is_file():
-            loader = _load_trusted_formatter_loader_module(base)
+            loader = cold_start.resolve_loader_for_dir(base)
             script_dirs = (base,)
             break
     if loader is None:
-        raise RuntimeError(
-            "trusted_formatter_loader bundle not found under .github/scripts/."
-        )
+        loader = cold_start.resolve_loader_module(_SCRIPT_CANDIDATES)
+        for base in _SCRIPT_CANDIDATES:
+            base = base.resolve()
+            if (base / "trusted_formatter_loader.py").is_file():
+                script_dirs = (base,)
+                break
     format_malware_review_verdict = loader.find_and_load_format_malware_review_verdict(
         *script_dirs
     )

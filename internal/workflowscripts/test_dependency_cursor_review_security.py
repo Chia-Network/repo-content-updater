@@ -20,6 +20,7 @@ _BUNDLE_STEMS = (
     "dependency_cursor_review_combine_outputs.py",
     "dependency_cursor_review_trusted_loader.py",
     "trusted_formatter_loader_bootstrap.py",
+    "trusted_formatter_loader_cold_start.py",
     "trusted_formatter_loader.py",
     "malware_verdict_formatter.py",
     "malware_verdict_patterns.py",
@@ -105,6 +106,36 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             )
             out = (root / "cursor_output.json").read_text(encoding="utf-8")
             self.assertIn("Supply-Chain Malware Review", out)
+
+    def test_util_register_scrubs_scripts_dir_on_first_exec(self) -> None:
+        """Bootstrap util registration must not run with scripts dir on sys.path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts = Path(tmp) / "scripts"
+            scripts.mkdir()
+            for name in _BUNDLE_STEMS:
+                shutil.copy2(_SCRIPTS / name, scripts / name)
+            (scripts / "importlib.py").write_text(
+                "raise RuntimeError('untrusted importlib shadow')\n",
+                encoding="utf-8",
+            )
+            script_dir = str(scripts.resolve())
+            sys.path.insert(0, script_dir)
+            purge = (
+                "script_dir_isolated_load",
+                "trusted_formatter_loader_bootstrap",
+            )
+            saved = {name: sys.modules.pop(name, None) for name in purge}
+            try:
+                from trusted_formatter_loader_cold_start import resolve_loader_for_dir
+
+                resolve_loader_for_dir(scripts)
+            finally:
+                sys.path[:] = [p for p in sys.path if p != script_dir]
+                for name, module in saved.items():
+                    if module is None:
+                        sys.modules.pop(name, None)
+                    else:
+                        sys.modules[name] = module
 
 
 if __name__ == "__main__":

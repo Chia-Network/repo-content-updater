@@ -15,6 +15,7 @@ _BUNDLE = (
     "script_dir_isolated_load.py",
     "companion_isolated_exec.py",
     "trusted_formatter_loader_bootstrap.py",
+    "trusted_formatter_loader_cold_start.py",
     "trusted_formatter_loader.py",
     "malware_verdict_formatter.py",
     "malware_verdict_patterns.py",

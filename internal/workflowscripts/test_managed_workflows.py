@@ -52,6 +52,9 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn(
             ".github/scripts/trusted_formatter_loader_bootstrap.py", ensure_bundle
         )
+        self.assertIn(
+            ".github/scripts/trusted_formatter_loader_cold_start.py", ensure_bundle
+        )
         self.assertIn(".github/scripts/upstream_malware_scan.sh", ensure_bundle)
         self.assertIn(
             ".github/scripts/dependency_cursor_review_combine_outputs.py", ensure_bundle
@@ -91,9 +94,11 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             / "workflowscripts"
             / "dependency_cursor_review_trusted_loader.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("resolve_trusted_formatter_loader_for_dir", combine)
-        self.assertIn("resolve_trusted_formatter_loader_module", trusted_loader)
+        self.assertIn("resolve_loader_for_dir", combine)
+        self.assertIn("resolve_loader_module", trusted_loader)
+        self.assertIn("trusted_formatter_loader_cold_start", combine)
         self.assertNotIn("def _load_util", combine)
+        self.assertNotIn("_util_via_bootstrap", combine)
         self.assertNotIn("_bootstrap_module_for", combine)
         self.assertIn("dependency-cursor-review-dependabot-context.js", workflow)
 

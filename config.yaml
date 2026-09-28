@@ -37,6 +37,7 @@ groups:
       - companion-isolated-exec
       - trusted-formatter-loader
       - trusted-formatter-loader-bootstrap
+      - trusted-formatter-loader-cold-start
       - upstream-malware-scan
       - upstream-malware-scan-lib
       - upstream-malware-scan-findings
@@ -71,6 +72,7 @@ files:
       - companion-isolated-exec
       - trusted-formatter-loader
       - trusted-formatter-loader-bootstrap
+      - trusted-formatter-loader-cold-start
       - upstream-malware-scan
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
@@ -132,6 +134,10 @@ files:
   - name: trusted-formatter-loader-bootstrap
     template_name: trusted-formatter-loader-bootstrap.py
     repo_path: .github/scripts/trusted_formatter_loader_bootstrap.py
+
+  - name: trusted-formatter-loader-cold-start
+    template_name: trusted-formatter-loader-cold-start.py
+    repo_path: .github/scripts/trusted_formatter_loader_cold_start.py
 
   - name: upstream-malware-scan
     template_name: upstream-malware-scan.sh
