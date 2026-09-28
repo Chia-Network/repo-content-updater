@@ -2,28 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.machinery
 import importlib.util
 import sys
 import types
 from pathlib import Path
 
-
-def exec_module_scrubbing_script_dir(
-    spec: importlib.machinery.ModuleSpec,
-    module: types.ModuleType,
-    script_path: Path,
-) -> None:
-    """Run module exec with the script directory removed from sys.path."""
-    if spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {script_path}")
-    script_dir = str(script_path.resolve().parent)
-    saved_path = sys.path.copy()
-    try:
-        sys.path = [entry for entry in sys.path if entry != script_dir]
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = saved_path
+from module_exec_scrub import bootstrap_module_from_scripts_dir, exec_module_scrubbing_script_dir
 
 
 def load_module_isolated(
@@ -61,6 +45,9 @@ def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:
         existing_file = getattr(existing, "__file__", None)
         if existing_file and Path(existing_file).resolve() == path.resolve():
             return existing
+    bootstrap_module_from_scripts_dir(
+        script_dir, "module_exec_scrub.py", "module_exec_scrub"
+    )
     iso_path = script_dir / "isolated_module_exec.py"
     if not iso_path.is_file():
         raise RuntimeError(f"Missing {iso_path}")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.machinery
 import importlib.util
 import sys
 import types
@@ -14,8 +13,8 @@ DEFAULT_SCRIPT_CANDIDATES: tuple[Path, ...] = (
 )
 
 _ISO_NAME = "isolated_module_exec"
-_UTIL_NAME = "script_dir_isolated_load"
-_BUNDLE_MARKERS = (
+# Keep in sync with formatter_bundle_inventory.LOADER_RESOLVE_MARKER_FILENAMES (-I safe).
+_BUNDLE_MARKERS: tuple[str, ...] = (
     "isolated_module_exec.py",
     "script_dir_isolated_load.py",
     "trusted_formatter_loader_bootstrap.py",
@@ -23,25 +22,35 @@ _BUNDLE_MARKERS = (
 )
 
 
-def _exec_module_scrubbing_script_dir(
-    spec: importlib.machinery.ModuleSpec,
-    module: types.ModuleType,
-    script_path: Path,
-) -> None:
-    """Same scrub spine as isolated_module_exec (bootstrap before that module is importable)."""
-    if spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {script_path}")
-    script_dir = str(script_path.resolve().parent)
+def _module_exec_scrub(script_dir: Path) -> types.ModuleType:
+    """Load module_exec_scrub lazily (python3 -I safe; no top-level scripts-dir import)."""
+    script_dir = script_dir.resolve()
+    existing = sys.modules.get("module_exec_scrub")
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        scrub_path = script_dir / "module_exec_scrub.py"
+        if existing_file and Path(existing_file).resolve() == scrub_path.resolve():
+            return existing
+    scrub_path = script_dir / "module_exec_scrub.py"
+    if not scrub_path.is_file():
+        raise RuntimeError(f"Missing {scrub_path}")
+    spec = importlib.util.spec_from_file_location("module_exec_scrub", scrub_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec from {scrub_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["module_exec_scrub"] = module
+    script_dir_s = str(script_dir)
     saved_path = sys.path.copy()
     try:
-        sys.path = [entry for entry in sys.path if entry != script_dir]
+        sys.path = [entry for entry in sys.path if entry != script_dir_s]
         spec.loader.exec_module(module)
     finally:
         sys.path[:] = saved_path
+    return module
 
 
 def _ensure_isolated_module_exec(script_dir: Path) -> types.ModuleType:
-    """Load stdlib-only isolation helper via scrubbed exec (single exec spine)."""
+    """Load stdlib-only isolation helper via shared scrub spine."""
     script_dir = script_dir.resolve()
     path = script_dir / f"{_ISO_NAME}.py"
     existing = sys.modules.get(_ISO_NAME)
@@ -51,12 +60,13 @@ def _ensure_isolated_module_exec(script_dir: Path) -> types.ModuleType:
             return existing
     if not path.is_file():
         raise RuntimeError(f"Missing {path}")
+    scrub = _module_exec_scrub(script_dir)
     spec = importlib.util.spec_from_file_location(_ISO_NAME, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load module spec from {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[_ISO_NAME] = module
-    _exec_module_scrubbing_script_dir(spec, module, path)
+    scrub.exec_module_scrubbing_script_dir(spec, module, path)
     return module
 
 

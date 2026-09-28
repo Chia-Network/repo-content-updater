@@ -103,7 +103,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         pr_block = workflow.split("Checkout repository", 1)[1].split(
             "Install trusted git path checkout action definition", 1
         )[0]
-        self.assertIn("sparse-checkout: disable", pr_block)
+        self.assertNotIn("sparse-checkout:", pr_block)
 
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
         self.assertTrue(_TRUSTED_GIT_CHECKOUT_ACTION.is_file())

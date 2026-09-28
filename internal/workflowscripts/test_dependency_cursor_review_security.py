@@ -14,26 +14,7 @@ _REPO_ROOT = _SCRIPTS.parents[1]
 _WORKFLOW = _REPO_ROOT / "templates" / "dependency-cursor-review.yml"
 
 # Minimal trusted bundle files needed for combine_outputs to reach formatter load.
-_BUNDLE_STEMS = (
-    "isolated_module_exec.py",
-    "script_dir_isolated_load.py",
-    "dependency_cursor_review_combine_outputs.py",
-    "trusted_formatter_loader_bootstrap.py",
-    "trusted_formatter_loader_cold_start.py",
-    "trusted_formatter_loader.py",
-    "malware_verdict_formatter.py",
-    "malware_verdict_patterns_regex.py",
-    "malware_verdict_patterns_structure.py",
-    "malware_verdict_patterns.py",
-    "malware_verdict_policy_types.py",
-    "malware_verdict_policy_lexical.py",
-    "malware_verdict_policy_context.py",
-    "malware_verdict_policy_rules_select.py",
-    "malware_verdict_policy_rules_strip.py",
-    "malware_verdict_policy_rules.py",
-    "malware_verdict_policy_analysis.py",
-    "malware_verdict_policy.py",
-)
+from formatter_bundle_inventory import DCR_COMBINE_TEST_BUNDLE as _BUNDLE_STEMS  # noqa: E402
 
 
 class DependencyCursorReviewSecurityTest(unittest.TestCase):

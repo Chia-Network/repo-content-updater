@@ -33,7 +33,10 @@ groups:
       - malware-verdict-policy
       - malware-verdict-policy-types
       - malware-verdict-policy-lexical
+      - malware-verdict-policy-selection-context
       - malware-verdict-policy-context
+      - module-exec-scrub
+      - formatter-bundle-inventory
       - malware-verdict-policy-rules
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
@@ -74,7 +77,10 @@ files:
       - malware-verdict-policy
       - malware-verdict-policy-types
       - malware-verdict-policy-lexical
+      - malware-verdict-policy-selection-context
       - malware-verdict-policy-context
+      - module-exec-scrub
+      - formatter-bundle-inventory
       - malware-verdict-policy-rules
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
@@ -131,6 +137,10 @@ files:
     template_name: malware-verdict-policy-lexical.py
     repo_path: .github/scripts/malware_verdict_policy_lexical.py
 
+  - name: malware-verdict-policy-selection-context
+    template_name: malware-verdict-policy-selection-context.py
+    repo_path: .github/scripts/malware_verdict_policy_selection_context.py
+
   - name: malware-verdict-policy-context
     template_name: malware-verdict-policy-context.py
     repo_path: .github/scripts/malware_verdict_policy_context.py
@@ -150,6 +160,14 @@ files:
   - name: malware-verdict-policy-analysis
     template_name: malware-verdict-policy-analysis.py
     repo_path: .github/scripts/malware_verdict_policy_analysis.py
+
+  - name: module-exec-scrub
+    template_name: module-exec-scrub.py
+    repo_path: .github/scripts/module_exec_scrub.py
+
+  - name: formatter-bundle-inventory
+    template_name: formatter-bundle-inventory.py
+    repo_path: .github/scripts/formatter_bundle_inventory.py
 
   - name: isolated-module-exec
     template_name: isolated-module-exec.py

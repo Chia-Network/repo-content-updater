@@ -12,7 +12,10 @@ _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy.py", 25),
     ("malware_verdict_policy_types.py", 50),
     ("malware_verdict_policy_lexical.py", 35),
-    ("malware_verdict_policy_context.py", 400),
+    ("malware_verdict_policy_selection_context.py", 320),
+    ("malware_verdict_policy_context.py", 130),
+    ("module_exec_scrub.py", 60),
+    ("formatter_bundle_inventory.py", 95),
     ("malware_verdict_policy_rules_select.py", 360),
     ("malware_verdict_policy_rules_strip.py", 300),
     ("malware_verdict_policy_rules.py", 45),
@@ -39,8 +42,9 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("resolve_loader_bundle", combine)
         self.assertIn("exec_module_scrubbing_script_dir", iso_src)
         self.assertIn("register_util_from_scripts_dir", iso_src)
-        self.assertIn("exec_module_scrubbing_script_dir", cold_src)
-        self.assertIn("_exec_module_scrubbing_script_dir(spec, module, path)", cold_src)
+        self.assertIn("module_exec_scrub", cold_src)
+        self.assertIn("exec_module_scrubbing_script_dir", iso_src)
+        self.assertNotIn("def _exec_module_scrubbing_script_dir", cold_src)
         self.assertNotIn("register_util_from_disk", cold_src)
         self.assertIn("register_util_from_scripts_dir", cold_src)
         self.assertNotIn("resolve_trusted_formatter_loader_module", util_src)
@@ -66,7 +70,11 @@ class ThermoJudo8Test(unittest.TestCase):
             deploy.split("def format_verdict_text")[0],
         )
         self.assertIn("class VerdictAnalysis", analysis)
-        self.assertIn("OfficialSelectionContext", context)
+        selection = (_SCRIPTS / "malware_verdict_policy_selection_context.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("OfficialSelectionContext", selection)
+        self.assertIn("build_official_selection_context", selection)
         self.assertIn("_OFFICIAL_SELECT_PIPELINE", select)
         self.assertNotIn("from malware_verdict_classification import", deploy)
         for filename, max_lines in _POLICY_MODULE_BOUNDS:

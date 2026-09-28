@@ -5,11 +5,8 @@ from __future__ import annotations
 import types
 from pathlib import Path
 
-from isolated_module_exec import (
-    exec_module_scrubbing_script_dir,
-    load_module_isolated,
-    register_util_from_scripts_dir,
-)
+from isolated_module_exec import load_module_isolated, register_util_from_scripts_dir
+from module_exec_scrub import exec_module_scrubbing_script_dir
 
 __all__ = (
     "exec_module_scrubbing_script_dir",

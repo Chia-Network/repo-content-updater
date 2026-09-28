@@ -1,5 +1,7 @@
 .github/scripts/dependency-cursor-review-trusted-scripts.paths
 .github/scripts/dependency-cursor-review-target-pr.js
+.github/scripts/formatter_bundle_inventory.py
+.github/scripts/module_exec_scrub.py
 .github/scripts/malware_verdict_formatter.py
 .github/scripts/malware_verdict_patterns.py
 .github/scripts/malware_verdict_patterns_regex.py
@@ -7,6 +9,7 @@
 .github/scripts/malware_verdict_policy.py
 .github/scripts/malware_verdict_policy_types.py
 .github/scripts/malware_verdict_policy_lexical.py
+.github/scripts/malware_verdict_policy_selection_context.py
 .github/scripts/malware_verdict_policy_context.py
 .github/scripts/malware_verdict_policy_rules.py
 .github/scripts/malware_verdict_policy_rules_select.py

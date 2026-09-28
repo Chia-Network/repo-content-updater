@@ -55,7 +55,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{`{{ steps.target_pr.outputs.head_sha }}`}}
-          sparse-checkout: disable
           persist-credentials: false
 
       # PR head is untrusted: overwrite composite action.yml from default branch before uses: ./…
