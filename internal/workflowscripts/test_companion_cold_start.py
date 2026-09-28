@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import runpy
 import shutil
 import subprocess
 import sys
@@ -46,11 +47,11 @@ class CompanionColdStartTest(unittest.TestCase):
                 script_dir = str(scripts.resolve())
                 sys.path.insert(0, script_dir)
                 try:
-                    from trusted_formatter_loader import load_format_malware_review_verdict
-
-                    fn = load_format_malware_review_verdict(
-                        scripts / "malware_verdict_formatter.py"
+                    ns = runpy.run_path(
+                        str(scripts / "trusted_formatter_loader_cold_start.py")
                     )
+                    loader, _ = ns["resolve_loader_bundle"]((scripts,))
+                    fn = loader.find_and_load_format_malware_review_verdict(scripts)
                     out = fn("Verdict: benign\n\nOK")
                     self.assertTrue(out.startswith("**Verdict: benign**"))
                 finally:

@@ -18,7 +18,6 @@ _BUNDLE_STEMS = (
     "script_dir_isolated_load.py",
     "companion_isolated_exec.py",
     "dependency_cursor_review_combine_outputs.py",
-    "dependency_cursor_review_trusted_loader.py",
     "trusted_formatter_loader_bootstrap.py",
     "trusted_formatter_loader_cold_start.py",
     "trusted_formatter_loader.py",
@@ -126,9 +125,12 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             )
             saved = {name: sys.modules.pop(name, None) for name in purge}
             try:
-                from trusted_formatter_loader_cold_start import resolve_loader_for_dir
+                import runpy
 
-                resolve_loader_for_dir(scripts)
+                ns = runpy.run_path(
+                    str(scripts / "trusted_formatter_loader_cold_start.py")
+                )
+                ns["resolve_loader_for_dir"](scripts)
             finally:
                 sys.path[:] = [p for p in sys.path if p != script_dir]
                 for name, module in saved.items():

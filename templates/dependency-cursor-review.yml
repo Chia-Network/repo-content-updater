@@ -118,7 +118,6 @@ jobs:
             .github/scripts/upstream_malware_scan.sh
             .github/scripts/dependency_cursor_review_prompts.py
             .github/scripts/dependency_cursor_review_combine_outputs.py
-            .github/scripts/dependency_cursor_review_trusted_loader.py
             .github/scripts/dependency-cursor-review-dependabot-context.js
             .github/scripts/dependency-cursor-review-post-comment.js
             .github/scripts/upstream_malware_scan_lib.sh

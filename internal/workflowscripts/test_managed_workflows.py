@@ -88,17 +88,12 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             / "workflowscripts"
             / "dependency_cursor_review_combine_outputs.py"
         ).read_text(encoding="utf-8")
-        trusted_loader = (
-            _REPO_ROOT
-            / "internal"
-            / "workflowscripts"
-            / "dependency_cursor_review_trusted_loader.py"
-        ).read_text(encoding="utf-8")
-        self.assertIn("resolve_loader_for_dir", combine)
-        self.assertIn("resolve_loader_module", trusted_loader)
-        self.assertIn("trusted_formatter_loader_cold_start", combine)
+        self.assertIn("resolve_loader_bundle", combine)
+        self.assertIn("runpy.run_path", combine)
+        self.assertNotIn("dependency_cursor_review_trusted_loader", combine)
         self.assertNotIn("def _load_util", combine)
         self.assertNotIn("_util_via_bootstrap", combine)
+        self.assertNotIn("_cold_start_module", combine)
         self.assertNotIn("_bootstrap_module_for", combine)
         self.assertIn("dependency-cursor-review-dependabot-context.js", workflow)
 

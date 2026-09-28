@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import runpy
 import sys
 import types
 from pathlib import Path
@@ -12,56 +13,64 @@ DEFAULT_SCRIPT_CANDIDATES: tuple[Path, ...] = (
     Path("internal/workflowscripts"),
 )
 
-_BOOTSTRAP_NAME = "trusted_formatter_loader_bootstrap"
-def _exec_bootstrap(script_dir: Path) -> types.ModuleType:
+_UTIL_NAME = "script_dir_isolated_load"
+_BUNDLE_MARKERS = (
+    "script_dir_isolated_load.py",
+    "trusted_formatter_loader_bootstrap.py",
+    "trusted_formatter_loader.py",
+)
+
+
+def register_util_from_disk(script_dir: Path) -> types.ModuleType:
+    """Scrubbed first exec of script_dir_isolated_load (only cold-start util registration)."""
     script_dir = script_dir.resolve()
-    boot_path = script_dir / f"{_BOOTSTRAP_NAME}.py"
-    boot = sys.modules.get(_BOOTSTRAP_NAME)
-    if boot is not None:
-        boot_file = getattr(boot, "__file__", None)
-        if boot_file and Path(boot_file).resolve() == boot_path.resolve():
-            return boot
-    if not boot_path.is_file():
-        raise RuntimeError(f"Missing {boot_path}")
-    spec = importlib.util.spec_from_file_location(_BOOTSTRAP_NAME, boot_path)
+    path = script_dir / f"{_UTIL_NAME}.py"
+    existing = sys.modules.get(_UTIL_NAME)
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file and Path(existing_file).resolve() == path.resolve():
+            return existing
+    if not path.is_file():
+        raise RuntimeError(f"Missing {path}")
+    spec = importlib.util.spec_from_file_location(_UTIL_NAME, path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {boot_path}")
-    boot = importlib.util.module_from_spec(spec)
-    sys.modules[_BOOTSTRAP_NAME] = boot
-    script_dir_str = str(script_dir)
+        raise RuntimeError(f"Could not load module spec from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_UTIL_NAME] = module
+    script_dir_str = str(path.parent)
     saved_path = sys.path.copy()
     try:
         sys.path = [entry for entry in sys.path if entry != script_dir_str]
-        spec.loader.exec_module(boot)
+        spec.loader.exec_module(module)
     finally:
         sys.path[:] = saved_path
-    return boot
+    return module
 
 
 def resolve_loader_for_dir(script_dir: Path) -> types.ModuleType:
-    """Return trusted_formatter_loader after one bootstrap → resolve graph."""
-    return _exec_bootstrap(script_dir).load_trusted_formatter_loader_module(
-        script_dir.resolve()
-    )
+    """Return trusted_formatter_loader via script_dir_isolated_load (isolated graph)."""
+    util = register_util_from_disk(script_dir)
+    return util.resolve_trusted_formatter_loader_for_dir(script_dir.resolve())
 
 
-def resolve_loader_module(
+def resolve_loader_bundle(
     candidate_script_dirs: tuple[Path, ...] = DEFAULT_SCRIPT_CANDIDATES,
-) -> types.ModuleType:
-    """Find a trusted scripts directory and return trusted_formatter_loader."""
+) -> tuple[types.ModuleType, Path]:
+    """Find scripts dir; return (trusted_formatter_loader module, chosen directory)."""
     for script_dir in candidate_script_dirs:
         script_dir = script_dir.resolve()
-        util_path = script_dir / "script_dir_isolated_load.py"
-        bootstrap_path = script_dir / f"{_BOOTSTRAP_NAME}.py"
-        loader_path = script_dir / "trusted_formatter_loader.py"
-        if not (
-            util_path.is_file()
-            and bootstrap_path.is_file()
-            and loader_path.is_file()
-        ):
+        if not all((script_dir / name).is_file() for name in _BUNDLE_MARKERS):
             continue
-        return resolve_loader_for_dir(script_dir)
+        return resolve_loader_for_dir(script_dir), script_dir
     raise RuntimeError(
         "trusted_formatter_loader.py not found under .github/scripts/. "
         "Run repo-content-updater managed-files for dependency-cursor-review."
     )
+
+
+def run_host_namespace(install_dir: Path) -> dict[str, object]:
+    """Canonical python3 -I host entry: run_path this module from install_dir."""
+    path = install_dir.resolve() / "trusted_formatter_loader_cold_start.py"
+    if not path.is_file():
+        raise RuntimeError(f"Missing {path}")
+    return runpy.run_path(str(path))

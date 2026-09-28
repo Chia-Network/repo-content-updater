@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 import types
 from pathlib import Path
@@ -10,38 +9,18 @@ from pathlib import Path
 _BOOTSTRAP_MODULE_NAME = "trusted_formatter_loader_bootstrap"
 
 
-def cold_start_util(script_dir: Path):
-    """Return registered script_dir_isolated_load from a trusted scripts directory."""
-    return _util(script_dir)
-
-
-def _util(script_dir: Path):
-    mod = sys.modules.get("script_dir_isolated_load")
-    path = (script_dir.resolve() / "script_dir_isolated_load.py").resolve()
-    if mod is not None:
-        existing_file = getattr(mod, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == path:
-            return mod
-    if not path.is_file():
-        raise RuntimeError(f"Missing {path}")
-    spec = importlib.util.spec_from_file_location("script_dir_isolated_load", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {path}")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["script_dir_isolated_load"] = mod
-    script_dir_str = str(path.parent)
-    saved_path = sys.path.copy()
-    try:
-        sys.path = [entry for entry in sys.path if entry != script_dir_str]
-        spec.loader.exec_module(mod)
-    finally:
-        sys.path[:] = saved_path
-    return mod.register_util_from_scripts_dir(script_dir.resolve())
+def _require_util():
+    util = sys.modules.get("script_dir_isolated_load")
+    if util is None:
+        raise RuntimeError(
+            "script_dir_isolated_load must be registered before bootstrap operations"
+        )
+    return util
 
 
 def prime_companion_isolated_exec(script_dir: Path) -> types.ModuleType:
     """Load companion_isolated_exec before import-by-name works (python3 -I / scrubbed path)."""
-    util = _util(script_dir)
+    util = _require_util()
     path = script_dir.resolve() / "companion_isolated_exec.py"
     return util.load_module_isolated(path, "companion_isolated_exec")
 
@@ -49,7 +28,7 @@ def prime_companion_isolated_exec(script_dir: Path) -> types.ModuleType:
 def import_bootstrap_module(bootstrap_path: Path) -> types.ModuleType:
     """Load this bootstrap module from disk with scripts-dir isolation."""
     bootstrap_path = bootstrap_path.resolve()
-    util = _util(bootstrap_path.parent)
+    util = _require_util()
     return util.load_module_isolated(bootstrap_path, _BOOTSTRAP_MODULE_NAME)
 
 
@@ -73,21 +52,14 @@ def load_loader_module(loader_path: Path) -> types.ModuleType:
     """Load trusted_formatter_loader from disk with scripts-dir isolation."""
     loader_path = loader_path.resolve()
     ensure_bootstrap_module_for_loader(loader_path)
-    util = _util(loader_path.parent)
-    return util.load_module_isolated(loader_path, "trusted_formatter_loader")
-
-
-def load_trusted_formatter_loader_module(script_dir: Path) -> types.ModuleType:
-    """Canonical workflow entry: isolated bootstrap + isolated loader (+ formatter siblings)."""
-    util = _util(script_dir)
-    return util.resolve_trusted_formatter_loader_for_dir(script_dir.resolve())
+    return _require_util().load_module_isolated(loader_path, "trusted_formatter_loader")
 
 
 def exec_companion_module(
     script_path: Path, module_name: str | None = None
 ) -> types.ModuleType:
     """Re-export for workflow YAML that execs bootstrap then calls exec_companion_module."""
-    util = _util(script_path.parent)
+    util = _require_util()
     return util.load_module_isolated(
         script_path.resolve(), module_name or f"companion_{script_path.stem}"
     )

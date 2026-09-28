@@ -43,7 +43,6 @@ groups:
       - upstream-malware-scan-findings
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
-      - dependency-cursor-review-trusted-loader
       - dependency-cursor-review-dependabot-context
       - dependency-cursor-review-post-comment
       - trusted-git-path-checkout-action
@@ -76,7 +75,6 @@ files:
       - upstream-malware-scan
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
-      - dependency-cursor-review-trusted-loader
       - dependency-cursor-review-dependabot-context
       - dependency-cursor-review-post-comment
       - upstream-malware-scan-lib
@@ -150,10 +148,6 @@ files:
   - name: dependency-cursor-review-combine-outputs
     template_name: dependency-cursor-review-combine-outputs.py
     repo_path: .github/scripts/dependency_cursor_review_combine_outputs.py
-
-  - name: dependency-cursor-review-trusted-loader
-    template_name: dependency-cursor-review-trusted-loader.py
-    repo_path: .github/scripts/dependency_cursor_review_trusted_loader.py
 
   - name: dependency-cursor-review-dependabot-context
     template_name: dependency-cursor-review-dependabot-context.js

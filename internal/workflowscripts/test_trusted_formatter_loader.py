@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import runpy
 import shutil
 import tempfile
 import unittest
@@ -40,6 +41,14 @@ def _copy_formatter_bundle(scripts: Path) -> None:
         shutil.copy2(_SCRIPTS / name, scripts / name)
 
 
+def _load_format_via_cold_start(scripts: Path, formatter_path: Path | None = None):
+    ns = runpy.run_path(str(scripts / "trusted_formatter_loader_cold_start.py"))
+    loader, _ = ns["resolve_loader_bundle"]((scripts,))
+    if formatter_path is not None:
+        return loader.load_format_malware_review_verdict(formatter_path)
+    return loader.find_and_load_format_malware_review_verdict(scripts)
+
+
 class TrustedFormatterLoaderTest(unittest.TestCase):
     def test_managed_loader_template_matches_canonical_module(self) -> None:
         self.assertTrue(_LOADER_TEMPLATE.is_file())
@@ -49,7 +58,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
         )
 
     def test_find_and_load_internal_canonical_formatter(self) -> None:
-        format_fn = find_and_load_format_malware_review_verdict(_SCRIPTS)
+        format_fn = _load_format_via_cold_start(_SCRIPTS)
         result = format_fn("Verdict: benign\n\nDetails.")
         self.assertTrue(result.startswith("**Verdict: benign**"))
 
@@ -73,7 +82,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             script_dir = str(scripts.resolve())
             sys.path.insert(0, script_dir)
             try:
-                format_fn = load_format_malware_review_verdict(trusted)
+                format_fn = _load_format_via_cold_start(scripts, trusted)
             finally:
                 sys.path[:] = [p for p in sys.path if p != script_dir]
             result = format_fn("Verdict: benign\n\nDetails.")
@@ -90,7 +99,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
         )
         saved = {name: sys.modules.pop(name, None) for name in purge}
         try:
-            format_fn = load_format_malware_review_verdict(_CANONICAL)
+            format_fn = _load_format_via_cold_start(_SCRIPTS, _CANONICAL)
             result = format_fn("Verdict: benign\n\nDetails.")
             self.assertTrue(result.startswith("**Verdict: benign**"))
         finally:
@@ -101,32 +110,15 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                     sys.modules[name] = module
 
     def test_workflow_yaml_bootstrap_pattern_loads_formatter(self) -> None:
-        """Simulate dependency-cursor-review YAML: stdlib exec bootstrap, then load_loader_module."""
-        import importlib.util
-        import sys
-
+        """Cold-start spine matches combine: run_path cold_start → resolve_loader_bundle."""
         purge = (
             "trusted_formatter_loader",
             "trusted_formatter_loader_bootstrap",
-            "trusted_malware_verdict_formatter",
-            "malware_verdict_formatter",
-            "malware_verdict_patterns",
-            "malware_verdict_policy",
+            "script_dir_isolated_load",
         )
         saved = {name: sys.modules.pop(name, None) for name in purge}
         try:
-            script_dir = _SCRIPTS
-            bootstrap_path = script_dir / "trusted_formatter_loader_bootstrap.py"
-            loader_path = script_dir / "trusted_formatter_loader.py"
-            spec = importlib.util.spec_from_file_location(
-                "trusted_formatter_loader_bootstrap", bootstrap_path
-            )
-            self.assertIsNotNone(spec and spec.loader)
-            bootstrap = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = bootstrap
-            spec.loader.exec_module(bootstrap)
-            loader = bootstrap.load_loader_module(loader_path)
-            format_fn = loader.find_and_load_format_malware_review_verdict(script_dir)
+            format_fn = _load_format_via_cold_start(_SCRIPTS)
             result = format_fn("Verdict: benign\n\nDetails.")
             self.assertTrue(result.startswith("**Verdict: benign**"))
         finally:
@@ -138,33 +130,21 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
 
     def test_e03b8638_load_loader_module_without_primed_bootstrap(self) -> None:
         """Isolated loader exec must not ModuleNotFoundError on bootstrap import (Bugbot e03b8638)."""
-        import importlib.util
-
         with tempfile.TemporaryDirectory() as tmp:
             scripts = Path(tmp) / "scripts"
             scripts.mkdir()
-            for filename in (
-                "script_dir_isolated_load.py",
-                "companion_isolated_exec.py",
-                "trusted_formatter_loader.py",
-                "trusted_formatter_loader_bootstrap.py",
-            ):
-                src = (_SCRIPTS / filename).read_text(encoding="utf-8")
-                (scripts / filename).write_text(src, encoding="utf-8")
-            purge = ("trusted_formatter_loader", "trusted_formatter_loader_bootstrap")
+            _copy_formatter_bundle(scripts)
+            purge = (
+                "trusted_formatter_loader",
+                "trusted_formatter_loader_bootstrap",
+                "script_dir_isolated_load",
+            )
             saved = {name: sys.modules.pop(name, None) for name in purge}
             try:
-                spec = importlib.util.spec_from_file_location(
-                    "trusted_formatter_loader_bootstrap",
-                    scripts / "trusted_formatter_loader_bootstrap.py",
+                ns = runpy.run_path(
+                    str(scripts / "trusted_formatter_loader_cold_start.py")
                 )
-                self.assertIsNotNone(spec and spec.loader)
-                bootstrap_mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(bootstrap_mod)
-                self.assertNotIn("trusted_formatter_loader_bootstrap", sys.modules)
-                loader = bootstrap_mod.load_loader_module(
-                    scripts / "trusted_formatter_loader.py"
-                )
+                loader = ns["resolve_loader_for_dir"](scripts)
                 self.assertIn("trusted_formatter_loader_bootstrap", sys.modules)
                 self.assertTrue(hasattr(loader, "find_and_load_format_malware_review_verdict"))
             finally:
@@ -178,26 +158,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             scripts = Path(tmp) / "scripts"
             scripts.mkdir()
-            loader_src = _CANONICAL_LOADER.read_text(encoding="utf-8")
-            bootstrap_src = (_SCRIPTS / "trusted_formatter_loader_bootstrap.py").read_text(
-                encoding="utf-8"
-            )
-            companion_src = (_SCRIPTS / "companion_isolated_exec.py").read_text(
-                encoding="utf-8"
-            )
-            util_src = (_SCRIPTS / "script_dir_isolated_load.py").read_text(
-                encoding="utf-8"
-            )
-            (scripts / "trusted_formatter_loader.py").write_text(loader_src, encoding="utf-8")
-            (scripts / "trusted_formatter_loader_bootstrap.py").write_text(
-                bootstrap_src, encoding="utf-8"
-            )
-            (scripts / "companion_isolated_exec.py").write_text(
-                companion_src, encoding="utf-8"
-            )
-            (scripts / "script_dir_isolated_load.py").write_text(
-                util_src, encoding="utf-8"
-            )
+            _copy_formatter_bundle(scripts)
             (scripts / "importlib.py").write_text(
                 "raise RuntimeError('untrusted importlib shadow')\n",
                 encoding="utf-8",
@@ -207,17 +168,10 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             purge = ("trusted_formatter_loader", "trusted_formatter_loader_bootstrap")
             saved = {name: sys.modules.pop(name, None) for name in purge}
             try:
-                import importlib.util
-
-                spec = importlib.util.spec_from_file_location(
-                    "trusted_formatter_loader_bootstrap",
-                    scripts / "trusted_formatter_loader_bootstrap.py",
+                ns = runpy.run_path(
+                    str(scripts / "trusted_formatter_loader_cold_start.py")
                 )
-                bootstrap_mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(bootstrap_mod)
-                module = bootstrap_mod.load_loader_module(
-                    scripts / "trusted_formatter_loader.py"
-                )
+                module = ns["resolve_loader_for_dir"](scripts)
                 self.assertTrue(hasattr(module, "find_and_load_format_malware_review_verdict"))
             finally:
                 sys.path[:] = [p for p in sys.path if p != script_dir]
@@ -242,7 +196,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             trusted = scripts / "malware_verdict_formatter.py"
             trusted.write_text(_CANONICAL.read_text(encoding="utf-8"), encoding="utf-8")
             _copy_formatter_bundle(scripts)
-            format_fn = load_format_malware_review_verdict(trusted)
+            format_fn = _load_format_via_cold_start(scripts, trusted)
             result = format_fn("Verdict: benign\n\nDetails.")
             self.assertTrue(result.startswith("**Verdict: benign**"))
             self.assertNotIn("hijacked", result)

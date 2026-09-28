@@ -23,11 +23,9 @@ class ThermoJudo8Test(unittest.TestCase):
         combine = (_SCRIPTS / "dependency_cursor_review_combine_outputs.py").read_text(
             encoding="utf-8"
         )
-        trusted = (_SCRIPTS / "dependency_cursor_review_trusted_loader.py").read_text(
-            encoding="utf-8"
-        )
         self.assertNotIn("def _exec_module_isolated", combine)
-        self.assertNotIn("def _exec_module_isolated", trusted)
+        self.assertIn("runpy.run_path", combine)
+        self.assertIn("resolve_loader_bundle", combine)
         companion_src = (_SCRIPTS / "companion_isolated_exec.py").read_text(
             encoding="utf-8"
         )
@@ -37,9 +35,13 @@ class ThermoJudo8Test(unittest.TestCase):
         cold_src = (
             _SCRIPTS / "trusted_formatter_loader_cold_start.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("resolve_loader_module", cold_src)
+        self.assertIn("resolve_loader_bundle", cold_src)
         self.assertNotIn("resolve_trusted_formatter_loader_module", util_src)
+        self.assertNotIn("_exec_bootstrap", cold_src)
         self.assertIn("load_module_isolated", util_src)
+        self.assertFalse(
+            (_SCRIPTS / "dependency_cursor_review_trusted_loader.py").exists()
+        )
 
     def test_policy_split_semantics_and_module_size_caps(self) -> None:
         deploy = (_SCRIPTS / "malware_verdict_policy.py").read_text(encoding="utf-8")
@@ -50,6 +52,7 @@ class ThermoJudo8Test(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("format_verdict_text", deploy)
+        self.assertNotIn("from malware_verdict_policy_analysis import", deploy.split("def format_verdict_text")[0])
         self.assertIn("class VerdictAnalysis", analysis)
         self.assertIn("_OFFICIAL_SELECT_PIPELINE", select)
         self.assertNotIn("from malware_verdict_classification import", deploy)

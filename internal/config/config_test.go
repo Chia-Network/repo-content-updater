@@ -26,7 +26,6 @@ func dependencyCursorReviewCompanionFiles() []string {
 		"upstream-malware-scan",
 		"dependency-cursor-review-prompts",
 		"dependency-cursor-review-combine-outputs",
-		"dependency-cursor-review-trusted-loader",
 		"dependency-cursor-review-dependabot-context",
 		"dependency-cursor-review-post-comment",
 		"upstream-malware-scan-lib",
@@ -52,7 +51,6 @@ func TestConfigIsValid(t *testing.T) {
 		"upstream-malware-scan",
 		"dependency-cursor-review-prompts",
 		"dependency-cursor-review-combine-outputs",
-		"dependency-cursor-review-trusted-loader",
 	} {
 		assert.Contains(t, dcrGroup, required)
 	}
