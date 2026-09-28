@@ -108,6 +108,7 @@ jobs:
             .github/scripts/malware_verdict_classification.py
             .github/scripts/malware_verdict_precedence.py
             .github/scripts/trusted_formatter_loader.py
+            .github/scripts/trusted_formatter_loader_bootstrap.py
 
       - name: Install Cursor CLI
         shell: bash
@@ -958,22 +959,40 @@ jobs:
           from pathlib import Path
 
           def _load_trusted_formatter_loader():
+            import importlib.util
+            import sys
+
+            def _exec_module_isolated(script_path: Path, module_name: str):
+              spec = importlib.util.spec_from_file_location(module_name, script_path)
+              if spec is None or spec.loader is None:
+                raise RuntimeError(f"Could not load module spec from {script_path}")
+              module = importlib.util.module_from_spec(spec)
+              script_dir = str(script_path.resolve().parent)
+              saved_path = sys.path.copy()
+              try:
+                sys.path = [entry for entry in sys.path if entry != script_dir]
+                spec.loader.exec_module(module)
+              finally:
+                sys.path[:] = saved_path
+              return module
+
             for script_dir in (
               Path(".github/scripts"),
               Path("internal/workflowscripts"),
             ):
               loader_path = script_dir / "trusted_formatter_loader.py"
+              bootstrap_path = script_dir / "trusted_formatter_loader_bootstrap.py"
               if not loader_path.is_file():
                 continue
-              spec = importlib.util.spec_from_file_location(
-                "_trusted_loader_entry",
-                loader_path,
+              if not bootstrap_path.is_file():
+                raise RuntimeError(
+                  f"Missing {bootstrap_path}. "
+                  "Run repo-content-updater managed-files for dependency-cursor-review."
+                )
+              bootstrap = _exec_module_isolated(
+                bootstrap_path, "trusted_formatter_loader_bootstrap"
               )
-              if spec is None or spec.loader is None:
-                raise RuntimeError(f"Could not load module spec from {loader_path}")
-              entry = importlib.util.module_from_spec(spec)
-              spec.loader.exec_module(entry)
-              return entry.load_loader_module(loader_path)
+              return bootstrap.load_loader_module(loader_path)
             raise RuntimeError(
               "trusted_formatter_loader.py not found under .github/scripts/. "
               "Run repo-content-updater managed-files for dependency-cursor-review."

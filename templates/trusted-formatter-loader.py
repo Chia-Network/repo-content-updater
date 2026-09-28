@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-import importlib.machinery
-import importlib.util
 import sys
 import types
 from collections.abc import Callable
 from pathlib import Path
+
+from trusted_formatter_loader_bootstrap import (
+    exec_module_isolated_from_scripts_dir,
+    load_loader_module,
+)
 
 TRUSTED_FORMATTER_MODULE_NAME = "trusted_malware_verdict_formatter"
 
@@ -23,27 +26,12 @@ FORMATTER_SIBLING_MODULE_STEMS = (
 # malware_verdict_formatter directly from an empty sys.modules.
 
 
-def exec_module_isolated_from_scripts_dir(
-    spec: importlib.machinery.ModuleSpec,
-    module: types.ModuleType,
-    script_path: Path,
-) -> None:
-    """Run module exec with the script directory removed from sys.path."""
-    if spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {script_path}")
-    script_dir = str(script_path.resolve().parent)
-    saved_path = sys.path.copy()
-    try:
-        sys.path = [entry for entry in sys.path if entry != script_dir]
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = saved_path
-
-
 def import_module_from_trusted_script(
     script_path: Path,
     module_name: str | None = None,
 ) -> types.ModuleType:
+    import importlib.util
+
     script_path = script_path.resolve()
     name = module_name or f"trusted_script_{script_path.stem}"
     spec = importlib.util.spec_from_file_location(name, script_path)
@@ -53,12 +41,6 @@ def import_module_from_trusted_script(
     sys.modules[spec.name] = module
     exec_module_isolated_from_scripts_dir(spec, module, script_path)
     return module
-
-
-def load_loader_module(loader_path: Path) -> types.ModuleType:
-    """Load trusted_formatter_loader from disk with scripts-dir isolation."""
-    loader_path = loader_path.resolve()
-    return import_module_from_trusted_script(loader_path, "trusted_formatter_loader")
 
 
 def ensure_formatter_sibling_modules(script_dir: Path) -> None:

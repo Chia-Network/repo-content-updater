@@ -47,6 +47,9 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         )
         self.assertIn(".github/scripts/malware_verdict_formatter.py", ensure_bundle)
         self.assertIn(".github/scripts/trusted_formatter_loader.py", ensure_bundle)
+        self.assertIn(
+            ".github/scripts/trusted_formatter_loader_bootstrap.py", ensure_bundle
+        )
         self.assertIn("paths: |", ensure_bundle)
         self.assertLess(
             section.index("Install trusted git path checkout action definition"),
@@ -67,8 +70,9 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("_import_module_from_trusted_script", formatter_block)
         self.assertNotIn("_exec_module_isolated_from_scripts_dir", formatter_block)
         self.assertNotIn("sys.path.insert(0,", formatter_block)
-        self.assertNotIn("saved_path", formatter_block)
         self.assertIn("load_loader_module(loader_path)", formatter_block)
+        self.assertNotIn("_trusted_loader_entry", formatter_block)
+        self.assertIn("trusted_formatter_loader_bootstrap.py", formatter_block)
 
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
         self.assertTrue(_TRUSTED_GIT_CHECKOUT_ACTION.is_file())

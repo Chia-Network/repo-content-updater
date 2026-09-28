@@ -31,6 +31,7 @@ groups:
       - malware-verdict-classification
       - malware-verdict-precedence
       - trusted-formatter-loader
+      - trusted-formatter-loader-bootstrap
       - trusted-git-path-checkout-action
 
 files:
@@ -51,6 +52,7 @@ files:
       - malware-verdict-classification
       - malware-verdict-precedence
       - trusted-formatter-loader
+      - trusted-formatter-loader-bootstrap
       - trusted-git-path-checkout-action
     alternate_paths:
       - .github/workflows/dependabot-cursor-review.yaml
@@ -80,6 +82,10 @@ files:
   - name: trusted-formatter-loader
     template_name: trusted-formatter-loader.py
     repo_path: .github/scripts/trusted_formatter_loader.py
+
+  - name: trusted-formatter-loader-bootstrap
+    template_name: trusted-formatter-loader-bootstrap.py
+    repo_path: .github/scripts/trusted_formatter_loader_bootstrap.py
 
   - name: dep-review
     template_name: dependency-review.yml
