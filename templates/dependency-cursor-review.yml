@@ -97,40 +97,17 @@ jobs:
             exit 1
           fi
 
-      - name: Ensure malware verdict formatter script
+      - name: Ensure malware verdict formatter bundle
         uses: ./.github/actions/trusted-git-path-checkout
         with:
           token: ${{`{{ github.token }}`}}
           ref: ${{`{{ github.event.repository.default_branch }}`}}
-          path: .github/scripts/malware_verdict_formatter.py
-
-      - name: Ensure malware verdict formatter patterns module
-        uses: ./.github/actions/trusted-git-path-checkout
-        with:
-          token: ${{`{{ github.token }}`}}
-          ref: ${{`{{ github.event.repository.default_branch }}`}}
-          path: .github/scripts/malware_verdict_patterns.py
-
-      - name: Ensure malware verdict formatter classification module
-        uses: ./.github/actions/trusted-git-path-checkout
-        with:
-          token: ${{`{{ github.token }}`}}
-          ref: ${{`{{ github.event.repository.default_branch }}`}}
-          path: .github/scripts/malware_verdict_classification.py
-
-      - name: Ensure malware verdict formatter precedence module
-        uses: ./.github/actions/trusted-git-path-checkout
-        with:
-          token: ${{`{{ github.token }}`}}
-          ref: ${{`{{ github.event.repository.default_branch }}`}}
-          path: .github/scripts/malware_verdict_precedence.py
-
-      - name: Ensure trusted formatter loader script
-        uses: ./.github/actions/trusted-git-path-checkout
-        with:
-          token: ${{`{{ github.token }}`}}
-          ref: ${{`{{ github.event.repository.default_branch }}`}}
-          path: .github/scripts/trusted_formatter_loader.py
+          paths: |
+            .github/scripts/malware_verdict_formatter.py
+            .github/scripts/malware_verdict_patterns.py
+            .github/scripts/malware_verdict_classification.py
+            .github/scripts/malware_verdict_precedence.py
+            .github/scripts/trusted_formatter_loader.py
 
       - name: Install Cursor CLI
         shell: bash
@@ -980,49 +957,33 @@ jobs:
           import sys
           from pathlib import Path
 
-          # Never sys.path.insert scripts dirs; match trusted_formatter_loader isolation.
-          def _exec_module_isolated_from_scripts_dir(spec, module, script_path):
-            if spec.loader is None:
-              raise RuntimeError(f"Could not load module spec from {script_path}")
-            script_dir = str(Path(script_path).resolve().parent)
-            saved_path = sys.path.copy()
-            try:
-              sys.path = [entry for entry in sys.path if entry != script_dir]
-              spec.loader.exec_module(module)
-            finally:
-              sys.path[:] = saved_path
-
-          def _import_module_from_trusted_script(script_path, module_name):
-            spec = importlib.util.spec_from_file_location(module_name, script_path)
-            if spec is None or spec.loader is None:
-              raise RuntimeError(f"Could not load module spec from {script_path}")
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = module
-            _exec_module_isolated_from_scripts_dir(spec, module, script_path)
-            return module
-
-          def _load_trusted_malware_verdict_formatter():
-            for _script_dir in (
+          def _load_trusted_formatter_loader():
+            for script_dir in (
               Path(".github/scripts"),
               Path("internal/workflowscripts"),
             ):
-              loader_path = (_script_dir / "trusted_formatter_loader.py").resolve()
-              formatter_path = (_script_dir / "malware_verdict_formatter.py").resolve()
-              if not loader_path.is_file() or not formatter_path.is_file():
-                continue
-              loader_mod = _import_module_from_trusted_script(
-                loader_path,
-                "trusted_formatter_loader",
-              )
-              return loader_mod.load_format_malware_review_verdict(formatter_path)
+              loader_path = script_dir / "trusted_formatter_loader.py"
+              if loader_path.is_file():
+                spec = importlib.util.spec_from_file_location(
+                  "trusted_formatter_loader",
+                  loader_path,
+                )
+                if spec is None or spec.loader is None:
+                  raise RuntimeError(f"Could not load module spec from {loader_path}")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                sys.modules[spec.name] = module
+                return module
             raise RuntimeError(
-              "malware_verdict_formatter.py and trusted_formatter_loader.py not found "
-              "under .github/scripts/. Run repo-content-updater managed-files for "
-              "dependency-cursor-review (companion_files include malware-verdict-formatter "
-              "and trusted-formatter-loader) or use group:dependency-cursor-review."
+              "trusted_formatter_loader.py not found under .github/scripts/. "
+              "Run repo-content-updater managed-files for dependency-cursor-review."
             )
 
-          format_malware_review_verdict = _load_trusted_malware_verdict_formatter()
+          _loader = _load_trusted_formatter_loader()
+          format_malware_review_verdict = _loader.find_and_load_format_malware_review_verdict(
+            Path(".github/scripts"),
+            Path("internal/workflowscripts"),
+          )
 
           def load_any(path):
             try:
