@@ -89,6 +89,22 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn("dependency-cursor-review-dependabot-context.js", workflow)
         self.assertIn("dependency-cursor-review-target-pr.js", workflow)
 
+    def test_5dd16704_target_pr_sparse_helper_does_not_shrink_pr_checkout(self) -> None:
+        """Bugbot 5dd16704: sparse helper checkout must not leave GITHUB_WORKSPACE sparse for PR head."""
+        workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
+        helper_block = workflow.split("Checkout trusted target-PR helper", 1)[1].split(
+            "Resolve target PR context", 1
+        )[0]
+        self.assertIn("path: .trusted-dcr-helper", helper_block)
+        self.assertIn(
+            ".trusted-dcr-helper/.github/scripts/dependency-cursor-review-target-pr.js",
+            workflow,
+        )
+        pr_block = workflow.split("Checkout repository", 1)[1].split(
+            "Install trusted git path checkout action definition", 1
+        )[0]
+        self.assertIn("sparse-checkout: disable", pr_block)
+
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
         self.assertTrue(_TRUSTED_GIT_CHECKOUT_ACTION.is_file())
         action = _TRUSTED_GIT_CHECKOUT_ACTION.read_text(encoding="utf-8")
