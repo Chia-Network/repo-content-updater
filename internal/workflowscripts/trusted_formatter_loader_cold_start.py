@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import runpy
 import sys
 import types
 from pathlib import Path
@@ -21,8 +20,8 @@ _BUNDLE_MARKERS = (
 )
 
 
-def register_util_from_disk(script_dir: Path) -> types.ModuleType:
-    """Scrubbed first exec of script_dir_isolated_load (only cold-start util registration)."""
+def _registered_util(script_dir: Path) -> types.ModuleType:
+    """Bootstrap util under -I, then delegate to register_util_from_scripts_dir."""
     script_dir = script_dir.resolve()
     path = script_dir / f"{_UTIL_NAME}.py"
     existing = sys.modules.get(_UTIL_NAME)
@@ -37,19 +36,19 @@ def register_util_from_disk(script_dir: Path) -> types.ModuleType:
         raise RuntimeError(f"Could not load module spec from {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[_UTIL_NAME] = module
-    script_dir_str = str(path.parent)
+    script_dir_str = str(script_dir)
     saved_path = sys.path.copy()
     try:
         sys.path = [entry for entry in sys.path if entry != script_dir_str]
         spec.loader.exec_module(module)
     finally:
         sys.path[:] = saved_path
-    return module
+    return module.register_util_from_scripts_dir(script_dir)
 
 
 def resolve_loader_for_dir(script_dir: Path) -> types.ModuleType:
     """Return trusted_formatter_loader via script_dir_isolated_load (isolated graph)."""
-    util = register_util_from_disk(script_dir)
+    util = _registered_util(script_dir)
     return util.resolve_trusted_formatter_loader_for_dir(script_dir.resolve())
 
 
@@ -66,11 +65,3 @@ def resolve_loader_bundle(
         "trusted_formatter_loader.py not found under .github/scripts/. "
         "Run repo-content-updater managed-files for dependency-cursor-review."
     )
-
-
-def run_host_namespace(install_dir: Path) -> dict[str, object]:
-    """Canonical python3 -I host entry: run_path this module from install_dir."""
-    path = install_dir.resolve() / "trusted_formatter_loader_cold_start.py"
-    if not path.is_file():
-        raise RuntimeError(f"Missing {path}")
-    return runpy.run_path(str(path))

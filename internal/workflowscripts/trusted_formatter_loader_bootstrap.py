@@ -18,13 +18,6 @@ def _require_util():
     return util
 
 
-def prime_companion_isolated_exec(script_dir: Path) -> types.ModuleType:
-    """Load companion_isolated_exec before import-by-name works (python3 -I / scrubbed path)."""
-    util = _require_util()
-    path = script_dir.resolve() / "companion_isolated_exec.py"
-    return util.load_module_isolated(path, "companion_isolated_exec")
-
-
 def import_bootstrap_module(bootstrap_path: Path) -> types.ModuleType:
     """Load this bootstrap module from disk with scripts-dir isolation."""
     bootstrap_path = bootstrap_path.resolve()
@@ -53,13 +46,3 @@ def load_loader_module(loader_path: Path) -> types.ModuleType:
     loader_path = loader_path.resolve()
     ensure_bootstrap_module_for_loader(loader_path)
     return _require_util().load_module_isolated(loader_path, "trusted_formatter_loader")
-
-
-def exec_companion_module(
-    script_path: Path, module_name: str | None = None
-) -> types.ModuleType:
-    """Re-export for workflow YAML that execs bootstrap then calls exec_companion_module."""
-    util = _require_util()
-    return util.load_module_isolated(
-        script_path.resolve(), module_name or f"companion_{script_path.stem}"
-    )

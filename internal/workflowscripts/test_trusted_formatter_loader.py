@@ -23,14 +23,12 @@ _LOADER_TEMPLATE = _REPO_ROOT / "templates" / "trusted-formatter-loader.py"
 _CANONICAL_LOADER = _SCRIPTS / "trusted_formatter_loader.py"
 _FORMATTER_BUNDLE = (
     "script_dir_isolated_load.py",
-    "companion_isolated_exec.py",
     "trusted_formatter_loader_bootstrap.py",
     "trusted_formatter_loader_cold_start.py",
     "trusted_formatter_loader.py",
     "malware_verdict_patterns.py",
     "malware_verdict_policy_types.py",
-    "malware_verdict_policy_select.py",
-    "malware_verdict_policy_strip.py",
+    "malware_verdict_policy_rules.py",
     "malware_verdict_policy_analysis.py",
     "malware_verdict_policy.py",
 )

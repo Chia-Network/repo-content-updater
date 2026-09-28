@@ -30,11 +30,9 @@ groups:
       - malware-verdict-patterns
       - malware-verdict-policy
       - malware-verdict-policy-types
-      - malware-verdict-policy-select
-      - malware-verdict-policy-strip
+      - malware-verdict-policy-rules
       - malware-verdict-policy-analysis
       - script-dir-isolated-load
-      - companion-isolated-exec
       - trusted-formatter-loader
       - trusted-formatter-loader-bootstrap
       - trusted-formatter-loader-cold-start
@@ -64,11 +62,9 @@ files:
       - malware-verdict-patterns
       - malware-verdict-policy
       - malware-verdict-policy-types
-      - malware-verdict-policy-select
-      - malware-verdict-policy-strip
+      - malware-verdict-policy-rules
       - malware-verdict-policy-analysis
       - script-dir-isolated-load
-      - companion-isolated-exec
       - trusted-formatter-loader
       - trusted-formatter-loader-bootstrap
       - trusted-formatter-loader-cold-start
@@ -105,13 +101,9 @@ files:
     template_name: malware-verdict-policy-types.py
     repo_path: .github/scripts/malware_verdict_policy_types.py
 
-  - name: malware-verdict-policy-select
-    template_name: malware-verdict-policy-select.py
-    repo_path: .github/scripts/malware_verdict_policy_select.py
-
-  - name: malware-verdict-policy-strip
-    template_name: malware-verdict-policy-strip.py
-    repo_path: .github/scripts/malware_verdict_policy_strip.py
+  - name: malware-verdict-policy-rules
+    template_name: malware-verdict-policy-rules.py
+    repo_path: .github/scripts/malware_verdict_policy_rules.py
 
   - name: malware-verdict-policy-analysis
     template_name: malware-verdict-policy-analysis.py
@@ -120,10 +112,6 @@ files:
   - name: script-dir-isolated-load
     template_name: script-dir-isolated-load.py
     repo_path: .github/scripts/script_dir_isolated_load.py
-
-  - name: companion-isolated-exec
-    template_name: companion-isolated-exec.py
-    repo_path: .github/scripts/companion_isolated_exec.py
 
   - name: trusted-formatter-loader
     template_name: trusted-formatter-loader.py

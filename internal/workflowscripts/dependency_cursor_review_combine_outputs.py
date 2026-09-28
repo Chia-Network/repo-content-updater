@@ -20,13 +20,6 @@ def _host_namespace() -> dict[str, object]:
     return runpy.run_path(str(_COLD_START_PATH))
 
 
-def _load_trusted_formatter_loader_module(base: Path):
-    """Resolve loader for one scripts directory (in-process / security tests)."""
-    ns = runpy.run_path(str(base / "trusted_formatter_loader_cold_start.py"))
-    resolve = ns["resolve_loader_for_dir"]
-    return resolve(base.resolve())
-
-
 def _load_any(path: str) -> dict:
     try:
         raw = Path(path).read_text(encoding="utf-8")

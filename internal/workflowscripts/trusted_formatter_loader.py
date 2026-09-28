@@ -10,12 +10,9 @@ from pathlib import Path
 TRUSTED_FORMATTER_MODULE_NAME = "trusted_malware_verdict_formatter"
 
 FORMATTER_SIBLING_MODULE_STEMS = (
-    "script_dir_isolated_load",
-    "companion_isolated_exec",
     "malware_verdict_patterns",
     "malware_verdict_policy_types",
-    "malware_verdict_policy_select",
-    "malware_verdict_policy_strip",
+    "malware_verdict_policy_rules",
     "malware_verdict_policy_analysis",
     "malware_verdict_policy",
 )

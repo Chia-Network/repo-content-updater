@@ -73,12 +73,9 @@ def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:
 
 
 def resolve_trusted_formatter_loader_for_dir(script_dir: Path) -> types.ModuleType:
-    """Isolated companion + bootstrap + loader + formatter sibling modules."""
+    """Isolated bootstrap + loader + formatter policy sibling modules."""
     script_dir = script_dir.resolve()
     util = register_util_from_scripts_dir(script_dir)
-    util.load_module_isolated(
-        script_dir / "companion_isolated_exec.py", "companion_isolated_exec"
-    )
     bootstrap = util.load_module_isolated(
         script_dir / "trusted_formatter_loader_bootstrap.py",
         "trusted_formatter_loader_bootstrap",

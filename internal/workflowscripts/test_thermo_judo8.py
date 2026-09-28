@@ -11,8 +11,7 @@ _SCRIPTS = Path(__file__).resolve().parent
 _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy.py", 120),
     ("malware_verdict_policy_types.py", 120),
-    ("malware_verdict_policy_select.py", 420),
-    ("malware_verdict_policy_strip.py", 420),
+    ("malware_verdict_policy_rules.py", 700),
     ("malware_verdict_policy_analysis.py", 420),
     ("malware_verdict_patterns.py", 520),
 )
@@ -26,35 +25,39 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertNotIn("def _exec_module_isolated", combine)
         self.assertIn("runpy.run_path", combine)
         self.assertIn("resolve_loader_bundle", combine)
-        companion_src = (_SCRIPTS / "companion_isolated_exec.py").read_text(
-            encoding="utf-8"
-        )
         util_src = (_SCRIPTS / "script_dir_isolated_load.py").read_text(encoding="utf-8")
-        self.assertIn("exec_module_scrubbing_script_dir", util_src)
-        self.assertIn("exec_module_scrubbing_script_dir", companion_src)
         cold_src = (
             _SCRIPTS / "trusted_formatter_loader_cold_start.py"
         ).read_text(encoding="utf-8")
+        self.assertIn("exec_module_scrubbing_script_dir", util_src)
         self.assertIn("resolve_loader_bundle", cold_src)
+        self.assertIn("register_util_from_scripts_dir", cold_src)
+        self.assertNotIn("register_util_from_disk", cold_src)
         self.assertNotIn("resolve_trusted_formatter_loader_module", util_src)
         self.assertNotIn("_exec_bootstrap", cold_src)
         self.assertIn("load_module_isolated", util_src)
         self.assertFalse(
             (_SCRIPTS / "dependency_cursor_review_trusted_loader.py").exists()
         )
+        self.assertFalse((_SCRIPTS / "companion_isolated_exec.py").exists())
 
     def test_policy_split_semantics_and_module_size_caps(self) -> None:
         deploy = (_SCRIPTS / "malware_verdict_policy.py").read_text(encoding="utf-8")
         analysis = (_SCRIPTS / "malware_verdict_policy_analysis.py").read_text(
             encoding="utf-8"
         )
-        select = (_SCRIPTS / "malware_verdict_policy_select.py").read_text(
+        rules = (_SCRIPTS / "malware_verdict_policy_rules.py").read_text(
             encoding="utf-8"
         )
         self.assertIn("format_verdict_text", deploy)
-        self.assertNotIn("from malware_verdict_policy_analysis import", deploy.split("def format_verdict_text")[0])
+        self.assertNotIn(
+            "from malware_verdict_policy_analysis import",
+            deploy.split("def format_verdict_text")[0],
+        )
         self.assertIn("class VerdictAnalysis", analysis)
-        self.assertIn("_OFFICIAL_SELECT_PIPELINE", select)
+        self.assertIn("_OFFICIAL_SELECT_PIPELINE", rules)
+        self.assertIn("_BODY_STRIP_RULES", rules)
+        self.assertIn("OfficialSelectionContext", rules)
         self.assertNotIn("from malware_verdict_classification import", deploy)
         for filename, max_lines in _POLICY_MODULE_BOUNDS:
             path = _SCRIPTS / filename
@@ -69,6 +72,8 @@ class ThermoJudo8Test(unittest.TestCase):
     def test_shim_modules_not_present_in_workflowscripts(self) -> None:
         self.assertFalse((_SCRIPTS / "malware_verdict_classification.py").exists())
         self.assertFalse((_SCRIPTS / "malware_verdict_precedence.py").exists())
+        self.assertFalse((_SCRIPTS / "malware_verdict_policy_select.py").exists())
+        self.assertFalse((_SCRIPTS / "malware_verdict_policy_strip.py").exists())
 
     def test_generated_companion_mirrors_gitignored(self) -> None:
         gitignore = (_REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
@@ -76,7 +81,6 @@ class ThermoJudo8Test(unittest.TestCase):
             "templates/dependency-cursor-review-*.py",
             "templates/dependency-cursor-review-*.js",
             "templates/upstream-malware-scan*.sh",
-            "templates/companion-isolated-exec.py",
             "templates/script-dir-isolated-load.py",
         ):
             self.assertIn(pattern, gitignore)

@@ -47,7 +47,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         )
         self.assertIn(".github/scripts/malware_verdict_formatter.py", ensure_bundle)
         self.assertIn(".github/scripts/malware_verdict_policy.py", ensure_bundle)
-        self.assertIn(".github/scripts/companion_isolated_exec.py", ensure_bundle)
+        self.assertIn(".github/scripts/malware_verdict_policy_rules.py", ensure_bundle)
         self.assertIn(".github/scripts/trusted_formatter_loader.py", ensure_bundle)
         self.assertIn(
             ".github/scripts/trusted_formatter_loader_bootstrap.py", ensure_bundle
