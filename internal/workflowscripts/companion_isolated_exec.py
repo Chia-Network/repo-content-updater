@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.machinery
 import importlib.util
 import sys
 import types
@@ -10,20 +9,17 @@ from pathlib import Path
 
 
 def exec_module_isolated_from_scripts_dir(
-    spec: importlib.machinery.ModuleSpec,
+    spec: importlib.util.ModuleSpec,
     module: types.ModuleType,
     script_path: Path,
 ) -> None:
-    """Run module exec with the script directory removed from sys.path."""
-    if spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {script_path}")
-    script_dir = str(script_path.resolve().parent)
-    saved_path = sys.path.copy()
-    try:
-        sys.path = [entry for entry in sys.path if entry != script_dir]
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = saved_path
+    """Thin alias: scrub + exec via script_dir_isolated_load."""
+    util = sys.modules.get("script_dir_isolated_load")
+    if util is None:
+        raise RuntimeError(
+            "script_dir_isolated_load must be registered before companion exec"
+        )
+    util.exec_module_scrubbing_script_dir(spec, module, script_path)
 
 
 def exec_companion_module(
@@ -31,15 +27,14 @@ def exec_companion_module(
     module_name: str | None = None,
 ) -> types.ModuleType:
     """Load a workflow companion module with its directory scrubbed from sys.path."""
+    util = sys.modules.get("script_dir_isolated_load")
+    if util is None:
+        raise RuntimeError(
+            "script_dir_isolated_load must be registered before exec_companion_module"
+        )
     script_path = script_path.resolve()
     name = module_name or f"companion_{script_path.stem}"
-    spec = importlib.util.spec_from_file_location(name, script_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {script_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    exec_module_isolated_from_scripts_dir(spec, module, script_path)
-    return module
+    return util.load_module_isolated(script_path, name)
 
 
 def ensure_companion_isolated_exec(script_dir: Path) -> types.ModuleType:

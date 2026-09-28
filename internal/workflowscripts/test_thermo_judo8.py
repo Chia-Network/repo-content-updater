@@ -28,14 +28,14 @@ class ThermoJudo8Test(unittest.TestCase):
         )
         self.assertNotIn("def _exec_module_isolated", combine)
         self.assertNotIn("def _exec_module_isolated", trusted)
-        self.assertIn(
-            "exec_module_isolated_from_scripts_dir",
-            (_SCRIPTS / "companion_isolated_exec.py").read_text(encoding="utf-8"),
+        companion_src = (_SCRIPTS / "companion_isolated_exec.py").read_text(
+            encoding="utf-8"
         )
-        self.assertIn(
-            "load_module_isolated",
-            (_SCRIPTS / "script_dir_isolated_load.py").read_text(encoding="utf-8"),
-        )
+        util_src = (_SCRIPTS / "script_dir_isolated_load.py").read_text(encoding="utf-8")
+        self.assertIn("exec_module_scrubbing_script_dir", util_src)
+        self.assertIn("exec_module_scrubbing_script_dir", companion_src)
+        self.assertIn("resolve_trusted_formatter_loader_module", util_src)
+        self.assertIn("load_module_isolated", util_src)
 
     def test_policy_split_semantics_and_module_size_caps(self) -> None:
         deploy = (_SCRIPTS / "malware_verdict_policy.py").read_text(encoding="utf-8")

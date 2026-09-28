@@ -91,9 +91,9 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             / "workflowscripts"
             / "dependency_cursor_review_trusted_loader.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("_load_trusted_formatter_loader_module", combine)
-        self.assertIn("load_trusted_formatter_loader_module", combine)
+        self.assertIn("resolve_trusted_formatter_loader_for_dir", combine)
         self.assertIn("resolve_trusted_formatter_loader_module", trusted_loader)
+        self.assertNotIn("def _load_util", combine)
         self.assertNotIn("_bootstrap_module_for", combine)
         self.assertIn("dependency-cursor-review-dependabot-context.js", workflow)
 

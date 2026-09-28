@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import types
 from collections.abc import Callable
@@ -23,59 +24,40 @@ FORMATTER_SIBLING_MODULE_STEMS = (
 _FORMATTER_ENV_PRIMED: set[Path] = set()
 
 
-def _load_script_dir_isolated_util(script_dir: Path):
-    import importlib.util
-
-    script_dir = script_dir.resolve()
-    name = "script_dir_isolated_load"
-    path = script_dir / f"{name}.py"
-    existing = sys.modules.get(name)
-    if existing is not None:
-        existing_file = getattr(existing, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == path.resolve():
-            return existing
-    spec = importlib.util.spec_from_file_location(name, path)
+def _util(script_dir: Path):
+    parent = script_dir.resolve()
+    boot_name = "trusted_formatter_loader_bootstrap"
+    boot_path = parent / "trusted_formatter_loader_bootstrap.py"
+    boot = sys.modules.get(boot_name)
+    if boot is not None:
+        boot_file = getattr(boot, "__file__", None)
+        if boot_file and Path(boot_file).resolve() == boot_path.resolve():
+            return boot.cold_start_util(parent)
+    if not boot_path.is_file():
+        raise RuntimeError(f"Missing {boot_path}")
+    spec = importlib.util.spec_from_file_location(boot_name, boot_path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Missing or invalid {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _companion_api(script_dir: Path):
-    util = _load_script_dir_isolated_util(script_dir)
-    companion_path = script_dir.resolve() / "companion_isolated_exec.py"
-    companion = util.load_module_isolated(companion_path, "companion_isolated_exec")
-    return (
-        companion.exec_companion_module,
-        companion.exec_module_isolated_from_scripts_dir,
-    )
+        raise RuntimeError(f"Could not load module spec from {boot_path}")
+    boot = importlib.util.module_from_spec(spec)
+    sys.modules[boot_name] = boot
+    spec.loader.exec_module(boot)
+    return boot.cold_start_util(parent)
 
 
 def import_module_from_trusted_script(
     script_path: Path,
     module_name: str | None = None,
 ) -> types.ModuleType:
-    import importlib.util
-
     script_path = script_path.resolve()
     name = module_name or f"trusted_script_{script_path.stem}"
-    _, exec_module_isolated_from_scripts_dir = _companion_api(script_path.parent)
-    spec = importlib.util.spec_from_file_location(name, script_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {script_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    exec_module_isolated_from_scripts_dir(spec, module, script_path)
-    return module
+    util = _util(script_path.parent)
+    return util.load_module_isolated(script_path, name)
 
 
 def ensure_formatter_sibling_modules(script_dir: Path) -> None:
     """Load co-located formatter modules with scripts-dir isolation."""
     parent = script_dir.resolve()
-    _load_script_dir_isolated_util(parent)
-    _companion_api(parent)
+    _util(parent)
     for stem in FORMATTER_SIBLING_MODULE_STEMS:
         mod_name = stem
         existing = sys.modules.get(mod_name)
@@ -94,8 +76,7 @@ def prime_formatter_environment(script_dir: Path) -> None:
     parent = script_dir.resolve()
     if parent in _FORMATTER_ENV_PRIMED:
         return
-    util = _load_script_dir_isolated_util(parent)
-    _companion_api(parent)
+    util = _util(parent)
     bootstrap_path = parent / "trusted_formatter_loader_bootstrap.py"
     existing = sys.modules.get("trusted_formatter_loader_bootstrap")
     if existing is not None:
