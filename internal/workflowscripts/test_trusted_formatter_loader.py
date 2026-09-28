@@ -118,25 +118,82 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                 else:
                     sys.modules[name] = module
 
+    def test_e03b8638_load_loader_module_without_primed_bootstrap(self) -> None:
+        """Isolated loader exec must not ModuleNotFoundError on bootstrap import (Bugbot e03b8638)."""
+        import importlib.util
+
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts = Path(tmp) / "scripts"
+            scripts.mkdir()
+            for filename in (
+                "trusted_formatter_loader.py",
+                "trusted_formatter_loader_bootstrap.py",
+            ):
+                src = (_SCRIPTS / filename).read_text(encoding="utf-8")
+                (scripts / filename).write_text(src, encoding="utf-8")
+            purge = ("trusted_formatter_loader", "trusted_formatter_loader_bootstrap")
+            saved = {name: sys.modules.pop(name, None) for name in purge}
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    "trusted_formatter_loader_bootstrap",
+                    scripts / "trusted_formatter_loader_bootstrap.py",
+                )
+                self.assertIsNotNone(spec and spec.loader)
+                bootstrap_mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(bootstrap_mod)
+                self.assertNotIn("trusted_formatter_loader_bootstrap", sys.modules)
+                loader = bootstrap_mod.load_loader_module(
+                    scripts / "trusted_formatter_loader.py"
+                )
+                self.assertIn("trusted_formatter_loader_bootstrap", sys.modules)
+                self.assertTrue(hasattr(loader, "find_and_load_format_malware_review_verdict"))
+            finally:
+                for name, module in saved.items():
+                    if module is None:
+                        sys.modules.pop(name, None)
+                    else:
+                        sys.modules[name] = module
+
     def test_load_loader_module_scrubs_scripts_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scripts = Path(tmp) / "scripts"
             scripts.mkdir()
             loader_src = _CANONICAL_LOADER.read_text(encoding="utf-8")
+            bootstrap_src = (_SCRIPTS / "trusted_formatter_loader_bootstrap.py").read_text(
+                encoding="utf-8"
+            )
             (scripts / "trusted_formatter_loader.py").write_text(loader_src, encoding="utf-8")
+            (scripts / "trusted_formatter_loader_bootstrap.py").write_text(
+                bootstrap_src, encoding="utf-8"
+            )
             (scripts / "importlib.py").write_text(
                 "raise RuntimeError('untrusted importlib shadow')\n",
                 encoding="utf-8",
             )
             script_dir = str(scripts.resolve())
             sys.path.insert(0, script_dir)
+            purge = ("trusted_formatter_loader", "trusted_formatter_loader_bootstrap")
+            saved = {name: sys.modules.pop(name, None) for name in purge}
             try:
-                from trusted_formatter_loader import load_loader_module
+                import importlib.util
 
-                module = load_loader_module(scripts / "trusted_formatter_loader.py")
+                spec = importlib.util.spec_from_file_location(
+                    "trusted_formatter_loader_bootstrap",
+                    scripts / "trusted_formatter_loader_bootstrap.py",
+                )
+                bootstrap_mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(bootstrap_mod)
+                module = bootstrap_mod.load_loader_module(
+                    scripts / "trusted_formatter_loader.py"
+                )
                 self.assertTrue(hasattr(module, "find_and_load_format_malware_review_verdict"))
             finally:
                 sys.path[:] = [p for p in sys.path if p != script_dir]
+                for name, module in saved.items():
+                    if module is None:
+                        sys.modules.pop(name, None)
+                    else:
+                        sys.modules[name] = module
 
     def test_package_dir_beside_trusted_file_does_not_shadow_loader(self) -> None:
         """Bugbot c1bdce0b: PR-head package dir must not replace trusted .py import."""

@@ -30,9 +30,33 @@ def exec_module_isolated_from_scripts_dir(
         sys.path[:] = saved_path
 
 
+_BOOTSTRAP_MODULE_NAME = "trusted_formatter_loader_bootstrap"
+
+
+def ensure_bootstrap_module_for_loader(loader_path: Path) -> None:
+    """Register trusted_formatter_loader_bootstrap in sys.modules before isolated loader exec.
+
+    The loader imports bootstrap by name; with the scripts directory scrubbed from sys.path
+    that import only succeeds when bootstrap is already in sys.modules.
+    """
+    loader_path = loader_path.resolve()
+    bootstrap_path = loader_path.parent / "trusted_formatter_loader_bootstrap.py"
+    if not bootstrap_path.is_file():
+        raise RuntimeError(
+            f"Missing {bootstrap_path} beside trusted_formatter_loader.py"
+        )
+    existing = sys.modules.get(_BOOTSTRAP_MODULE_NAME)
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file and Path(existing_file).resolve() == bootstrap_path.resolve():
+            return
+    import_bootstrap_module(bootstrap_path)
+
+
 def load_loader_module(loader_path: Path) -> types.ModuleType:
     """Load trusted_formatter_loader from disk with scripts-dir isolation."""
     loader_path = loader_path.resolve()
+    ensure_bootstrap_module_for_loader(loader_path)
     spec = importlib.util.spec_from_file_location(
         "trusted_formatter_loader", loader_path
     )
@@ -67,5 +91,5 @@ def load_trusted_formatter_loader_module(script_dir: Path) -> types.ModuleType:
         raise RuntimeError(f"Missing {bootstrap_path}")
     if not loader_path.is_file():
         raise RuntimeError(f"Missing {loader_path}")
-    bootstrap = import_bootstrap_module(bootstrap_path)
-    return bootstrap.load_loader_module(loader_path)
+    import_bootstrap_module(bootstrap_path)
+    return load_loader_module(loader_path)
