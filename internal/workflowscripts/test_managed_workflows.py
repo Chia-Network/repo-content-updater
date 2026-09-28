@@ -77,7 +77,9 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             formatter_block,
         )
         self.assertNotIn("import malware_verdict_formatter", formatter_block)
+        self.assertIn("_exec_module_isolated_from_scripts_dir", formatter_block)
         self.assertIn("sys.path = [entry for entry in sys.path if entry != script_dir]", formatter_block)
+        self.assertNotIn("sys.path.insert(0,", formatter_block)
 
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
         self.assertTrue(_TRUSTED_GIT_CHECKOUT_ACTION.is_file())

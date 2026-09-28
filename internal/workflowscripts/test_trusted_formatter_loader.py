@@ -35,7 +35,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
     def test_trusted_module_name_is_fixed(self) -> None:
         self.assertEqual(TRUSTED_FORMATTER_MODULE_NAME, "trusted_malware_verdict_formatter")
 
-    def test_sep25_41480cc0_malicious_re_on_syspath_does_not_shadow_exec(self) -> None:
+    def test_sep28_734f385e_malicious_re_on_syspath_does_not_shadow_exec(self) -> None:
         """Scripts dir on sys.path must not intercept stdlib imports during trusted exec."""
         with tempfile.TemporaryDirectory() as tmp:
             scripts = Path(tmp) / "scripts"
