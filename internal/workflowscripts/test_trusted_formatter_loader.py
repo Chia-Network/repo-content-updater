@@ -22,12 +22,19 @@ _CANONICAL = _SCRIPTS / "malware_verdict_formatter.py"
 _LOADER_TEMPLATE = _REPO_ROOT / "templates" / "trusted-formatter-loader.py"
 _CANONICAL_LOADER = _SCRIPTS / "trusted_formatter_loader.py"
 _FORMATTER_BUNDLE = (
+    "isolated_module_exec.py",
     "script_dir_isolated_load.py",
     "trusted_formatter_loader_bootstrap.py",
     "trusted_formatter_loader_cold_start.py",
     "trusted_formatter_loader.py",
+    "malware_verdict_patterns_regex.py",
+    "malware_verdict_patterns_structure.py",
     "malware_verdict_patterns.py",
     "malware_verdict_policy_types.py",
+    "malware_verdict_policy_lexical.py",
+    "malware_verdict_policy_context.py",
+    "malware_verdict_policy_rules_select.py",
+    "malware_verdict_policy_rules_strip.py",
     "malware_verdict_policy_rules.py",
     "malware_verdict_policy_analysis.py",
     "malware_verdict_policy.py",
@@ -113,6 +120,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             "trusted_formatter_loader",
             "trusted_formatter_loader_bootstrap",
             "script_dir_isolated_load",
+    "isolated_module_exec.py",
         )
         saved = {name: sys.modules.pop(name, None) for name in purge}
         try:
@@ -136,6 +144,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                 "trusted_formatter_loader",
                 "trusted_formatter_loader_bootstrap",
                 "script_dir_isolated_load",
+    "isolated_module_exec.py",
             )
             saved = {name: sys.modules.pop(name, None) for name in purge}
             try:

@@ -13,10 +13,17 @@ func dependencyCursorReviewCompanionFiles() []string {
 		"dependency-cursor-review",
 		"malware-verdict-formatter",
 		"malware-verdict-patterns",
+		"malware-verdict-patterns-regex",
+		"malware-verdict-patterns-structure",
 		"malware-verdict-policy",
 		"malware-verdict-policy-types",
+		"malware-verdict-policy-lexical",
+		"malware-verdict-policy-context",
 		"malware-verdict-policy-rules",
+		"malware-verdict-policy-rules-select",
+		"malware-verdict-policy-rules-strip",
 		"malware-verdict-policy-analysis",
+		"isolated-module-exec",
 		"script-dir-isolated-load",
 		"trusted-formatter-loader",
 		"trusted-formatter-loader-bootstrap",
@@ -95,8 +102,6 @@ func TestEnsureCompanionFilesPairsWorkflowWithFormatter(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
 
-	// Simulates pre-#163 managed-files binaries that pass a flat file list without
-	// ExpandManagedFileEntries companion expansion.
 	finalized, err := cfg.EnsureCompanionFiles([]string{"dependency-cursor-review"})
 	assert.Nil(t, err)
 	expected := dependencyCursorReviewCompanionFiles()

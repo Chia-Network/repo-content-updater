@@ -13,13 +13,20 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent
 
 _BUNDLE = (
+    "isolated_module_exec.py",
     "script_dir_isolated_load.py",
     "trusted_formatter_loader_bootstrap.py",
     "trusted_formatter_loader_cold_start.py",
     "trusted_formatter_loader.py",
     "malware_verdict_formatter.py",
+    "malware_verdict_patterns_regex.py",
+    "malware_verdict_patterns_structure.py",
     "malware_verdict_patterns.py",
     "malware_verdict_policy_types.py",
+    "malware_verdict_policy_lexical.py",
+    "malware_verdict_policy_context.py",
+    "malware_verdict_policy_rules_select.py",
+    "malware_verdict_policy_rules_strip.py",
     "malware_verdict_policy_rules.py",
     "malware_verdict_policy_analysis.py",
     "malware_verdict_policy.py",
@@ -30,6 +37,7 @@ _BUNDLE = (
 class CompanionColdStartTest(unittest.TestCase):
     def test_3c948013_prime_formatter_without_preimported_companion(self) -> None:
         purge = (
+            "isolated_module_exec",
             "script_dir_isolated_load",
             "trusted_formatter_loader_bootstrap",
             "trusted_formatter_loader",
