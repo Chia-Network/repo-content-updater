@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,40 +10,19 @@ import (
 	"github.com/chia-network/repo-content-updater/internal/config"
 )
 
-func dependencyCursorReviewCompanionFiles() []string {
-	return []string{
-		"dependency-cursor-review",
-		"malware-verdict-formatter",
-		"malware-verdict-patterns",
-		"malware-verdict-patterns-regex",
-		"malware-verdict-patterns-structure",
-		"malware-verdict-policy",
-		"malware-verdict-policy-types",
-		"malware-verdict-policy-lexical",
-		"malware-verdict-policy-selection-context",
-		"malware-verdict-policy-context",
-		"module-exec-scrub",
-		"formatter-bundle-inventory",
-		"malware-verdict-policy-rules",
-		"malware-verdict-policy-rules-select",
-		"malware-verdict-policy-rules-strip",
-		"malware-verdict-policy-analysis",
-		"isolated-module-exec",
-		"script-dir-isolated-load",
-		"trusted-formatter-loader",
-		"trusted-formatter-loader-bootstrap",
-		"trusted-formatter-loader-cold-start",
-		"upstream-malware-scan",
-		"dependency-cursor-review-prompts",
-		"dependency-cursor-review-combine-outputs",
-		"dependency-cursor-review-dependabot-context",
-		"dependency-cursor-review-post-comment",
-		"dependency-cursor-review-target-pr",
-		"dependency-cursor-review-trusted-scripts",
-		"upstream-malware-scan-lib",
-		"upstream-malware-scan-findings",
-		"trusted-git-path-checkout-action",
+func dependencyCursorReviewCompanionFiles(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile("dcr_managed_companion_names.golden")
+	assert.Nil(t, err)
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
 	}
+	return out
 }
 
 func TestConfigIsValid(t *testing.T) {
@@ -75,13 +56,14 @@ func TestConfigIsValid(t *testing.T) {
 		assert.Contains(t, dcrGroup, required)
 	}
 
+	expected := dependencyCursorReviewCompanionFiles(t)
 	expanded, err := cfg.ExpandManagedFileEntries([]string{"dependency-cursor-review"})
 	assert.Nil(t, err)
-	assert.Equal(t, dependencyCursorReviewCompanionFiles(), expanded)
+	assert.Equal(t, expected, expanded)
 
 	groupExpanded, err := cfg.ExpandManagedFileEntries([]string{"group:dependency-cursor-review"})
 	assert.Nil(t, err)
-	assert.Equal(t, dependencyCursorReviewCompanionFiles(), groupExpanded)
+	assert.Equal(t, expected, groupExpanded)
 
 	mixed, err := cfg.ExpandManagedFileEntries([]string{"group:does-not-exist", "dependabot"})
 	assert.Nil(t, err)
@@ -92,6 +74,7 @@ func TestManagedFileAliasesAndPathsIncludeCompanions(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
 
+	expected := dependencyCursorReviewCompanionFiles(t)
 	for _, entry := range []string{
 		"dependabot-cursor-review",
 		".github/workflows/dependency-cursor-review.yml",
@@ -99,7 +82,7 @@ func TestManagedFileAliasesAndPathsIncludeCompanions(t *testing.T) {
 	} {
 		expanded, err := cfg.ExpandManagedFileEntries([]string{entry})
 		assert.Nil(t, err, entry)
-		assert.Equal(t, dependencyCursorReviewCompanionFiles(), expanded, entry)
+		assert.Equal(t, expected, expanded, entry)
 	}
 }
 
@@ -107,9 +90,9 @@ func TestEnsureCompanionFilesPairsWorkflowWithFormatter(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
 
+	expected := dependencyCursorReviewCompanionFiles(t)
 	finalized, err := cfg.EnsureCompanionFiles([]string{"dependency-cursor-review"})
 	assert.Nil(t, err)
-	expected := dependencyCursorReviewCompanionFiles()
 	assert.Equal(t, expected, finalized)
 
 	legacyFinalized, err := cfg.EnsureCompanionFiles([]string{"dependabot-cursor-review"})

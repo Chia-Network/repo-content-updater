@@ -8,17 +8,22 @@ from pathlib import Path
 
 from formatter_bundle_inventory import (
     DCR_COMBINE_TEST_BUNDLE,
+    DCR_EXPANDED_COMPANION_NAMES,
+    DCR_SYNC_EXTRA_FILENAMES,
     FORMATTER_COLD_START_TEST_BUNDLE,
     FORMATTER_RUNTIME_FILENAMES,
     FORMATTER_SIBLING_MODULE_STEMS,
     LOADER_RESOLVE_MARKER_FILENAMES,
+    SYNC_CANONICAL_TO_TEMPLATE,
     TRUSTED_DCR_SCRIPT_REPO_PATHS,
+    managed_formatter_sync_pairs,
 )
 import trusted_formatter_loader as trusted_loader
 import trusted_formatter_loader_cold_start as cold_start
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG = _REPO_ROOT / "config.yaml"
+_GOLDEN = _REPO_ROOT / "internal" / "config" / "dcr_managed_companion_names.golden"
 _MANAGED_FILE_PATH = re.compile(
     r"- name: ([^\n]+)\n(?:.*\n)*?    repo_path: ([^\n]+)",
     re.MULTILINE,
@@ -52,6 +57,34 @@ class FormatterBundleInventoryTest(unittest.TestCase):
         self.assertGreater(len(DCR_COMBINE_TEST_BUNDLE), len(FORMATTER_COLD_START_TEST_BUNDLE))
         for name in FORMATTER_COLD_START_TEST_BUNDLE:
             self.assertIn(name, DCR_COMBINE_TEST_BUNDLE)
+
+    def test_sync_canonical_keys_cover_runtime_and_dcr_extras(self) -> None:
+        synced = {canonical for canonical, _ in SYNC_CANONICAL_TO_TEMPLATE}
+        expected = set(FORMATTER_RUNTIME_FILENAMES) | set(DCR_SYNC_EXTRA_FILENAMES)
+        self.assertEqual(synced, expected)
+
+    def test_managed_formatter_sync_pairs_match_inventory(self) -> None:
+        expected = tuple(
+            (template, canonical) for canonical, template in SYNC_CANONICAL_TO_TEMPLATE
+        )
+        self.assertEqual(managed_formatter_sync_pairs(), expected)
+
+    def test_dcr_companion_names_match_config_and_golden(self) -> None:
+        config = _CONFIG.read_text(encoding="utf-8")
+        companion_block = _DCR_COMPANION_BLOCK.search(config)
+        self.assertIsNotNone(companion_block)
+        from_config = ["dependency-cursor-review"] + [
+            line.strip().removeprefix("- ").strip()
+            for line in companion_block.group(1).splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(list(DCR_EXPANDED_COMPANION_NAMES), from_config)
+        golden = [
+            line.strip()
+            for line in _GOLDEN.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(list(DCR_EXPANDED_COMPANION_NAMES), golden)
 
     def test_trusted_manifest_paths_match_config_script_companions(self) -> None:
         config = _CONFIG.read_text(encoding="utf-8")

@@ -1,4 +1,10 @@
-"""Stdlib-only cold start for python3 -I workflow scripts (single loader resolve spine)."""
+"""Stdlib-only cold start for python3 -I workflow scripts (single loader resolve spine).
+
+Load sequence:
+  cold_start → scrub bootstrap → module_exec_scrub → isolated_module_exec
+  → register util → trusted_formatter_loader_bootstrap → trusted_formatter_loader
+  → sibling preload (formatter policy stack).
+"""
 
 from __future__ import annotations
 
@@ -23,7 +29,7 @@ _BUNDLE_MARKERS: tuple[str, ...] = (
 
 
 def _module_exec_scrub(script_dir: Path) -> types.ModuleType:
-    """Load module_exec_scrub lazily (python3 -I safe; no top-level scripts-dir import)."""
+    """Load module_exec_scrub via bootstrap spine (python3 -I safe)."""
     script_dir = script_dir.resolve()
     existing = sys.modules.get("module_exec_scrub")
     if existing is not None:
@@ -31,14 +37,30 @@ def _module_exec_scrub(script_dir: Path) -> types.ModuleType:
         scrub_path = script_dir / "module_exec_scrub.py"
         if existing_file and Path(existing_file).resolve() == scrub_path.resolve():
             return existing
-    scrub_path = script_dir / "module_exec_scrub.py"
-    if not scrub_path.is_file():
-        raise RuntimeError(f"Missing {scrub_path}")
-    spec = importlib.util.spec_from_file_location("module_exec_scrub", scrub_path)
+    boot = _module_exec_scrub_bootstrap(script_dir)
+    return boot.bootstrap_module_from_scripts_dir(
+        script_dir, "module_exec_scrub.py", "module_exec_scrub"
+    )
+
+
+def _module_exec_scrub_bootstrap(script_dir: Path) -> types.ModuleType:
+    script_dir = script_dir.resolve()
+    existing = sys.modules.get("module_exec_scrub_bootstrap")
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        boot_path = script_dir / "module_exec_scrub_bootstrap.py"
+        if existing_file and Path(existing_file).resolve() == boot_path.resolve():
+            return existing
+    boot_path = script_dir / "module_exec_scrub_bootstrap.py"
+    if not boot_path.is_file():
+        raise RuntimeError(f"Missing {boot_path}")
+    spec = importlib.util.spec_from_file_location(
+        "module_exec_scrub_bootstrap", boot_path
+    )
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {scrub_path}")
+        raise RuntimeError(f"Could not load module spec from {boot_path}")
     module = importlib.util.module_from_spec(spec)
-    sys.modules["module_exec_scrub"] = module
+    sys.modules["module_exec_scrub_bootstrap"] = module
     script_dir_s = str(script_dir)
     saved_path = sys.path.copy()
     try:
