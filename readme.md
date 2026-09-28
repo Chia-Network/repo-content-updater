@@ -49,7 +49,12 @@ files:
 
 `groups` allows combining multiple items from `files` into a single group, making it easier to reference in the custom property
 
-`files` is where every supported template must be listed. 
+`files` is where every supported template must be listed.
+
+### Malware verdict formatter (canonical vs templates)
+
+The dependency-cursor-review workflow ships Python formatter modules from `templates/` into consumer repos (`.github/scripts/`). The same sources are copied into `internal/workflowscripts/` for unit tests in this repo. **Canonical edit location:** change `internal/workflowscripts/*.py`, then sync the matching `templates/malware-verdict-*.py` and `templates/trusted-formatter-loader.py` (kept byte-identical; `test_managed_templates_match_canonical_modules` enforces this). Full generate-from-canonical in CI is not wired yet — treat the pair as intentional ×2 mirror debt until managed-files sync runs.
+
 * `name` is the name to reference the file by in groups or in the custom property.
 * `template_name` is the name of the template to use from the supplied templates directory
 * `repo_path` is the path within the repo to place the file
