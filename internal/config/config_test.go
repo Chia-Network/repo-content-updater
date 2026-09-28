@@ -33,6 +33,8 @@ func dependencyCursorReviewCompanionFiles() []string {
 		"dependency-cursor-review-combine-outputs",
 		"dependency-cursor-review-dependabot-context",
 		"dependency-cursor-review-post-comment",
+		"dependency-cursor-review-target-pr",
+		"dependency-cursor-review-trusted-scripts",
 		"upstream-malware-scan-lib",
 		"upstream-malware-scan-findings",
 		"trusted-git-path-checkout-action",

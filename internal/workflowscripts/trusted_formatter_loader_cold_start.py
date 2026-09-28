@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.machinery
 import importlib.util
 import sys
 import types
@@ -22,8 +23,25 @@ _BUNDLE_MARKERS = (
 )
 
 
+def _exec_module_scrubbing_script_dir(
+    spec: importlib.machinery.ModuleSpec,
+    module: types.ModuleType,
+    script_path: Path,
+) -> None:
+    """Same scrub spine as isolated_module_exec (bootstrap before that module is importable)."""
+    if spec.loader is None:
+        raise RuntimeError(f"Could not load module spec from {script_path}")
+    script_dir = str(script_path.resolve().parent)
+    saved_path = sys.path.copy()
+    try:
+        sys.path = [entry for entry in sys.path if entry != script_dir]
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = saved_path
+
+
 def _ensure_isolated_module_exec(script_dir: Path) -> types.ModuleType:
-    """Load stdlib-only isolation helper (safe unscrubbed exec)."""
+    """Load stdlib-only isolation helper via scrubbed exec (single exec spine)."""
     script_dir = script_dir.resolve()
     path = script_dir / f"{_ISO_NAME}.py"
     existing = sys.modules.get(_ISO_NAME)
@@ -38,7 +56,7 @@ def _ensure_isolated_module_exec(script_dir: Path) -> types.ModuleType:
         raise RuntimeError(f"Could not load module spec from {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[_ISO_NAME] = module
-    spec.loader.exec_module(module)
+    _exec_module_scrubbing_script_dir(spec, module, path)
     return module
 
 

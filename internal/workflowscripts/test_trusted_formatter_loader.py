@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import runpy
 import shutil
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
-
-import sys
 
 from trusted_formatter_loader import (
     TRUSTED_FORMATTER_MODULE_NAME,
@@ -93,6 +93,15 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             result = format_fn("Verdict: benign\n\nDetails.")
             self.assertTrue(result.startswith("**Verdict: benign**"))
 
+    def test_f752f2d5_isolation_purge_uses_sys_modules_name_not_filename(self) -> None:
+        """Bugbot f752f2d5: purge key must be isolated_module_exec, not *.py filename."""
+        sentinel = types.ModuleType("isolated_module_exec")
+        sys.modules["isolated_module_exec"] = sentinel
+        wrong_key = "isolated_module_exec.py"
+        self.assertIsNone(sys.modules.pop(wrong_key, None))
+        self.assertIs(sys.modules.get("isolated_module_exec"), sentinel)
+        sys.modules.pop("isolated_module_exec", None)
+
     def test_cold_load_without_preexisting_loader_modules(self) -> None:
         """Public loader entry must bootstrap siblings without ad hoc sys.modules priming."""
         purge = (
@@ -120,7 +129,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             "trusted_formatter_loader",
             "trusted_formatter_loader_bootstrap",
             "script_dir_isolated_load",
-    "isolated_module_exec.py",
+            "isolated_module_exec",
         )
         saved = {name: sys.modules.pop(name, None) for name in purge}
         try:
@@ -144,7 +153,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                 "trusted_formatter_loader",
                 "trusted_formatter_loader_bootstrap",
                 "script_dir_isolated_load",
-    "isolated_module_exec.py",
+                "isolated_module_exec",
             )
             saved = {name: sys.modules.pop(name, None) for name in purge}
             try:

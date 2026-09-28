@@ -33,41 +33,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Checkout trusted target-PR helper
+        uses: actions/checkout@v7
+        with:
+          ref: ${{`{{ github.event.repository.default_branch }}`}}
+          sparse-checkout: |
+            .github/scripts/dependency-cursor-review-target-pr.js
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Resolve target PR context
         id: target_pr
         uses: actions/github-script@v9
         with:
           script: |
-            let pr;
-            if (context.eventName === 'pull_request') {
-              pr = context.payload.pull_request;
-            } else {
-              const raw = context.payload.inputs?.pr_number;
-              const prNumber = Number(raw);
-              if (!Number.isInteger(prNumber) || prNumber <= 0) {
-                core.setFailed(`Invalid pr_number input: ${raw}`);
-                return;
-              }
-              const { data } = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prNumber,
-              });
-              pr = data;
-            }
-            if (!pr) {
-              core.setFailed('Could not resolve target pull request context.');
-              return;
-            }
-            const allowedBots = ['dependabot[bot]', 'renovate[bot]'];
-            if (!allowedBots.includes(pr.user?.login)) {
-              core.setFailed(`Target PR #${pr.number} is not opened by an allowed bot. Author: ${pr.user?.login}`);
-              return;
-            }
-            core.setOutput('number', String(pr.number));
-            core.setOutput('title', pr.title || '');
-            core.setOutput('body', pr.body || '');
-            core.setOutput('head_sha', pr.head?.sha || '');
+            const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-target-pr.js`);
+            await run.run({ github, context, core });
 
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -100,31 +81,7 @@ jobs:
         with:
           token: ${{`{{ github.token }}`}}
           ref: ${{`{{ github.event.repository.default_branch }}`}}
-          paths: |
-            .github/scripts/malware_verdict_formatter.py
-            .github/scripts/malware_verdict_patterns.py
-            .github/scripts/malware_verdict_patterns_regex.py
-            .github/scripts/malware_verdict_patterns_structure.py
-            .github/scripts/malware_verdict_policy.py
-            .github/scripts/malware_verdict_policy_types.py
-            .github/scripts/malware_verdict_policy_lexical.py
-            .github/scripts/malware_verdict_policy_context.py
-            .github/scripts/malware_verdict_policy_rules.py
-            .github/scripts/malware_verdict_policy_rules_select.py
-            .github/scripts/malware_verdict_policy_rules_strip.py
-            .github/scripts/malware_verdict_policy_analysis.py
-            .github/scripts/isolated_module_exec.py
-            .github/scripts/script_dir_isolated_load.py
-            .github/scripts/trusted_formatter_loader.py
-            .github/scripts/trusted_formatter_loader_bootstrap.py
-            .github/scripts/trusted_formatter_loader_cold_start.py
-            .github/scripts/upstream_malware_scan.sh
-            .github/scripts/dependency_cursor_review_prompts.py
-            .github/scripts/dependency_cursor_review_combine_outputs.py
-            .github/scripts/dependency-cursor-review-dependabot-context.js
-            .github/scripts/dependency-cursor-review-post-comment.js
-            .github/scripts/upstream_malware_scan_lib.sh
-            .github/scripts/upstream_malware_scan_findings.sh
+          paths_manifest: .github/scripts/dependency-cursor-review-trusted-scripts.paths
 
       - name: Install Cursor CLI
         shell: bash

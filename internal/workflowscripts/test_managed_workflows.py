@@ -45,21 +45,12 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             ensure_bundle,
             msg="formatter bundle uses composite after trusted bootstrap",
         )
-        self.assertIn(".github/scripts/malware_verdict_formatter.py", ensure_bundle)
-        self.assertIn(".github/scripts/malware_verdict_policy.py", ensure_bundle)
-        self.assertIn(".github/scripts/malware_verdict_policy_rules.py", ensure_bundle)
-        self.assertIn(".github/scripts/trusted_formatter_loader.py", ensure_bundle)
+        self.assertIn("paths_manifest:", ensure_bundle)
         self.assertIn(
-            ".github/scripts/trusted_formatter_loader_bootstrap.py", ensure_bundle
+            ".github/scripts/dependency-cursor-review-trusted-scripts.paths",
+            ensure_bundle,
         )
-        self.assertIn(
-            ".github/scripts/trusted_formatter_loader_cold_start.py", ensure_bundle
-        )
-        self.assertIn(".github/scripts/upstream_malware_scan.sh", ensure_bundle)
-        self.assertIn(
-            ".github/scripts/dependency_cursor_review_combine_outputs.py", ensure_bundle
-        )
-        self.assertIn("paths: |", ensure_bundle)
+        self.assertNotIn("paths: |", ensure_bundle)
         self.assertLess(
             section.index("Install trusted git path checkout action definition"),
             section.index("Ensure malware verdict formatter bundle"),
@@ -96,6 +87,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("_cold_start_module", combine)
         self.assertNotIn("_bootstrap_module_for", combine)
         self.assertIn("dependency-cursor-review-dependabot-context.js", workflow)
+        self.assertIn("dependency-cursor-review-target-pr.js", workflow)
 
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
         self.assertTrue(_TRUSTED_GIT_CHECKOUT_ACTION.is_file())

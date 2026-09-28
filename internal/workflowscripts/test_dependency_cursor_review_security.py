@@ -129,7 +129,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             sys.path.insert(0, script_dir)
             purge = (
                 "script_dir_isolated_load",
-    "isolated_module_exec.py",
+                "isolated_module_exec",
                 "trusted_formatter_loader_bootstrap",
             )
             saved = {name: sys.modules.pop(name, None) for name in purge}

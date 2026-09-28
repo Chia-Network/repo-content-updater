@@ -50,6 +50,8 @@ groups:
       - dependency-cursor-review-combine-outputs
       - dependency-cursor-review-dependabot-context
       - dependency-cursor-review-post-comment
+      - dependency-cursor-review-target-pr
+      - dependency-cursor-review-trusted-scripts
       - trusted-git-path-checkout-action
 
 files:
@@ -87,6 +89,8 @@ files:
       - dependency-cursor-review-combine-outputs
       - dependency-cursor-review-dependabot-context
       - dependency-cursor-review-post-comment
+      - dependency-cursor-review-target-pr
+      - dependency-cursor-review-trusted-scripts
       - upstream-malware-scan-lib
       - upstream-malware-scan-findings
       - trusted-git-path-checkout-action
@@ -186,6 +190,14 @@ files:
   - name: dependency-cursor-review-post-comment
     template_name: dependency-cursor-review-post-comment.js
     repo_path: .github/scripts/dependency-cursor-review-post-comment.js
+
+  - name: dependency-cursor-review-target-pr
+    template_name: dependency-cursor-review-target-pr.js
+    repo_path: .github/scripts/dependency-cursor-review-target-pr.js
+
+  - name: dependency-cursor-review-trusted-scripts
+    template_name: dependency-cursor-review-trusted-scripts.paths
+    repo_path: .github/scripts/dependency-cursor-review-trusted-scripts.paths
 
   - name: upstream-malware-scan-lib
     template_name: upstream-malware-scan-lib.sh
