@@ -16,6 +16,7 @@ func dependencyCursorReviewCompanionFiles() []string {
 		"malware-verdict-classification",
 		"malware-verdict-precedence",
 		"malware-verdict-policy",
+		"companion-isolated-exec",
 		"trusted-formatter-loader",
 		"trusted-formatter-loader-bootstrap",
 		"upstream-malware-scan",

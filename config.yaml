@@ -31,6 +31,7 @@ groups:
       - malware-verdict-classification
       - malware-verdict-precedence
       - malware-verdict-policy
+      - companion-isolated-exec
       - trusted-formatter-loader
       - trusted-formatter-loader-bootstrap
       - upstream-malware-scan
@@ -61,6 +62,7 @@ files:
       - malware-verdict-classification
       - malware-verdict-precedence
       - malware-verdict-policy
+      - companion-isolated-exec
       - trusted-formatter-loader
       - trusted-formatter-loader-bootstrap
       - upstream-malware-scan
@@ -100,6 +102,10 @@ files:
   - name: malware-verdict-policy
     template_name: malware-verdict-policy.py
     repo_path: .github/scripts/malware_verdict_policy.py
+
+  - name: companion-isolated-exec
+    template_name: companion-isolated-exec.py
+    repo_path: .github/scripts/companion_isolated_exec.py
 
   - name: trusted-formatter-loader
     template_name: trusted-formatter-loader.py

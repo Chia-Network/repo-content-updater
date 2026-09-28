@@ -126,6 +126,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             scripts = Path(tmp) / "scripts"
             scripts.mkdir()
             for filename in (
+                "companion_isolated_exec.py",
                 "trusted_formatter_loader.py",
                 "trusted_formatter_loader_bootstrap.py",
             ):
@@ -162,9 +163,15 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             bootstrap_src = (_SCRIPTS / "trusted_formatter_loader_bootstrap.py").read_text(
                 encoding="utf-8"
             )
+            companion_src = (_SCRIPTS / "companion_isolated_exec.py").read_text(
+                encoding="utf-8"
+            )
             (scripts / "trusted_formatter_loader.py").write_text(loader_src, encoding="utf-8")
             (scripts / "trusted_formatter_loader_bootstrap.py").write_text(
                 bootstrap_src, encoding="utf-8"
+            )
+            (scripts / "companion_isolated_exec.py").write_text(
+                companion_src, encoding="utf-8"
             )
             (scripts / "importlib.py").write_text(
                 "raise RuntimeError('untrusted importlib shadow')\n",

@@ -7,18 +7,16 @@ import types
 from collections.abc import Callable
 from pathlib import Path
 
-from trusted_formatter_loader_bootstrap import (
-    exec_module_isolated_from_scripts_dir,
-    load_loader_module,
-)
+from companion_isolated_exec import exec_module_isolated_from_scripts_dir
 
 TRUSTED_FORMATTER_MODULE_NAME = "trusted_malware_verdict_formatter"
 
 FORMATTER_SIBLING_MODULE_STEMS = (
+    "companion_isolated_exec",
     "malware_verdict_patterns",
-    "malware_verdict_precedence",
-    "malware_verdict_classification",
     "malware_verdict_policy",
+    "malware_verdict_classification",
+    "malware_verdict_precedence",
 )
 
 _FORMATTER_ENV_PRIMED: set[Path] = set()

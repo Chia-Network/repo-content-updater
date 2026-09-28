@@ -15,6 +15,7 @@ _WORKFLOW = _REPO_ROOT / "templates" / "dependency-cursor-review.yml"
 
 # Minimal trusted bundle files needed for combine_outputs to reach formatter load.
 _BUNDLE_STEMS = (
+    "companion_isolated_exec.py",
     "dependency_cursor_review_combine_outputs.py",
     "dependency_cursor_review_trusted_loader.py",
     "trusted_formatter_loader_bootstrap.py",

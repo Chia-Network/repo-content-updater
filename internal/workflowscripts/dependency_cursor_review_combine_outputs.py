@@ -3,11 +3,8 @@
 
 from __future__ import annotations
 
-import importlib.machinery
-import importlib.util
 import json
 import sys
-import types
 from pathlib import Path
 
 _SCRIPT_CANDIDATES = (
@@ -16,36 +13,37 @@ _SCRIPT_CANDIDATES = (
 )
 
 
-def _exec_module_isolated(
-    spec: importlib.machinery.ModuleSpec,
-    module: types.ModuleType,
-    script_path: Path,
-) -> None:
-    """Load one companion module without leaving its directory on sys.path."""
-    script_dir = str(script_path.resolve().parent)
-    saved_path = sys.path.copy()
-    try:
-        sys.path = [entry for entry in sys.path if entry != script_dir]
-        if spec.loader is None:
-            raise RuntimeError(f"Could not load module spec from {script_path}")
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = saved_path
+def _companion_module(base: Path):
+    """Load companion_isolated_exec by path (works under python3 -I without scripts dir on sys.path)."""
+    import importlib.util
+
+    name = "companion_isolated_exec"
+    path = base / f"{name}.py"
+    existing = sys.modules.get(name)
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file and Path(existing_file).resolve().parent == base.resolve():
+            return existing
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    module.ensure_companion_isolated_exec(base)
+    return module
 
 
 def _import_trusted_loader_entry():
     for base in _SCRIPT_CANDIDATES:
         trusted_path = base / "dependency_cursor_review_trusted_loader.py"
-        if not trusted_path.is_file():
+        bootstrap_path = base / "trusted_formatter_loader_bootstrap.py"
+        if not trusted_path.is_file() or not bootstrap_path.is_file():
             continue
-        spec = importlib.util.spec_from_file_location(
-            "dependency_cursor_review_trusted_loader", trusted_path
+        companion = _companion_module(base)
+        return companion.exec_companion_module(
+            trusted_path, "dependency_cursor_review_trusted_loader"
         )
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"Could not load module spec from {trusted_path}")
-        module = importlib.util.module_from_spec(spec)
-        _exec_module_isolated(spec, module, trusted_path)
-        return module
     raise RuntimeError(
         "dependency_cursor_review_trusted_loader.py not found under .github/scripts/."
     )
