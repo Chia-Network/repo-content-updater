@@ -17,6 +17,11 @@ FORMATTER_SIBLING_MODULE_STEMS = (
     "malware_verdict_classification",
 )
 
+# Contract: consumers must call load_format_malware_review_verdict(path) (or
+# find_and_load_format_malware_review_verdict) so sibling modules and this loader
+# are bootstrapped before the formatter module executes. Do not rely on importing
+# malware_verdict_formatter directly from an empty sys.modules.
+
 
 def exec_module_isolated_from_scripts_dir(
     spec: importlib.machinery.ModuleSpec,
@@ -50,6 +55,12 @@ def import_module_from_trusted_script(
     return module
 
 
+def load_loader_module(loader_path: Path) -> types.ModuleType:
+    """Load trusted_formatter_loader from disk with scripts-dir isolation."""
+    loader_path = loader_path.resolve()
+    return import_module_from_trusted_script(loader_path, "trusted_formatter_loader")
+
+
 def ensure_formatter_sibling_modules(script_dir: Path) -> None:
     """Load co-located formatter modules with scripts-dir isolation (canonical bootstrap)."""
     parent = script_dir.resolve()
@@ -79,6 +90,12 @@ def _ensure_loader_module(script_dir: Path) -> None:
 
 
 def load_format_malware_review_verdict(script_path: Path) -> Callable[[str], str]:
+    """Return format_malware_review_verdict loaded from an explicit trusted file path.
+
+    This is the supported entrypoint: it primes trusted_formatter_loader and formatter
+    sibling modules (patterns/classification/precedence) before executing the formatter
+    module, so callers never depend on undocumented sys.modules priming.
+    """
     script_path = script_path.resolve()
     parent = script_path.parent
     _ensure_loader_module(parent)

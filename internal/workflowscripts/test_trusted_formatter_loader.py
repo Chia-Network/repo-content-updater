@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import sys
+
 from trusted_formatter_loader import (
     TRUSTED_FORMATTER_MODULE_NAME,
     find_and_load_format_malware_review_verdict,
@@ -56,6 +58,48 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                 sys.path[:] = [p for p in sys.path if p != script_dir]
             result = format_fn("Verdict: benign\n\nDetails.")
             self.assertTrue(result.startswith("**Verdict: benign**"))
+
+    def test_cold_load_without_preexisting_loader_modules(self) -> None:
+        """Public loader entry must bootstrap siblings without ad hoc sys.modules priming."""
+        purge = (
+            "trusted_formatter_loader",
+            "trusted_malware_verdict_formatter",
+            "malware_verdict_formatter",
+            "malware_verdict_patterns",
+            "malware_verdict_precedence",
+            "malware_verdict_classification",
+        )
+        saved = {name: sys.modules.pop(name, None) for name in purge}
+        try:
+            format_fn = load_format_malware_review_verdict(_CANONICAL)
+            result = format_fn("Verdict: benign\n\nDetails.")
+            self.assertTrue(result.startswith("**Verdict: benign**"))
+        finally:
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+    def test_load_loader_module_scrubs_scripts_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts = Path(tmp) / "scripts"
+            scripts.mkdir()
+            loader_src = _CANONICAL_LOADER.read_text(encoding="utf-8")
+            (scripts / "trusted_formatter_loader.py").write_text(loader_src, encoding="utf-8")
+            (scripts / "importlib.py").write_text(
+                "raise RuntimeError('untrusted importlib shadow')\n",
+                encoding="utf-8",
+            )
+            script_dir = str(scripts.resolve())
+            sys.path.insert(0, script_dir)
+            try:
+                from trusted_formatter_loader import load_loader_module
+
+                module = load_loader_module(scripts / "trusted_formatter_loader.py")
+                self.assertTrue(hasattr(module, "find_and_load_format_malware_review_verdict"))
+            finally:
+                sys.path[:] = [p for p in sys.path if p != script_dir]
 
     def test_package_dir_beside_trusted_file_does_not_shadow_loader(self) -> None:
         """Bugbot c1bdce0b: PR-head package dir must not replace trusted .py import."""

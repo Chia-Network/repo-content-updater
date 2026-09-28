@@ -964,16 +964,21 @@ jobs:
             ):
               loader_path = script_dir / "trusted_formatter_loader.py"
               if loader_path.is_file():
-                spec = importlib.util.spec_from_file_location(
-                  "trusted_formatter_loader",
+                bootstrap = importlib.util.spec_from_file_location(
+                  "_trusted_loader_bootstrap",
                   loader_path,
                 )
-                if spec is None or spec.loader is None:
+                if bootstrap is None or bootstrap.loader is None:
                   raise RuntimeError(f"Could not load module spec from {loader_path}")
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                sys.modules[spec.name] = module
-                return module
+                boot_mod = importlib.util.module_from_spec(bootstrap)
+                script_dir = str(loader_path.resolve().parent)
+                saved_path = sys.path.copy()
+                try:
+                  sys.path = [entry for entry in sys.path if entry != script_dir]
+                  bootstrap.loader.exec_module(boot_mod)
+                finally:
+                  sys.path[:] = saved_path
+                return boot_mod.load_loader_module(loader_path)
             raise RuntimeError(
               "trusted_formatter_loader.py not found under .github/scripts/. "
               "Run repo-content-updater managed-files for dependency-cursor-review."
