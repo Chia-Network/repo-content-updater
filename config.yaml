@@ -27,6 +27,32 @@ groups:
     templates:
       - dependency-cursor-review
       - malware-verdict-formatter
+      - malware-verdict-patterns
+      - malware-verdict-patterns-regex
+      - malware-verdict-patterns-structure
+      - malware-verdict-policy
+      - malware-verdict-policy-types
+      - malware-verdict-policy-lexical
+      - malware-verdict-policy-context
+      - malware-verdict-policy-strip-eligibility
+      - scripts-dir-module-loader
+      - formatter-runtime-bundle
+      - malware-verdict-policy-rules-select
+      - malware-verdict-policy-rules-strip
+      - malware-verdict-policy-analysis
+      - isolated-module-exec
+      - script-dir-isolated-load
+      - trusted-formatter-loader
+      - trusted-formatter-loader-cold-start
+      - upstream-malware-scan
+      - dependency-cursor-review-prompts
+      - dependency-cursor-review-combine-outputs
+      - dependency-cursor-review-dependabot-context
+      - dependency-cursor-review-post-comment
+      - dependency-cursor-review-target-pr
+      - dependency-cursor-review-trusted-scripts
+      - upstream-malware-scan-lib
+      - upstream-malware-scan-findings
       - trusted-git-path-checkout-action
 
 files:
@@ -43,6 +69,32 @@ files:
       - dependabot-cursor-review
     companion_files:
       - malware-verdict-formatter
+      - malware-verdict-patterns
+      - malware-verdict-patterns-regex
+      - malware-verdict-patterns-structure
+      - malware-verdict-policy
+      - malware-verdict-policy-types
+      - malware-verdict-policy-lexical
+      - malware-verdict-policy-context
+      - malware-verdict-policy-strip-eligibility
+      - scripts-dir-module-loader
+      - formatter-runtime-bundle
+      - malware-verdict-policy-rules-select
+      - malware-verdict-policy-rules-strip
+      - malware-verdict-policy-analysis
+      - isolated-module-exec
+      - script-dir-isolated-load
+      - trusted-formatter-loader
+      - trusted-formatter-loader-cold-start
+      - upstream-malware-scan
+      - dependency-cursor-review-prompts
+      - dependency-cursor-review-combine-outputs
+      - dependency-cursor-review-dependabot-context
+      - dependency-cursor-review-post-comment
+      - dependency-cursor-review-target-pr
+      - dependency-cursor-review-trusted-scripts
+      - upstream-malware-scan-lib
+      - upstream-malware-scan-findings
       - trusted-git-path-checkout-action
     alternate_paths:
       - .github/workflows/dependabot-cursor-review.yaml
@@ -56,6 +108,110 @@ files:
   - name: malware-verdict-formatter
     template_name: malware-verdict-formatter.py
     repo_path: .github/scripts/malware_verdict_formatter.py
+
+  - name: malware-verdict-patterns
+    template_name: malware-verdict-patterns.py
+    repo_path: .github/scripts/malware_verdict_patterns.py
+
+  - name: malware-verdict-patterns-regex
+    template_name: malware-verdict-patterns-regex.py
+    repo_path: .github/scripts/malware_verdict_patterns_regex.py
+
+  - name: malware-verdict-patterns-structure
+    template_name: malware-verdict-patterns-structure.py
+    repo_path: .github/scripts/malware_verdict_patterns_structure.py
+
+  - name: malware-verdict-policy
+    template_name: malware-verdict-policy.py
+    repo_path: .github/scripts/malware_verdict_policy.py
+
+  - name: malware-verdict-policy-types
+    template_name: malware-verdict-policy-types.py
+    repo_path: .github/scripts/malware_verdict_policy_types.py
+
+  - name: malware-verdict-policy-lexical
+    template_name: malware-verdict-policy-lexical.py
+    repo_path: .github/scripts/malware_verdict_policy_lexical.py
+
+  - name: malware-verdict-policy-context
+    template_name: malware-verdict-policy-context.py
+    repo_path: .github/scripts/malware_verdict_policy_context.py
+
+  - name: malware-verdict-policy-strip-eligibility
+    template_name: malware-verdict-policy-strip-eligibility.py
+    repo_path: .github/scripts/malware_verdict_policy_strip_eligibility.py
+
+  - name: malware-verdict-policy-rules-select
+    template_name: malware-verdict-policy-rules-select.py
+    repo_path: .github/scripts/malware_verdict_policy_rules_select.py
+
+  - name: malware-verdict-policy-rules-strip
+    template_name: malware-verdict-policy-rules-strip.py
+    repo_path: .github/scripts/malware_verdict_policy_rules_strip.py
+
+  - name: malware-verdict-policy-analysis
+    template_name: malware-verdict-policy-analysis.py
+    repo_path: .github/scripts/malware_verdict_policy_analysis.py
+
+  - name: scripts-dir-module-loader
+    template_name: scripts-dir-module-loader.py
+    repo_path: .github/scripts/scripts_dir_module_loader.py
+
+  - name: formatter-runtime-bundle
+    template_name: formatter-runtime-bundle.py
+    repo_path: .github/scripts/formatter_runtime_bundle.py
+
+  - name: isolated-module-exec
+    template_name: isolated-module-exec.py
+    repo_path: .github/scripts/isolated_module_exec.py
+
+  - name: script-dir-isolated-load
+    template_name: script-dir-isolated-load.py
+    repo_path: .github/scripts/script_dir_isolated_load.py
+
+  - name: trusted-formatter-loader
+    template_name: trusted-formatter-loader.py
+    repo_path: .github/scripts/trusted_formatter_loader.py
+
+  - name: trusted-formatter-loader-cold-start
+    template_name: trusted-formatter-loader-cold-start.py
+    repo_path: .github/scripts/trusted_formatter_loader_cold_start.py
+
+  - name: upstream-malware-scan
+    template_name: upstream-malware-scan.sh
+    repo_path: .github/scripts/upstream_malware_scan.sh
+
+  - name: dependency-cursor-review-prompts
+    template_name: dependency-cursor-review-prompts.py
+    repo_path: .github/scripts/dependency_cursor_review_prompts.py
+
+  - name: dependency-cursor-review-combine-outputs
+    template_name: dependency-cursor-review-combine-outputs.py
+    repo_path: .github/scripts/dependency_cursor_review_combine_outputs.py
+
+  - name: dependency-cursor-review-dependabot-context
+    template_name: dependency-cursor-review-dependabot-context.js
+    repo_path: .github/scripts/dependency-cursor-review-dependabot-context.js
+
+  - name: dependency-cursor-review-post-comment
+    template_name: dependency-cursor-review-post-comment.js
+    repo_path: .github/scripts/dependency-cursor-review-post-comment.js
+
+  - name: dependency-cursor-review-target-pr
+    template_name: dependency-cursor-review-target-pr.js
+    repo_path: .github/scripts/dependency-cursor-review-target-pr.js
+
+  - name: dependency-cursor-review-trusted-scripts
+    template_name: dependency-cursor-review-trusted-scripts.paths
+    repo_path: .github/scripts/dependency-cursor-review-trusted-scripts.paths
+
+  - name: upstream-malware-scan-lib
+    template_name: upstream-malware-scan-lib.sh
+    repo_path: .github/scripts/upstream_malware_scan_lib.sh
+
+  - name: upstream-malware-scan-findings
+    template_name: upstream-malware-scan-findings.sh
+    repo_path: .github/scripts/upstream_malware_scan_findings.sh
 
   - name: dep-review
     template_name: dependency-review.yml
