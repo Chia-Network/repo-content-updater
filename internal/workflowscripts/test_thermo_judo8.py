@@ -128,6 +128,7 @@ class ThermoJudo8Test(unittest.TestCase):
         ):
             self.assertIn(pattern, gitignore, msg=f"missing gitignore pattern {pattern!r}")
         for mirror_name in (
+            "scripts-dir-path-scrub.py",
             "scripts-dir-module-loader.py",
             "formatter-runtime-bundle.py",
             "malware-verdict-policy-context.py",
