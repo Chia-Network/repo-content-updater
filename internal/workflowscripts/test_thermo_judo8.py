@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -94,8 +95,33 @@ class ThermoJudo8Test(unittest.TestCase):
     def test_formatter_templates_gitignored_apply_time_sync(self) -> None:
         """Canonical workflowscripts only; templates/ mirrors are sync emit (not committed)."""
         gitignore = (_REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
-        self.assertIn("templates/malware-verdict-*.py", gitignore)
-        self.assertIn("templates/trusted-formatter-loader*.py", gitignore)
+        for pattern in (
+            "templates/malware-verdict-*.py",
+            "templates/trusted-formatter-loader*.py",
+            "templates/module-exec-*.py",
+            "templates/formatter-bundle-*.py",
+        ):
+            self.assertIn(pattern, gitignore, msg=f"missing gitignore pattern {pattern!r}")
+        for mirror_name in (
+            "module-exec-scrub.py",
+            "formatter-bundle-inventory.py",
+            "malware-verdict-policy-selection-context.py",
+        ):
+            mirror_path = _REPO_ROOT / "templates" / mirror_name
+            self.assertTrue(
+                mirror_path.is_file(),
+                f"sync must emit templates/{mirror_name} (run make test)",
+            )
+            proc = subprocess.run(
+                ["git", "check-ignore", "-q", str(mirror_path)],
+                cwd=_REPO_ROOT,
+                check=False,
+            )
+            self.assertEqual(
+                proc.returncode,
+                0,
+                msg=f"templates/{mirror_name} must be gitignored (apply-time mirror)",
+            )
         manifest = _REPO_ROOT / "templates" / "dependency-cursor-review-trusted-scripts.paths"
         self.assertTrue(
             manifest.is_file(),
