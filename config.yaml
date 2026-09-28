@@ -30,6 +30,7 @@ groups:
       - malware-verdict-patterns
       - malware-verdict-classification
       - malware-verdict-precedence
+      - malware-verdict-policy
       - trusted-formatter-loader
       - trusted-formatter-loader-bootstrap
       - upstream-malware-scan
@@ -59,6 +60,7 @@ files:
       - malware-verdict-patterns
       - malware-verdict-classification
       - malware-verdict-precedence
+      - malware-verdict-policy
       - trusted-formatter-loader
       - trusted-formatter-loader-bootstrap
       - upstream-malware-scan
@@ -94,6 +96,10 @@ files:
   - name: malware-verdict-precedence
     template_name: malware-verdict-precedence.py
     repo_path: .github/scripts/malware_verdict_precedence.py
+
+  - name: malware-verdict-policy
+    template_name: malware-verdict-policy.py
+    repo_path: .github/scripts/malware_verdict_policy.py
 
   - name: trusted-formatter-loader
     template_name: trusted-formatter-loader.py

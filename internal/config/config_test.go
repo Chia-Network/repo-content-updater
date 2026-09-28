@@ -15,6 +15,7 @@ func dependencyCursorReviewCompanionFiles() []string {
 		"malware-verdict-patterns",
 		"malware-verdict-classification",
 		"malware-verdict-precedence",
+		"malware-verdict-policy",
 		"trusted-formatter-loader",
 		"trusted-formatter-loader-bootstrap",
 		"upstream-malware-scan",
@@ -42,6 +43,7 @@ func TestConfigIsValid(t *testing.T) {
 	dcrGroup, err := cfg.ExpandGroup("dependency-cursor-review")
 	assert.Nil(t, err)
 	for _, required := range []string{
+		"malware-verdict-policy",
 		"upstream-malware-scan",
 		"dependency-cursor-review-prompts",
 		"dependency-cursor-review-combine-outputs",

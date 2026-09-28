@@ -46,6 +46,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             msg="formatter bundle uses composite after trusted bootstrap",
         )
         self.assertIn(".github/scripts/malware_verdict_formatter.py", ensure_bundle)
+        self.assertIn(".github/scripts/malware_verdict_policy.py", ensure_bundle)
         self.assertIn(".github/scripts/trusted_formatter_loader.py", ensure_bundle)
         self.assertIn(
             ".github/scripts/trusted_formatter_loader_bootstrap.py", ensure_bundle
