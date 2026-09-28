@@ -69,6 +69,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("import malware_verdict_formatter", formatter_block)
         self.assertNotIn("_import_module_from_trusted_script", formatter_block)
         self.assertNotIn("_exec_module_isolated_from_scripts_dir", formatter_block)
+        self.assertNotIn("_exec_module_isolated", formatter_block)
         self.assertNotIn("sys.path.insert(0,", formatter_block)
         self.assertIn("load_loader_module(loader_path)", formatter_block)
         self.assertNotIn("_trusted_loader_entry", formatter_block)

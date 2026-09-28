@@ -962,20 +962,6 @@ jobs:
             import importlib.util
             import sys
 
-            def _exec_module_isolated(script_path: Path, module_name: str):
-              spec = importlib.util.spec_from_file_location(module_name, script_path)
-              if spec is None or spec.loader is None:
-                raise RuntimeError(f"Could not load module spec from {script_path}")
-              module = importlib.util.module_from_spec(spec)
-              script_dir = str(script_path.resolve().parent)
-              saved_path = sys.path.copy()
-              try:
-                sys.path = [entry for entry in sys.path if entry != script_dir]
-                spec.loader.exec_module(module)
-              finally:
-                sys.path[:] = saved_path
-              return module
-
             for script_dir in (
               Path(".github/scripts"),
               Path("internal/workflowscripts"),
@@ -989,9 +975,16 @@ jobs:
                   f"Missing {bootstrap_path}. "
                   "Run repo-content-updater managed-files for dependency-cursor-review."
                 )
-              bootstrap = _exec_module_isolated(
-                bootstrap_path, "trusted_formatter_loader_bootstrap"
+              # Bootstrap is stdlib-only; unisolated exec is safe. It registers
+              # sys.modules before load_loader_module runs isolated loader exec.
+              spec = importlib.util.spec_from_file_location(
+                "trusted_formatter_loader_bootstrap", bootstrap_path
               )
+              if spec is None or spec.loader is None:
+                raise RuntimeError(f"Could not load module spec from {bootstrap_path}")
+              bootstrap = importlib.util.module_from_spec(spec)
+              sys.modules[spec.name] = bootstrap
+              spec.loader.exec_module(bootstrap)
               return bootstrap.load_loader_module(loader_path)
             raise RuntimeError(
               "trusted_formatter_loader.py not found under .github/scripts/. "

@@ -42,3 +42,30 @@ def load_loader_module(loader_path: Path) -> types.ModuleType:
     sys.modules[spec.name] = module
     exec_module_isolated_from_scripts_dir(spec, module, loader_path)
     return module
+
+
+def import_bootstrap_module(bootstrap_path: Path) -> types.ModuleType:
+    """Load this bootstrap module from disk with scripts-dir isolation."""
+    bootstrap_path = bootstrap_path.resolve()
+    spec = importlib.util.spec_from_file_location(
+        "trusted_formatter_loader_bootstrap", bootstrap_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec from {bootstrap_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    exec_module_isolated_from_scripts_dir(spec, module, bootstrap_path)
+    return module
+
+
+def load_trusted_formatter_loader_module(script_dir: Path) -> types.ModuleType:
+    """Single workflow entry: isolated bootstrap + isolated loader (stdlib-only YAML may exec bootstrap unisolated then call this)."""
+    script_dir = script_dir.resolve()
+    bootstrap_path = script_dir / "trusted_formatter_loader_bootstrap.py"
+    loader_path = script_dir / "trusted_formatter_loader.py"
+    if not bootstrap_path.is_file():
+        raise RuntimeError(f"Missing {bootstrap_path}")
+    if not loader_path.is_file():
+        raise RuntimeError(f"Missing {loader_path}")
+    bootstrap = import_bootstrap_module(bootstrap_path)
+    return bootstrap.load_loader_module(loader_path)

@@ -81,6 +81,43 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                 else:
                     sys.modules[name] = module
 
+    def test_workflow_yaml_bootstrap_pattern_loads_formatter(self) -> None:
+        """Simulate dependency-cursor-review YAML: stdlib exec bootstrap, then load_loader_module."""
+        import importlib.util
+        import sys
+
+        purge = (
+            "trusted_formatter_loader",
+            "trusted_formatter_loader_bootstrap",
+            "trusted_malware_verdict_formatter",
+            "malware_verdict_formatter",
+            "malware_verdict_patterns",
+            "malware_verdict_precedence",
+            "malware_verdict_classification",
+        )
+        saved = {name: sys.modules.pop(name, None) for name in purge}
+        try:
+            script_dir = _SCRIPTS
+            bootstrap_path = script_dir / "trusted_formatter_loader_bootstrap.py"
+            loader_path = script_dir / "trusted_formatter_loader.py"
+            spec = importlib.util.spec_from_file_location(
+                "trusted_formatter_loader_bootstrap", bootstrap_path
+            )
+            self.assertIsNotNone(spec and spec.loader)
+            bootstrap = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = bootstrap
+            spec.loader.exec_module(bootstrap)
+            loader = bootstrap.load_loader_module(loader_path)
+            format_fn = loader.find_and_load_format_malware_review_verdict(script_dir)
+            result = format_fn("Verdict: benign\n\nDetails.")
+            self.assertTrue(result.startswith("**Verdict: benign**"))
+        finally:
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
     def test_load_loader_module_scrubs_scripts_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scripts = Path(tmp) / "scripts"
