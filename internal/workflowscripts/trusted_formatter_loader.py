@@ -18,6 +18,7 @@ FORMATTER_SIBLING_MODULE_STEMS = (
     "malware_verdict_patterns",
     "malware_verdict_precedence",
     "malware_verdict_classification",
+    "malware_verdict_policy",
 )
 
 _FORMATTER_ENV_PRIMED: set[Path] = set()

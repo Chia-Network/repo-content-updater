@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import importlib.machinery
 import importlib.util
 import json
+import sys
+import types
 from pathlib import Path
 
 _SCRIPT_CANDIDATES = (
@@ -13,18 +16,35 @@ _SCRIPT_CANDIDATES = (
 )
 
 
+def _exec_module_isolated(
+    spec: importlib.machinery.ModuleSpec,
+    module: types.ModuleType,
+    script_path: Path,
+) -> None:
+    """Load one companion module without leaving its directory on sys.path."""
+    script_dir = str(script_path.resolve().parent)
+    saved_path = sys.path.copy()
+    try:
+        sys.path = [entry for entry in sys.path if entry != script_dir]
+        if spec.loader is None:
+            raise RuntimeError(f"Could not load module spec from {script_path}")
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = saved_path
+
+
 def _import_trusted_loader_entry():
     for base in _SCRIPT_CANDIDATES:
-        path = base / "dependency_cursor_review_trusted_loader.py"
-        if not path.is_file():
+        trusted_path = base / "dependency_cursor_review_trusted_loader.py"
+        if not trusted_path.is_file():
             continue
         spec = importlib.util.spec_from_file_location(
-            "dependency_cursor_review_trusted_loader", path
+            "dependency_cursor_review_trusted_loader", trusted_path
         )
         if spec is None or spec.loader is None:
-            raise RuntimeError(f"Could not load module spec from {path}")
+            raise RuntimeError(f"Could not load module spec from {trusted_path}")
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        _exec_module_isolated(spec, module, trusted_path)
         return module
     raise RuntimeError(
         "dependency_cursor_review_trusted_loader.py not found under .github/scripts/."

@@ -225,7 +225,7 @@ jobs:
             exit 0
           fi
 
-          python3 .github/scripts/dependency_cursor_review_prompts.py
+          python3 -I .github/scripts/dependency_cursor_review_prompts.py
 
           run_agent_prompt() {
             local prompt_file="$1"
@@ -239,7 +239,7 @@ jobs:
           run_agent_prompt "cursor_prompt_malware.txt" "cursor_output_malware.json"
           run_agent_prompt "cursor_prompt_compatibility.txt" "cursor_output_compatibility.json"
 
-          python3 .github/scripts/dependency_cursor_review_combine_outputs.py
+          python3 -I .github/scripts/dependency_cursor_review_combine_outputs.py
       - name: Upload malware scan artifacts
         if: always()
         uses: actions/upload-artifact@v7

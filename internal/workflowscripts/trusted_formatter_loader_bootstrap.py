@@ -13,6 +13,22 @@ import types
 from pathlib import Path
 
 
+def exec_companion_module(
+    script_path: Path,
+    module_name: str | None = None,
+) -> types.ModuleType:
+    """Load a workflow companion module with its directory scrubbed from sys.path."""
+    script_path = script_path.resolve()
+    name = module_name or f"companion_{script_path.stem}"
+    spec = importlib.util.spec_from_file_location(name, script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec from {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    exec_module_isolated_from_scripts_dir(spec, module, script_path)
+    return module
+
+
 def exec_module_isolated_from_scripts_dir(
     spec: importlib.machinery.ModuleSpec,
     module: types.ModuleType,

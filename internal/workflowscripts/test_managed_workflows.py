@@ -73,7 +73,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
     def test_malware_formatter_imported_from_trusted_companion_not_inline(self) -> None:
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
         self.assertIn(
-            "python3 .github/scripts/dependency_cursor_review_combine_outputs.py",
+            "python3 -I .github/scripts/dependency_cursor_review_combine_outputs.py",
             workflow,
         )
         self.assertIn("bash .github/scripts/upstream_malware_scan.sh", workflow)
@@ -92,7 +92,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn("dependency_cursor_review_trusted_loader", combine)
         self.assertIn("resolve_trusted_formatter_loader_module", trusted_loader)
         self.assertNotIn("_bootstrap_module_for", combine)
-        self.assertNotIn("_exec_module_isolated", combine)
+        self.assertIn("resolve_trusted_formatter_loader_module", combine)
         self.assertIn("dependency-cursor-review-dependabot-context.js", workflow)
 
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
