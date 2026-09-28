@@ -9,19 +9,15 @@ from pathlib import Path
 
 TRUSTED_FORMATTER_MODULE_NAME = "trusted_malware_verdict_formatter"
 
-# Keep in sync with formatter_bundle_inventory.FORMATTER_SIBLING_MODULE_STEMS (scrub-safe).
-FORMATTER_SIBLING_MODULE_STEMS: tuple[str, ...] = (
-    "malware_verdict_patterns_regex",
-    "malware_verdict_patterns_structure",
-    "malware_verdict_patterns",
-    "malware_verdict_policy_types",
-    "malware_verdict_policy_lexical",
-    "malware_verdict_policy_context",
-    "malware_verdict_policy_rules_select",
-    "malware_verdict_policy_rules_strip",
-    "malware_verdict_policy_analysis",
-    "malware_verdict_policy",
-)
+
+def _runtime_bundle():
+    bundle = sys.modules.get("formatter_runtime_bundle")
+    if bundle is None:
+        raise RuntimeError(
+            "formatter_runtime_bundle must be loaded before trusted_formatter_loader "
+            "(resolve_loader_bundle / resolve_trusted_formatter_loader_for_dir)"
+        )
+    return bundle
 
 
 def _require_util(script_dir: Path):
@@ -64,7 +60,7 @@ def import_module_from_trusted_script(
 def ensure_formatter_sibling_modules(script_dir: Path) -> None:
     """Load co-located formatter modules with scripts-dir isolation."""
     parent = script_dir.resolve()
-    for stem in FORMATTER_SIBLING_MODULE_STEMS:
+    for stem in _runtime_bundle().FORMATTER_SIBLING_MODULE_STEMS:
         mod_name = stem
         existing = sys.modules.get(mod_name)
         if existing is not None:

@@ -13,10 +13,13 @@ _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy.py", 25),
     ("malware_verdict_policy_types.py", 50),
     ("malware_verdict_policy_lexical.py", 35),
-    ("malware_verdict_policy_context.py", 450),
-    ("module_exec_scrub_bootstrap.py", 45),
-    ("module_exec_scrub.py", 60),
-    ("formatter_bundle_inventory.py", 200),
+    ("malware_verdict_policy_context.py", 350),
+    ("malware_verdict_policy_strip_eligibility.py", 95),
+    ("scripts_dir_module_loader.py", 45),
+    ("formatter_runtime_bundle.py", 45),
+    ("module_exec_scrub_bootstrap.py", 15),
+    ("module_exec_scrub.py", 35),
+    ("formatter_bundle_inventory.py", 220),
     ("malware_verdict_policy_rules_select.py", 360),
     ("malware_verdict_policy_rules_strip.py", 300),
     ("malware_verdict_policy_analysis.py", 60),
@@ -43,8 +46,10 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("exec_module_scrubbing_script_dir", iso_src)
         self.assertIn("register_util_from_scripts_dir", iso_src)
         self.assertIn("module_exec_scrub", cold_src)
-        self.assertIn("exec_module_scrubbing_script_dir", iso_src)
+        self.assertIn("_hop_load_scripts_dir_module_loader", cold_src)
+        self.assertNotIn("def _module_exec_scrub_bootstrap", cold_src)
         self.assertNotIn("def _exec_module_scrubbing_script_dir", cold_src)
+        self.assertIn("exec_module_scrubbing_script_dir", iso_src)
         self.assertNotIn("register_util_from_disk", cold_src)
         self.assertIn("register_util_from_scripts_dir", cold_src)
         self.assertNotIn("resolve_trusted_formatter_loader_module", util_src)
@@ -107,7 +112,7 @@ class ThermoJudo8Test(unittest.TestCase):
             self.assertIn(pattern, gitignore, msg=f"missing gitignore pattern {pattern!r}")
         for mirror_name in (
             "module-exec-scrub-bootstrap.py",
-            "formatter-bundle-inventory.py",
+            "formatter-runtime-bundle.py",
             "malware-verdict-policy-context.py",
         ):
             mirror_path = _REPO_ROOT / "templates" / mirror_name

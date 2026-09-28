@@ -12,6 +12,8 @@ templates/malware-verdict-*.py
 templates/trusted-formatter-loader*.py
 templates/module-exec-*.py
 templates/formatter-bundle-*.py
+templates/formatter-runtime-bundle.py
+templates/scripts-dir-module-loader.py
 templates/isolated-module-exec.py
 templates/script-dir-isolated-load.py
 templates/dependency-cursor-review-*.py

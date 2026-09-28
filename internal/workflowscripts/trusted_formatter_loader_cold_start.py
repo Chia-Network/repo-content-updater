@@ -1,9 +1,9 @@
 """Stdlib-only cold start for python3 -I workflow scripts (single loader resolve spine).
 
 Load sequence:
-  cold_start → scrub bootstrap → module_exec_scrub → isolated_module_exec
-  → register util → trusted_formatter_loader_bootstrap → trusted_formatter_loader
-  → sibling preload (formatter policy stack).
+  cold_start → hop scripts_dir_module_loader → module_exec_scrub_bootstrap → module_exec_scrub
+  → isolated_module_exec → register util → trusted_formatter_loader_bootstrap
+  → trusted_formatter_loader → sibling preload (formatter policy stack).
 """
 
 from __future__ import annotations
@@ -19,13 +19,37 @@ DEFAULT_SCRIPT_CANDIDATES: tuple[Path, ...] = (
 )
 
 _ISO_NAME = "isolated_module_exec"
-# Keep in sync with formatter_bundle_inventory.LOADER_RESOLVE_MARKER_FILENAMES (-I safe).
-_BUNDLE_MARKERS: tuple[str, ...] = (
-    "isolated_module_exec.py",
-    "script_dir_isolated_load.py",
-    "trusted_formatter_loader_bootstrap.py",
-    "trusted_formatter_loader.py",
-)
+_SCRIPTS_DIR_LOADER = "scripts_dir_module_loader"
+
+
+def _hop_load_scripts_dir_module_loader(script_dir: Path) -> types.ModuleType:
+    """Sole cold-start path-scrub hop (loads scripts_dir_module_loader.py only)."""
+    script_dir = script_dir.resolve()
+    existing = sys.modules.get(_SCRIPTS_DIR_LOADER)
+    loader_path = script_dir / f"{_SCRIPTS_DIR_LOADER}.py"
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file and Path(existing_file).resolve() == loader_path.resolve():
+            return existing
+    if not loader_path.is_file():
+        raise RuntimeError(f"Missing {loader_path}")
+    spec = importlib.util.spec_from_file_location(_SCRIPTS_DIR_LOADER, loader_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec from {loader_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_SCRIPTS_DIR_LOADER] = module
+    script_dir_s = str(script_dir)
+    saved_path = sys.path.copy()
+    try:
+        sys.path = [entry for entry in sys.path if entry != script_dir_s]
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = saved_path
+    return module
+
+
+def _bootstrap_spine(script_dir: Path):
+    return _hop_load_scripts_dir_module_loader(script_dir).bootstrap_module_from_scripts_dir
 
 
 def _module_exec_scrub(script_dir: Path) -> types.ModuleType:
@@ -37,38 +61,16 @@ def _module_exec_scrub(script_dir: Path) -> types.ModuleType:
         scrub_path = script_dir / "module_exec_scrub.py"
         if existing_file and Path(existing_file).resolve() == scrub_path.resolve():
             return existing
-    boot = _module_exec_scrub_bootstrap(script_dir)
-    return boot.bootstrap_module_from_scripts_dir(
-        script_dir, "module_exec_scrub.py", "module_exec_scrub"
-    )
+    spine = _bootstrap_spine(script_dir)
+    spine(script_dir, "module_exec_scrub_bootstrap.py", "module_exec_scrub_bootstrap")
+    return spine(script_dir, "module_exec_scrub.py", "module_exec_scrub")
 
 
-def _module_exec_scrub_bootstrap(script_dir: Path) -> types.ModuleType:
-    script_dir = script_dir.resolve()
-    existing = sys.modules.get("module_exec_scrub_bootstrap")
-    if existing is not None:
-        existing_file = getattr(existing, "__file__", None)
-        boot_path = script_dir / "module_exec_scrub_bootstrap.py"
-        if existing_file and Path(existing_file).resolve() == boot_path.resolve():
-            return existing
-    boot_path = script_dir / "module_exec_scrub_bootstrap.py"
-    if not boot_path.is_file():
-        raise RuntimeError(f"Missing {boot_path}")
-    spec = importlib.util.spec_from_file_location(
-        "module_exec_scrub_bootstrap", boot_path
+def _loader_resolve_markers(script_dir: Path) -> tuple[str, ...]:
+    bundle = _bootstrap_spine(script_dir)(
+        script_dir, "formatter_runtime_bundle.py", "formatter_runtime_bundle"
     )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {boot_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["module_exec_scrub_bootstrap"] = module
-    script_dir_s = str(script_dir)
-    saved_path = sys.path.copy()
-    try:
-        sys.path = [entry for entry in sys.path if entry != script_dir_s]
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = saved_path
-    return module
+    return bundle.LOADER_RESOLVE_MARKER_FILENAMES
 
 
 def _ensure_isolated_module_exec(script_dir: Path) -> types.ModuleType:
@@ -110,7 +112,11 @@ def resolve_loader_bundle(
     """Find scripts dir; return (trusted_formatter_loader module, chosen directory)."""
     for script_dir in candidate_script_dirs:
         script_dir = script_dir.resolve()
-        if not all((script_dir / name).is_file() for name in _BUNDLE_MARKERS):
+        try:
+            markers = _loader_resolve_markers(script_dir)
+        except (RuntimeError, OSError):
+            continue
+        if not all((script_dir / name).is_file() for name in markers):
             continue
         return resolve_loader_for_dir(script_dir), script_dir
     raise RuntimeError(

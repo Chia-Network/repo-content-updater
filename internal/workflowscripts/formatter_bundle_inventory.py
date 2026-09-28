@@ -1,39 +1,28 @@
-"""Authoritative formatter / DCR script inventory (bundles, stems, trusted manifest)."""
+"""Repo-authoring inventory (sync + manifest generation; not consumer runtime)."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
-# Loader resolve spine (cold_start.resolve_loader_bundle markers).
-LOADER_RESOLVE_MARKER_FILENAMES: tuple[str, ...] = (
-    "isolated_module_exec.py",
-    "script_dir_isolated_load.py",
-    "trusted_formatter_loader_bootstrap.py",
-    "trusted_formatter_loader.py",
+from formatter_runtime_bundle import (
+    FORMATTER_RUNTIME_FILENAMES,
+    FORMATTER_SIBLING_MODULE_STEMS,
+    LOADER_RESOLVE_MARKER_FILENAMES,
 )
 
-# Co-located formatter modules preloaded beside the trusted formatter file.
-FORMATTER_SIBLING_MODULE_STEMS: tuple[str, ...] = (
-    "malware_verdict_patterns_regex",
-    "malware_verdict_patterns_structure",
-    "malware_verdict_patterns",
-    "malware_verdict_policy_types",
-    "malware_verdict_policy_lexical",
-    "malware_verdict_policy_context",
-    "malware_verdict_policy_rules_select",
-    "malware_verdict_policy_rules_strip",
-    "malware_verdict_policy_analysis",
-    "malware_verdict_policy",
+_DCR_WORKFLOW = "dependency-cursor-review"
+_MANAGED_FILE_PATH = re.compile(
+    r"- name: ([^\n]+)\n(?:.*\n)*?    repo_path: ([^\n]+)",
+    re.MULTILINE,
 )
-
-FORMATTER_RUNTIME_FILENAMES: tuple[str, ...] = (
-    "formatter_bundle_inventory.py",
-    "module_exec_scrub_bootstrap.py",
-    "module_exec_scrub.py",
-    *LOADER_RESOLVE_MARKER_FILENAMES,
-    "trusted_formatter_loader_cold_start.py",
-    "malware_verdict_formatter.py",
-    *(f"{stem}.py" for stem in FORMATTER_SIBLING_MODULE_STEMS),
+_DCR_COMPANION_BLOCK = re.compile(
+    rf"- name: {_DCR_WORKFLOW}\n(?:.*\n)*?    companion_files:\n((?:      - .+\n)+)",
+    re.MULTILINE,
+)
+_DCR_GROUP_TEMPLATES = re.compile(
+    rf"- name: {_DCR_WORKFLOW}\n(?:.*\n)*?    templates:\n((?:      - .+\n)+)",
+    re.MULTILINE,
 )
 
 DCR_COMBINE_EXTRA_FILENAMES: tuple[str, ...] = (
@@ -51,8 +40,8 @@ DCR_SYNC_EXTRA_FILENAMES: tuple[str, ...] = (
     "dependency-cursor-review-target-pr.js",
 )
 
-# Canonical workflowscripts → templates/ managed mirror (single sync authority).
-SYNC_CANONICAL_TO_TEMPLATE: tuple[tuple[str, str], ...] = (
+# Consumer checkout / templates sync (formatter_runtime_bundle is runtime authority).
+CONSUMER_SYNC_CANONICAL_TO_TEMPLATE: tuple[tuple[str, str], ...] = (
     ("malware_verdict_formatter.py", "malware-verdict-formatter.py"),
     ("malware_verdict_patterns_regex.py", "malware-verdict-patterns-regex.py"),
     ("malware_verdict_patterns_structure.py", "malware-verdict-patterns-structure.py"),
@@ -61,12 +50,14 @@ SYNC_CANONICAL_TO_TEMPLATE: tuple[tuple[str, str], ...] = (
     ("malware_verdict_policy_types.py", "malware-verdict-policy-types.py"),
     ("malware_verdict_policy_lexical.py", "malware-verdict-policy-lexical.py"),
     ("malware_verdict_policy_context.py", "malware-verdict-policy-context.py"),
+    ("malware_verdict_policy_strip_eligibility.py", "malware-verdict-policy-strip-eligibility.py"),
     ("malware_verdict_policy_rules_select.py", "malware-verdict-policy-rules-select.py"),
     ("malware_verdict_policy_rules_strip.py", "malware-verdict-policy-rules-strip.py"),
     ("malware_verdict_policy_analysis.py", "malware-verdict-policy-analysis.py"),
+    ("scripts_dir_module_loader.py", "scripts-dir-module-loader.py"),
     ("module_exec_scrub_bootstrap.py", "module-exec-scrub-bootstrap.py"),
     ("module_exec_scrub.py", "module-exec-scrub.py"),
-    ("formatter_bundle_inventory.py", "formatter-bundle-inventory.py"),
+    ("formatter_runtime_bundle.py", "formatter-runtime-bundle.py"),
     ("isolated_module_exec.py", "isolated-module-exec.py"),
     ("script_dir_isolated_load.py", "script-dir-isolated-load.py"),
     ("trusted_formatter_loader.py", "trusted-formatter-loader.py"),
@@ -103,38 +94,14 @@ SYNC_CANONICAL_TO_TEMPLATE: tuple[tuple[str, str], ...] = (
     ),
 )
 
-# dependency-cursor-review group expand order (config.yaml companion_files authority).
-DCR_EXPANDED_COMPANION_NAMES: tuple[str, ...] = (
-    "dependency-cursor-review",
-    "malware-verdict-formatter",
-    "malware-verdict-patterns",
-    "malware-verdict-patterns-regex",
-    "malware-verdict-patterns-structure",
-    "malware-verdict-policy",
-    "malware-verdict-policy-types",
-    "malware-verdict-policy-lexical",
-    "malware-verdict-policy-context",
-    "module-exec-scrub-bootstrap",
-    "module-exec-scrub",
-    "formatter-bundle-inventory",
-    "malware-verdict-policy-rules-select",
-    "malware-verdict-policy-rules-strip",
-    "malware-verdict-policy-analysis",
-    "isolated-module-exec",
-    "script-dir-isolated-load",
-    "trusted-formatter-loader",
-    "trusted-formatter-loader-bootstrap",
-    "trusted-formatter-loader-cold-start",
-    "upstream-malware-scan",
-    "dependency-cursor-review-prompts",
-    "dependency-cursor-review-combine-outputs",
-    "dependency-cursor-review-dependabot-context",
-    "dependency-cursor-review-post-comment",
-    "dependency-cursor-review-target-pr",
-    "dependency-cursor-review-trusted-scripts",
-    "upstream-malware-scan-lib",
-    "upstream-malware-scan-findings",
-    "trusted-git-path-checkout-action",
+# Repo-content-updater authoring mirror only (not consumer trusted checkout).
+AUTHORING_ONLY_SYNC_CANONICAL_TO_TEMPLATE: tuple[tuple[str, str], ...] = (
+    ("formatter_bundle_inventory.py", "formatter-bundle-inventory.py"),
+)
+
+SYNC_CANONICAL_TO_TEMPLATE: tuple[tuple[str, str], ...] = (
+    *CONSUMER_SYNC_CANONICAL_TO_TEMPLATE,
+    *AUTHORING_ONLY_SYNC_CANONICAL_TO_TEMPLATE,
 )
 
 FORMATTER_COLD_START_TEST_BUNDLE: tuple[str, ...] = FORMATTER_RUNTIME_FILENAMES
@@ -148,20 +115,78 @@ _TRUSTED_MANIFEST_ONLY_REPO_PATHS: tuple[str, ...] = (
     ".github/scripts/dependency-cursor-review-trusted-scripts.paths",
 )
 
-# Consumer-repo paths for trusted-git-path-checkout (single manifest source).
-TRUSTED_DCR_SCRIPT_REPO_PATHS: tuple[str, ...] = (
-    *_TRUSTED_MANIFEST_ONLY_REPO_PATHS,
-    *(f".github/scripts/{canonical}" for canonical, _ in SYNC_CANONICAL_TO_TEMPLATE),
-)
+
+def _parse_yaml_name_list(block: str) -> tuple[str, ...]:
+    return tuple(
+        line.strip().removeprefix("- ").strip()
+        for line in block.splitlines()
+        if line.strip()
+    )
+
+
+def parse_dcr_companion_files(config_text: str) -> tuple[str, ...]:
+    """Ordered companion_files from config.yaml (files.dependency-cursor-review)."""
+    block = _DCR_COMPANION_BLOCK.search(config_text)
+    if block is None:
+        raise ValueError(f"missing {_DCR_WORKFLOW} companion_files in config.yaml")
+    return _parse_yaml_name_list(block.group(1))
+
+
+def parse_dcr_expanded_managed_names(config_text: str) -> tuple[str, ...]:
+    """ExpandManagedFileEntries order: workflow + companion_files."""
+    return (_DCR_WORKFLOW, *parse_dcr_companion_files(config_text))
+
+
+def parse_dcr_group_templates(config_text: str) -> tuple[str, ...]:
+    block = _DCR_GROUP_TEMPLATES.search(config_text)
+    if block is None:
+        raise ValueError(f"missing group {_DCR_WORKFLOW} templates in config.yaml")
+    return _parse_yaml_name_list(block.group(1))
+
+
+def trusted_dcr_script_repo_paths(config_text: str) -> tuple[str, ...]:
+    """Consumer trusted-git-path-checkout manifest (.github/scripts/* only)."""
+    companion_names = parse_dcr_companion_files(config_text)
+    name_to_path = {
+        name: path.strip()
+        for name, path in _MANAGED_FILE_PATH.findall(config_text)
+    }
+    ordered: list[str] = [*_TRUSTED_MANIFEST_ONLY_REPO_PATHS]
+    for name in companion_names:
+        path = name_to_path.get(name)
+        if path and path.startswith(".github/scripts/"):
+            ordered.append(path)
+    return tuple(ordered)
 
 
 def managed_formatter_sync_pairs() -> tuple[tuple[str, str], ...]:
-    """Template name, canonical filename (for formatter sync tests)."""
-    return tuple((template, canonical) for canonical, template in SYNC_CANONICAL_TO_TEMPLATE)
+    """Template name, canonical filename (consumer sync face)."""
+    return tuple(
+        (template, canonical)
+        for canonical, template in CONSUMER_SYNC_CANONICAL_TO_TEMPLATE
+    )
 
 
 def write_dcr_companion_golden(repo_root: Path) -> None:
-    """Refresh Go test golden from DCR_EXPANDED_COMPANION_NAMES."""
+    config_text = (repo_root / "config.yaml").read_text(encoding="utf-8")
+    names = parse_dcr_expanded_managed_names(config_text)
     path = repo_root / "internal" / "config" / "dcr_managed_companion_names.golden"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(DCR_EXPANDED_COMPANION_NAMES) + "\n", encoding="utf-8")
+    path.write_text("\n".join(names) + "\n", encoding="utf-8")
+
+
+def validate_config_companion_ordering(config_text: str) -> None:
+    companions = parse_dcr_companion_files(config_text)
+    group_templates = parse_dcr_group_templates(config_text)
+    expected_group = (_DCR_WORKFLOW, *companions)
+    if group_templates != expected_group:
+        raise ValueError(
+            "groups.dependency-cursor-review.templates must equal "
+            "[dependency-cursor-review] + files.companion_files"
+        )
+    synced = {canonical for canonical, _ in CONSUMER_SYNC_CANONICAL_TO_TEMPLATE}
+    expected_sync = set(FORMATTER_RUNTIME_FILENAMES) | set(DCR_SYNC_EXTRA_FILENAMES)
+    if synced != expected_sync:
+        raise ValueError(
+            "CONSUMER_SYNC_CANONICAL_TO_TEMPLATE must match runtime bundle + DCR extras"
+        )

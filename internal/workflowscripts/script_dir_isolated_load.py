@@ -27,6 +27,10 @@ def resolve_trusted_formatter_loader_for_dir(script_dir: Path) -> types.ModuleTy
     loader_path = script_dir / "trusted_formatter_loader.py"
     if not loader_path.is_file():
         raise RuntimeError(f"Missing {loader_path}")
+    util.load_module_isolated(
+        script_dir / "formatter_runtime_bundle.py",
+        "formatter_runtime_bundle",
+    )
     loader_mod = bootstrap.load_loader_module(loader_path)
     loader_mod.ensure_formatter_sibling_modules(script_dir)
     return loader_mod

@@ -7,9 +7,11 @@ malware-verdict-policy
 malware-verdict-policy-types
 malware-verdict-policy-lexical
 malware-verdict-policy-context
+malware-verdict-policy-strip-eligibility
 module-exec-scrub-bootstrap
+scripts-dir-module-loader
 module-exec-scrub
-formatter-bundle-inventory
+formatter-runtime-bundle
 malware-verdict-policy-rules-select
 malware-verdict-policy-rules-strip
 malware-verdict-policy-analysis

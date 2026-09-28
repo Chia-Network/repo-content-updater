@@ -7,8 +7,6 @@ import sys
 import types
 from pathlib import Path
 
-from module_exec_scrub_bootstrap import bootstrap_module_from_scripts_dir
-
 
 def exec_module_scrubbing_script_dir(
     spec: importlib.machinery.ModuleSpec,
@@ -25,12 +23,3 @@ def exec_module_scrubbing_script_dir(
         spec.loader.exec_module(module)
     finally:
         sys.path[:] = saved_path
-
-
-def ensure_module_from_scripts_dir(
-    script_dir: Path,
-    filename: str,
-    module_name: str,
-) -> types.ModuleType:
-    """Load module_exec_scrub (or bootstrap) via the shared bootstrap spine."""
-    return bootstrap_module_from_scripts_dir(script_dir, filename, module_name)

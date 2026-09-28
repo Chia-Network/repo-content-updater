@@ -34,9 +34,11 @@ groups:
       - malware-verdict-policy-types
       - malware-verdict-policy-lexical
       - malware-verdict-policy-context
+      - malware-verdict-policy-strip-eligibility
       - module-exec-scrub-bootstrap
+      - scripts-dir-module-loader
       - module-exec-scrub
-      - formatter-bundle-inventory
+      - formatter-runtime-bundle
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
       - malware-verdict-policy-analysis
@@ -46,14 +48,14 @@ groups:
       - trusted-formatter-loader-bootstrap
       - trusted-formatter-loader-cold-start
       - upstream-malware-scan
-      - upstream-malware-scan-lib
-      - upstream-malware-scan-findings
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
       - dependency-cursor-review-dependabot-context
       - dependency-cursor-review-post-comment
       - dependency-cursor-review-target-pr
       - dependency-cursor-review-trusted-scripts
+      - upstream-malware-scan-lib
+      - upstream-malware-scan-findings
       - trusted-git-path-checkout-action
 
 files:
@@ -77,9 +79,11 @@ files:
       - malware-verdict-policy-types
       - malware-verdict-policy-lexical
       - malware-verdict-policy-context
+      - malware-verdict-policy-strip-eligibility
       - module-exec-scrub-bootstrap
+      - scripts-dir-module-loader
       - module-exec-scrub
-      - formatter-bundle-inventory
+      - formatter-runtime-bundle
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
       - malware-verdict-policy-analysis
@@ -139,6 +143,10 @@ files:
     template_name: malware-verdict-policy-context.py
     repo_path: .github/scripts/malware_verdict_policy_context.py
 
+  - name: malware-verdict-policy-strip-eligibility
+    template_name: malware-verdict-policy-strip-eligibility.py
+    repo_path: .github/scripts/malware_verdict_policy_strip_eligibility.py
+
   - name: malware-verdict-policy-rules-select
     template_name: malware-verdict-policy-rules-select.py
     repo_path: .github/scripts/malware_verdict_policy_rules_select.py
@@ -159,9 +167,13 @@ files:
     template_name: module-exec-scrub.py
     repo_path: .github/scripts/module_exec_scrub.py
 
-  - name: formatter-bundle-inventory
-    template_name: formatter-bundle-inventory.py
-    repo_path: .github/scripts/formatter_bundle_inventory.py
+  - name: scripts-dir-module-loader
+    template_name: scripts-dir-module-loader.py
+    repo_path: .github/scripts/scripts_dir_module_loader.py
+
+  - name: formatter-runtime-bundle
+    template_name: formatter-runtime-bundle.py
+    repo_path: .github/scripts/formatter_runtime_bundle.py
 
   - name: isolated-module-exec
     template_name: isolated-module-exec.py
