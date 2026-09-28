@@ -3,6 +3,7 @@
 .github/scripts/malware_verdict_patterns.py
 .github/scripts/malware_verdict_policy.py
 .github/scripts/malware_verdict_policy_view.py
+.github/scripts/malware_verdict_policy_selection.py
 .github/scripts/malware_verdict_policy_context.py
 .github/scripts/scripts_dir_path_scrub.py
 .github/scripts/scripts_dir_module_loader.py

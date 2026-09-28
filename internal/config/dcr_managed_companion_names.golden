@@ -3,6 +3,7 @@ malware-verdict-formatter
 malware-verdict-patterns
 malware-verdict-policy
 malware-verdict-policy-view
+malware-verdict-policy-selection
 malware-verdict-policy-context
 scripts-dir-path-scrub
 scripts-dir-module-loader

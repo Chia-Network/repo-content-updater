@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 import types
 from pathlib import Path
@@ -11,34 +10,27 @@ _SCRUB = "scripts_dir_path_scrub"
 _LOADER = "scripts_dir_module_loader"
 
 
-def _bootstrap_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
-    """Load scripts_dir_path_scrub (one inline scrub exec; same as cold_start bootstrap)."""
+def _require_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
+    """Require cold-start bootstrap; isolated exec does not duplicate scrub bootstrap."""
     script_dir = script_dir.resolve()
+    scrub = sys.modules.get(_SCRUB)
     scrub_path = script_dir / f"{_SCRUB}.py"
-    existing = sys.modules.get(_SCRUB)
-    if existing is not None:
-        existing_file = getattr(existing, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == scrub_path.resolve():
-            return existing
-    spec = importlib.util.spec_from_file_location(_SCRUB, scrub_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {scrub_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[_SCRUB] = module
-    script_dir_s = str(script_dir)
-    saved_path = sys.path.copy()
-    try:
-        sys.path = [entry for entry in sys.path if entry != script_dir_s]
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = saved_path
-    return module
+    if scrub is None:
+        raise RuntimeError(
+            "scripts_dir_path_scrub must be primed before isolated_module_exec "
+            "(trusted_formatter_loader_cold_start bootstrap under python3 -I)"
+        )
+    existing_file = getattr(scrub, "__file__", None)
+    if not existing_file or Path(existing_file).resolve() != scrub_path.resolve():
+        raise RuntimeError(
+            f"scripts_dir_path_scrub in sys.modules is not the trusted copy from {scrub_path}"
+        )
+    return scrub
 
 
 def _ensure_loader_spine(script_dir: Path) -> types.ModuleType:
     script_dir = script_dir.resolve()
-    _bootstrap_scripts_dir_path_scrub(script_dir)
-    scrub = sys.modules[_SCRUB]
+    scrub = _require_scripts_dir_path_scrub(script_dir)
     loader = sys.modules.get(_LOADER)
     loader_path = script_dir / f"{_LOADER}.py"
     if loader is not None:
@@ -74,7 +66,7 @@ def load_module_isolated(
 
 
 def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:
-    """Prime scripts_dir_path_scrub + loader + isolated_module_exec."""
+    """Prime loader spine + isolated_module_exec (requires path_scrub already bootstrapped)."""
     script_dir = script_dir.resolve()
     name = "isolated_module_exec"
     path = script_dir / f"{name}.py"

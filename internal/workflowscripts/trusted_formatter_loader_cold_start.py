@@ -1,8 +1,9 @@
-"""Stdlib-only cold start for python3 -I (one scrub hop → resolve_loader_bundle).
+"""Stdlib-only cold start for python3 -I (resolve_loader_bundle public entry).
 
 Load sequence under python3 -I:
-  resolve_loader_bundle → bootstrap scripts_dir_path_scrub (once) → exec loader
-  → isolated_module_exec → resolve_trusted_formatter_loader_for_dir → sibling preload.
+  1. bootstrap scripts_dir_path_scrub (single inline scrub exec — chicken-and-egg)
+  2. exec scripts_dir_module_loader via path_scrub.exec_scripts_dir_module
+  3. isolated_module_exec → resolve_trusted_formatter_loader_for_dir → sibling preload
 """
 
 from __future__ import annotations
@@ -22,8 +23,8 @@ _SCRUB = "scripts_dir_path_scrub"
 _ISO = "isolated_module_exec"
 
 
-def _bootstrap_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
-    """Chicken-and-egg: load scripts_dir_path_scrub (one inline scrub exec; see path_scrub module)."""
+def bootstrap_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
+    """Single owner of path_scrub bootstrap (inline scrub exec before helper is importable)."""
     script_dir = script_dir.resolve()
     scrub_path = script_dir / f"{_SCRUB}.py"
     existing = sys.modules.get(_SCRUB)
@@ -47,17 +48,16 @@ def _bootstrap_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
 
 
 def _cold_start_hop_load_scripts_dir_module_loader(script_dir: Path) -> types.ModuleType:
-    """Scrub-load scripts_dir_module_loader, then cold_start_hop_load_self."""
+    """Scrub-load scripts_dir_module_loader (cache hit returns module; no redundant re-exec)."""
     script_dir = script_dir.resolve()
     path = script_dir / f"{_LOADER}.py"
     existing = sys.modules.get(_LOADER)
     if existing is not None:
         existing_file = getattr(existing, "__file__", None)
         if existing_file and Path(existing_file).resolve() == path.resolve():
-            return existing.cold_start_hop_load_self(script_dir)
-    scrub = _bootstrap_scripts_dir_path_scrub(script_dir)
-    module = scrub.exec_scripts_dir_module(script_dir, path, _LOADER)
-    return module.cold_start_hop_load_self(script_dir)
+            return existing
+    scrub = bootstrap_scripts_dir_path_scrub(script_dir)
+    return scrub.exec_scripts_dir_module(script_dir, path, _LOADER)
 
 
 def _scripts_dir_module_loader(script_dir: Path) -> types.ModuleType:

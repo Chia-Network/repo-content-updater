@@ -30,6 +30,7 @@ groups:
       - malware-verdict-patterns
       - malware-verdict-policy
       - malware-verdict-policy-view
+      - malware-verdict-policy-selection
       - malware-verdict-policy-context
       - scripts-dir-path-scrub
       - scripts-dir-module-loader
@@ -67,6 +68,7 @@ files:
       - malware-verdict-patterns
       - malware-verdict-policy
       - malware-verdict-policy-view
+      - malware-verdict-policy-selection
       - malware-verdict-policy-context
       - scripts-dir-path-scrub
       - scripts-dir-module-loader
@@ -110,6 +112,10 @@ files:
   - name: malware-verdict-policy-view
     template_name: malware-verdict-policy-view.py
     repo_path: .github/scripts/malware_verdict_policy_view.py
+
+  - name: malware-verdict-policy-selection
+    template_name: malware-verdict-policy-selection.py
+    repo_path: .github/scripts/malware_verdict_policy_selection.py
 
   - name: malware-verdict-policy-context
     template_name: malware-verdict-policy-context.py
