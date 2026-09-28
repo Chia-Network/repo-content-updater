@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.machinery
 import importlib.util
 import sys
 import types
@@ -49,23 +48,6 @@ def bootstrap_module_from_scripts_dir(
     return _exec_scripts_dir_module(
         script_dir, script_dir / filename, module_name, register=True
     )
-
-
-def exec_module_scrubbing_script_dir(
-    spec: importlib.machinery.ModuleSpec,
-    module: types.ModuleType,
-    script_path: Path,
-) -> None:
-    """Run module exec with the script directory removed from sys.path."""
-    if spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {script_path}")
-    script_dir_s = str(script_path.resolve().parent)
-    saved_path = sys.path.copy()
-    try:
-        sys.path = [entry for entry in sys.path if entry != script_dir_s]
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = saved_path
 
 
 def cold_start_hop_load_self(script_dir: Path) -> types.ModuleType:

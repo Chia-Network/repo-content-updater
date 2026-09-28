@@ -12,18 +12,15 @@ from scripts_dir_module_loader import bootstrap_module_from_scripts_dir
 def load_module_isolated(
     script_path: Path,
     module_name: str | None = None,
-    *,
-    register: bool = True,
 ) -> types.ModuleType:
     """Register and exec a module without leaving its directory on sys.path."""
     script_path = script_path.resolve()
     name = module_name or f"isolated_{script_path.stem}"
-    if register:
-        existing = sys.modules.get(name)
-        if existing is not None:
-            existing_file = getattr(existing, "__file__", None)
-            if existing_file and Path(existing_file).resolve() == script_path:
-                return existing
+    existing = sys.modules.get(name)
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file and Path(existing_file).resolve() == script_path:
+            return existing
     return bootstrap_module_from_scripts_dir(script_path.parent, script_path.name, name)
 
 

@@ -105,11 +105,21 @@ def trusted_dcr_script_repo_paths(config_text: str) -> tuple[str, ...]:
         name: repo_path
         for name, _template, repo_path in _MANAGED_FILE_ENTRY.findall(config_text)
     }
-    ordered: list[str] = [*_TRUSTED_MANIFEST_ONLY_REPO_PATHS]
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def _append(path: str) -> None:
+        if path in seen:
+            return
+        seen.add(path)
+        ordered.append(path)
+
+    for path in _TRUSTED_MANIFEST_ONLY_REPO_PATHS:
+        _append(path)
     for name in companion_names:
         path = name_to_path.get(name)
         if path and path.startswith(".github/scripts/"):
-            ordered.append(path)
+            _append(path)
     return tuple(ordered)
 
 

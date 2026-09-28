@@ -23,6 +23,5 @@
 .github/scripts/dependency-cursor-review-dependabot-context.js
 .github/scripts/dependency-cursor-review-post-comment.js
 .github/scripts/dependency-cursor-review-target-pr.js
-.github/scripts/dependency-cursor-review-trusted-scripts.paths
 .github/scripts/upstream_malware_scan_lib.sh
 .github/scripts/upstream_malware_scan_findings.sh

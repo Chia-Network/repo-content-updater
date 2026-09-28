@@ -15,7 +15,7 @@ _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy_lexical.py", 35),
     ("malware_verdict_policy_context.py", 350),
     ("malware_verdict_policy_strip_eligibility.py", 95),
-    ("scripts_dir_module_loader.py", 85),
+    ("scripts_dir_module_loader.py", 70),
     ("formatter_runtime_bundle.py", 45),
     ("formatter_bundle_inventory.py", 220),
     ("malware_verdict_policy_rules_select.py", 360),

@@ -13,7 +13,7 @@ import trusted_formatter_loader_cold_start as cold_start
 _SCRIPTS = Path(__file__).resolve().parent
 
 
-class ModuleExecScrubTest(unittest.TestCase):
+class ColdStartLoaderHopTest(unittest.TestCase):
     def test_cold_start_hop_delegates_to_cold_start_hop_load_self(self) -> None:
         hop_src = inspect.getsource(cold_start._cold_start_hop_load_scripts_dir_module_loader)
         self.assertIn("cold_start_hop_load_self", hop_src)

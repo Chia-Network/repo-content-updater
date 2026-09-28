@@ -81,6 +81,17 @@ class FormatterBundleInventoryTest(unittest.TestCase):
         manifest = (_REPO_ROOT / "templates" / "dependency-cursor-review-trusted-scripts.paths").read_text(
             encoding="utf-8"
         )
-        manifest_paths = {line.strip() for line in manifest.splitlines() if line.strip()}
+        manifest_lines = [line.strip() for line in manifest.splitlines() if line.strip()]
+        manifest_paths = set(manifest_lines)
         self.assertEqual(set(expected_paths), manifest_paths)
+        self.assertEqual(
+            len(expected_paths),
+            len(manifest_lines),
+            msg="trusted manifest must not list any repo_path more than once",
+        )
         self.assertEqual(len(sync_canonical_to_template(config)), len(managed_formatter_sync_pairs(config)) + 1)
+
+    def test_trusted_dcr_script_repo_paths_has_no_duplicates(self) -> None:
+        config = _CONFIG.read_text(encoding="utf-8")
+        paths = trusted_dcr_script_repo_paths(config)
+        self.assertEqual(len(paths), len(set(paths)))
