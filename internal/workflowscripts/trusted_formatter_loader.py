@@ -21,8 +21,8 @@ def _runtime_bundle():
 
 
 def _require_util(script_dir: Path):
-    util = sys.modules.get("script_dir_isolated_load")
-    path = (script_dir.resolve() / "script_dir_isolated_load.py").resolve()
+    util = sys.modules.get("isolated_module_exec")
+    path = (script_dir.resolve() / "isolated_module_exec.py").resolve()
     if util is not None:
         existing_file = getattr(util, "__file__", None)
         if existing_file and Path(existing_file).resolve() == path:

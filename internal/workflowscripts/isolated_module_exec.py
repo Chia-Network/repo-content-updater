@@ -25,9 +25,9 @@ def load_module_isolated(
 
 
 def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:
-    """Register script_dir_isolated_load alias module for trusted_formatter_loader._require_util."""
+    """Prime scripts_dir_module_loader + isolated_module_exec for trusted_formatter_loader."""
     script_dir = script_dir.resolve()
-    name = "script_dir_isolated_load"
+    name = "isolated_module_exec"
     path = script_dir / f"{name}.py"
     existing = sys.modules.get(name)
     if existing is not None:
@@ -37,20 +37,18 @@ def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:
     bootstrap_module_from_scripts_dir(
         script_dir, "scripts_dir_module_loader.py", "scripts_dir_module_loader"
     )
-    iso_path = script_dir / "isolated_module_exec.py"
-    if not iso_path.is_file():
-        raise RuntimeError(f"Missing {iso_path}")
-    load_module_isolated(iso_path, "isolated_module_exec")
+    if not path.is_file():
+        raise RuntimeError(f"Missing {path}")
     return load_module_isolated(path, name)
 
 
 def resolve_trusted_formatter_loader_for_dir(script_dir: Path) -> types.ModuleType:
     """Load trusted_formatter_loader + formatter policy siblings (scripts-dir isolation)."""
     script_dir = script_dir.resolve()
-    util = sys.modules.get("script_dir_isolated_load")
+    util = sys.modules.get("isolated_module_exec")
     if util is None:
         raise RuntimeError(
-            "script_dir_isolated_load must be registered before resolve_trusted_formatter_loader_for_dir"
+            "isolated_module_exec must be registered before resolve_trusted_formatter_loader_for_dir"
         )
     util.load_module_isolated(
         script_dir / "formatter_runtime_bundle.py",

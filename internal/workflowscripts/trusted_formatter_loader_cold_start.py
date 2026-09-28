@@ -1,9 +1,8 @@
-"""Stdlib-only cold start for python3 -I workflow scripts (single loader resolve spine).
+"""Stdlib-only cold start for python3 -I (one scrub hop → resolve_loader_bundle).
 
-Load sequence:
-  cold_start → hop scripts_dir_module_loader.cold_start_hop_load_self
-  → isolated_module_exec → register util → resolve_trusted_formatter_loader_for_dir
-  → sibling preload (formatter policy stack).
+Load sequence under python3 -I:
+  resolve_loader_bundle → scrub hop (scripts_dir_module_loader) → isolated_module_exec
+  → resolve_trusted_formatter_loader_for_dir → sibling preload.
 """
 
 from __future__ import annotations
@@ -18,8 +17,8 @@ DEFAULT_SCRIPT_CANDIDATES: tuple[Path, ...] = (
     Path("internal/workflowscripts"),
 )
 
-_ISO_NAME = "isolated_module_exec"
-_SCRIPTS_DIR_LOADER = "scripts_dir_module_loader"
+_LOADER = "scripts_dir_module_loader"
+_ISO = "isolated_module_exec"
 
 
 def _cold_start_hop_load_scripts_dir_module_loader(script_dir: Path) -> types.ModuleType:
@@ -30,17 +29,17 @@ def _cold_start_hop_load_scripts_dir_module_loader(script_dir: Path) -> types.Mo
     before the loader module can be imported by name.
     """
     script_dir = script_dir.resolve()
-    path = script_dir / f"{_SCRIPTS_DIR_LOADER}.py"
-    existing = sys.modules.get(_SCRIPTS_DIR_LOADER)
+    path = script_dir / f"{_LOADER}.py"
+    existing = sys.modules.get(_LOADER)
     if existing is not None:
         existing_file = getattr(existing, "__file__", None)
         if existing_file and Path(existing_file).resolve() == path.resolve():
             return existing.cold_start_hop_load_self(script_dir)
-    spec = importlib.util.spec_from_file_location(_SCRIPTS_DIR_LOADER, path)
+    spec = importlib.util.spec_from_file_location(_LOADER, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load module spec from {path}")
     module = importlib.util.module_from_spec(spec)
-    sys.modules[_SCRIPTS_DIR_LOADER] = module
+    sys.modules[_LOADER] = module
     script_dir_s = str(script_dir)
     saved_path = sys.path.copy()
     try:
@@ -51,10 +50,10 @@ def _cold_start_hop_load_scripts_dir_module_loader(script_dir: Path) -> types.Mo
     return module.cold_start_hop_load_self(script_dir)
 
 
-def _scripts_dir_loader(script_dir: Path) -> types.ModuleType:
+def _scripts_dir_module_loader(script_dir: Path) -> types.ModuleType:
     script_dir = script_dir.resolve()
-    existing = sys.modules.get(_SCRIPTS_DIR_LOADER)
-    loader_path = script_dir / f"{_SCRIPTS_DIR_LOADER}.py"
+    loader_path = script_dir / f"{_LOADER}.py"
+    existing = sys.modules.get(_LOADER)
     if existing is not None:
         existing_file = getattr(existing, "__file__", None)
         if existing_file and Path(existing_file).resolve() == loader_path.resolve():
@@ -62,41 +61,19 @@ def _scripts_dir_loader(script_dir: Path) -> types.ModuleType:
     return _cold_start_hop_load_scripts_dir_module_loader(script_dir)
 
 
-def _bootstrap_spine(script_dir: Path):
-    return _scripts_dir_loader(script_dir).bootstrap_module_from_scripts_dir
-
-
 def _loader_resolve_markers(script_dir: Path) -> tuple[str, ...]:
-    bundle = _bootstrap_spine(script_dir)(
-        script_dir, "formatter_runtime_bundle.py", "formatter_runtime_bundle"
-    )
+    bootstrap = _scripts_dir_module_loader(script_dir).bootstrap_module_from_scripts_dir
+    bundle = bootstrap(script_dir, "formatter_runtime_bundle.py", "formatter_runtime_bundle")
     return bundle.LOADER_RESOLVE_MARKER_FILENAMES
-
-
-def _ensure_isolated_module_exec(script_dir: Path) -> types.ModuleType:
-    """Load stdlib-only isolation helper via shared scrub spine."""
-    script_dir = script_dir.resolve()
-    path = script_dir / f"{_ISO_NAME}.py"
-    existing = sys.modules.get(_ISO_NAME)
-    if existing is not None:
-        existing_file = getattr(existing, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == path.resolve():
-            return existing
-    if not path.is_file():
-        raise RuntimeError(f"Missing {path}")
-    return _bootstrap_spine(script_dir)(script_dir, f"{_ISO_NAME}.py", _ISO_NAME)
-
-
-def _registered_util(script_dir: Path) -> types.ModuleType:
-    """Register script_dir_isolated_load once (isolated_module_exec.register_util_from_scripts_dir)."""
-    iso = _ensure_isolated_module_exec(script_dir)
-    return iso.register_util_from_scripts_dir(script_dir.resolve())
 
 
 def resolve_loader_for_dir(script_dir: Path) -> types.ModuleType:
     """Return trusted_formatter_loader via isolated_module_exec resolve spine."""
-    util = _registered_util(script_dir)
-    return util.resolve_trusted_formatter_loader_for_dir(script_dir.resolve())
+    script_dir = script_dir.resolve()
+    bootstrap = _scripts_dir_module_loader(script_dir).bootstrap_module_from_scripts_dir
+    iso = bootstrap(script_dir, f"{_ISO}.py", _ISO)
+    iso.register_util_from_scripts_dir(script_dir)
+    return iso.resolve_trusted_formatter_loader_for_dir(script_dir)
 
 
 def resolve_loader_bundle(

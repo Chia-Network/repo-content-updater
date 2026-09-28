@@ -112,7 +112,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
         """Cold-start spine matches combine: run_path cold_start → resolve_loader_bundle."""
         purge = (
             "trusted_formatter_loader",
-            "script_dir_isolated_load",
+            "isolated_module_exec",
             "isolated_module_exec",
         )
         saved = {name: sys.modules.pop(name, None) for name in purge}
@@ -135,7 +135,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             _copy_formatter_bundle(scripts)
             purge = (
                 "trusted_formatter_loader",
-                "script_dir_isolated_load",
+                "isolated_module_exec",
                 "isolated_module_exec",
             )
             saved = {name: sys.modules.pop(name, None) for name in purge}
