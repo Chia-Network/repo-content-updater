@@ -82,6 +82,22 @@ def import_bootstrap_module(bootstrap_path: Path) -> types.ModuleType:
     return module
 
 
+def resolve_trusted_formatter_loader_module(
+    *candidate_script_dirs: Path,
+) -> types.ModuleType:
+    """Load trusted_formatter_loader from the first scripts dir that has the bundle."""
+    for script_dir in candidate_script_dirs:
+        script_dir = script_dir.resolve()
+        bootstrap_path = script_dir / "trusted_formatter_loader_bootstrap.py"
+        loader_path = script_dir / "trusted_formatter_loader.py"
+        if bootstrap_path.is_file() and loader_path.is_file():
+            return load_trusted_formatter_loader_module(script_dir)
+    raise RuntimeError(
+        "trusted_formatter_loader.py not found under .github/scripts/. "
+        "Run repo-content-updater managed-files for dependency-cursor-review."
+    )
+
+
 def load_trusted_formatter_loader_module(script_dir: Path) -> types.ModuleType:
     """Single workflow entry: isolated bootstrap + isolated loader (stdlib-only YAML may exec bootstrap unisolated then call this)."""
     script_dir = script_dir.resolve()

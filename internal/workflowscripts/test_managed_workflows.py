@@ -50,30 +50,42 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn(
             ".github/scripts/trusted_formatter_loader_bootstrap.py", ensure_bundle
         )
+        self.assertIn(".github/scripts/upstream_malware_scan.sh", ensure_bundle)
+        self.assertIn(
+            ".github/scripts/dependency_cursor_review_combine_outputs.py", ensure_bundle
+        )
         self.assertIn("paths: |", ensure_bundle)
         self.assertLess(
             section.index("Install trusted git path checkout action definition"),
             section.index("Ensure malware verdict formatter bundle"),
         )
 
-    def test_malware_formatter_imported_from_trusted_file_not_scripts_syspath(self) -> None:
-        workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
-        formatter_block = workflow.split("run_agent_prompt \"cursor_prompt_malware.txt\"", 1)[1]
-        self.assertIn("find_and_load_format_malware_review_verdict", formatter_block)
-        self.assertIn("trusted_formatter_loader.py", formatter_block)
-        self.assertNotIn("sys.path.insert(0, str(_script_dir", formatter_block)
-        self.assertNotIn(
-            "from malware_verdict_formatter import format_malware_review_verdict",
-            formatter_block,
+    def test_dependency_cursor_review_workflow_under_line_budget(self) -> None:
+        line_count = len(
+            _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8").splitlines()
         )
-        self.assertNotIn("import malware_verdict_formatter", formatter_block)
-        self.assertNotIn("_import_module_from_trusted_script", formatter_block)
-        self.assertNotIn("_exec_module_isolated_from_scripts_dir", formatter_block)
-        self.assertNotIn("_exec_module_isolated", formatter_block)
-        self.assertNotIn("sys.path.insert(0,", formatter_block)
-        self.assertIn("load_loader_module(loader_path)", formatter_block)
-        self.assertNotIn("_trusted_loader_entry", formatter_block)
-        self.assertIn("trusted_formatter_loader_bootstrap.py", formatter_block)
+        self.assertLess(
+            line_count,
+            1000,
+            msg="dependency-cursor-review.yml should stay under thermonuclear line budget",
+        )
+
+    def test_malware_formatter_imported_from_trusted_companion_not_inline(self) -> None:
+        workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
+        self.assertIn(
+            "python3 .github/scripts/dependency_cursor_review_combine_outputs.py",
+            workflow,
+        )
+        self.assertIn("bash .github/scripts/upstream_malware_scan.sh", workflow)
+        combine = (
+            _REPO_ROOT
+            / "internal"
+            / "workflowscripts"
+            / "dependency_cursor_review_combine_outputs.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("resolve_trusted_formatter_loader_module", combine)
+        self.assertNotIn("_exec_module_isolated", combine)
+        self.assertNotIn("sys.path.insert(0,", combine)
 
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
         self.assertTrue(_TRUSTED_GIT_CHECKOUT_ACTION.is_file())

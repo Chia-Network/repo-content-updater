@@ -20,6 +20,8 @@ FORMATTER_SIBLING_MODULE_STEMS = (
     "malware_verdict_classification",
 )
 
+_FORMATTER_ENV_PRIMED: set[Path] = set()
+
 # Contract: consumers must call load_format_malware_review_verdict(path) (or
 # find_and_load_format_malware_review_verdict) so sibling modules and this loader
 # are bootstrapped before the formatter module executes. Do not rely on importing
@@ -59,6 +61,16 @@ def ensure_formatter_sibling_modules(script_dir: Path) -> None:
         import_module_from_trusted_script(path, mod_name)
 
 
+def prime_formatter_environment(script_dir: Path) -> None:
+    """Load loader + formatter sibling modules once per trusted scripts directory."""
+    parent = script_dir.resolve()
+    if parent in _FORMATTER_ENV_PRIMED:
+        return
+    _ensure_loader_module(parent)
+    ensure_formatter_sibling_modules(parent)
+    _FORMATTER_ENV_PRIMED.add(parent)
+
+
 def _ensure_loader_module(script_dir: Path) -> None:
     loader_path = (script_dir / "trusted_formatter_loader.py").resolve()
     if not loader_path.is_file():
@@ -79,9 +91,7 @@ def load_format_malware_review_verdict(script_path: Path) -> Callable[[str], str
     module, so callers never depend on undocumented sys.modules priming.
     """
     script_path = script_path.resolve()
-    parent = script_path.parent
-    _ensure_loader_module(parent)
-    ensure_formatter_sibling_modules(parent)
+    prime_formatter_environment(script_path.parent)
     module = import_module_from_trusted_script(script_path, TRUSTED_FORMATTER_MODULE_NAME)
     formatter = getattr(module, "format_malware_review_verdict", None)
     if not callable(formatter):

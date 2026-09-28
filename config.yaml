@@ -53,6 +53,9 @@ files:
       - malware-verdict-precedence
       - trusted-formatter-loader
       - trusted-formatter-loader-bootstrap
+      - upstream-malware-scan
+      - dependency-cursor-review-prompts
+      - dependency-cursor-review-combine-outputs
       - trusted-git-path-checkout-action
     alternate_paths:
       - .github/workflows/dependabot-cursor-review.yaml
@@ -86,6 +89,18 @@ files:
   - name: trusted-formatter-loader-bootstrap
     template_name: trusted-formatter-loader-bootstrap.py
     repo_path: .github/scripts/trusted_formatter_loader_bootstrap.py
+
+  - name: upstream-malware-scan
+    template_name: upstream-malware-scan.sh
+    repo_path: .github/scripts/upstream_malware_scan.sh
+
+  - name: dependency-cursor-review-prompts
+    template_name: dependency-cursor-review-prompts.py
+    repo_path: .github/scripts/dependency_cursor_review_prompts.py
+
+  - name: dependency-cursor-review-combine-outputs
+    template_name: dependency-cursor-review-combine-outputs.py
+    repo_path: .github/scripts/dependency_cursor_review_combine_outputs.py
 
   - name: dep-review
     template_name: dependency-review.yml

@@ -53,7 +53,7 @@ files:
 
 ### Malware verdict formatter (canonical vs templates)
 
-The dependency-cursor-review workflow ships Python formatter modules from `templates/` into consumer repos (`.github/scripts/`). **Canonical edit location:** `internal/workflowscripts/*.py` only. `make test` runs `sync_malware_formatter_templates.py` to generate `templates/malware-verdict-*.py`, `templates/trusted-formatter-loader.py`, and `templates/trusted-formatter-loader-bootstrap.py` from canonical (byte-identical; `test_managed_templates_match_canonical_modules` enforces this). Templates remain in git because managed-files sync reads them from this repo; do not hand-edit `templates/malware-verdict-*.py` — regenerate via `make test` or the sync script.
+The dependency-cursor-review workflow ships formatter and review companion scripts from `templates/` into consumer repos (`.github/scripts/`). **Canonical edit location:** `internal/workflowscripts/*` only (Python modules, shell scan script, combine/prompt helpers). `make test` runs `sync_malware_formatter_templates.py` to copy canonical companions into `templates/` (byte-identical; formatter tests enforce sync). Templates remain in git because managed-files sync reads them from this repo; do not hand-edit generated `templates/malware-verdict-*.py` or companions — regenerate via `make test` or the sync script. Residual debt: formatter logic still exists as both canonical modules and synced template mirrors until managed-files supports generate-at-sync only.
 
 * `name` is the name to reference the file by in groups or in the custom property.
 * `template_name` is the name of the template to use from the supplied templates directory

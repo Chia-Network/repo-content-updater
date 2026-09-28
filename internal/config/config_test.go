@@ -8,6 +8,22 @@ import (
 	"github.com/chia-network/repo-content-updater/internal/config"
 )
 
+func dependencyCursorReviewCompanionFiles() []string {
+	return []string{
+		"dependency-cursor-review",
+		"malware-verdict-formatter",
+		"malware-verdict-patterns",
+		"malware-verdict-classification",
+		"malware-verdict-precedence",
+		"trusted-formatter-loader",
+		"trusted-formatter-loader-bootstrap",
+		"upstream-malware-scan",
+		"dependency-cursor-review-prompts",
+		"dependency-cursor-review-combine-outputs",
+		"trusted-git-path-checkout-action",
+	}
+}
+
 func TestConfigIsValid(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
@@ -20,11 +36,11 @@ func TestConfigIsValid(t *testing.T) {
 
 	expanded, err := cfg.ExpandManagedFileEntries([]string{"dependency-cursor-review"})
 	assert.Nil(t, err)
-	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter", "malware-verdict-patterns", "malware-verdict-classification", "malware-verdict-precedence", "trusted-formatter-loader", "trusted-formatter-loader-bootstrap", "trusted-git-path-checkout-action"}, expanded)
+	assert.Equal(t, dependencyCursorReviewCompanionFiles(), expanded)
 
 	groupExpanded, err := cfg.ExpandManagedFileEntries([]string{"group:dependency-cursor-review"})
 	assert.Nil(t, err)
-	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter", "malware-verdict-patterns", "malware-verdict-classification", "malware-verdict-precedence", "trusted-formatter-loader", "trusted-formatter-loader-bootstrap", "trusted-git-path-checkout-action"}, groupExpanded)
+	assert.Equal(t, dependencyCursorReviewCompanionFiles(), groupExpanded)
 
 	mixed, err := cfg.ExpandManagedFileEntries([]string{"group:does-not-exist", "dependabot"})
 	assert.Nil(t, err)
@@ -42,12 +58,7 @@ func TestManagedFileAliasesAndPathsIncludeCompanions(t *testing.T) {
 	} {
 		expanded, err := cfg.ExpandManagedFileEntries([]string{entry})
 		assert.Nil(t, err, entry)
-		assert.Equal(
-			t,
-			[]string{"dependency-cursor-review", "malware-verdict-formatter", "malware-verdict-patterns", "malware-verdict-classification", "malware-verdict-precedence", "trusted-formatter-loader", "trusted-formatter-loader-bootstrap", "trusted-git-path-checkout-action"},
-			expanded,
-			entry,
-		)
+		assert.Equal(t, dependencyCursorReviewCompanionFiles(), expanded, entry)
 	}
 }
 
@@ -59,11 +70,12 @@ func TestEnsureCompanionFilesPairsWorkflowWithFormatter(t *testing.T) {
 	// ExpandManagedFileEntries companion expansion.
 	finalized, err := cfg.EnsureCompanionFiles([]string{"dependency-cursor-review"})
 	assert.Nil(t, err)
-	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter", "malware-verdict-patterns", "malware-verdict-classification", "malware-verdict-precedence", "trusted-formatter-loader", "trusted-formatter-loader-bootstrap", "trusted-git-path-checkout-action"}, finalized)
+	expected := dependencyCursorReviewCompanionFiles()
+	assert.Equal(t, expected, finalized)
 
 	legacyFinalized, err := cfg.EnsureCompanionFiles([]string{"dependabot-cursor-review"})
 	assert.Nil(t, err)
-	assert.Equal(t, []string{"dependency-cursor-review", "malware-verdict-formatter", "malware-verdict-patterns", "malware-verdict-classification", "malware-verdict-precedence", "trusted-formatter-loader", "trusted-formatter-loader-bootstrap", "trusted-git-path-checkout-action"}, legacyFinalized)
+	assert.Equal(t, expected, legacyFinalized)
 }
 
 func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
