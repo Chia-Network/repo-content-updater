@@ -9,7 +9,6 @@ malware-verdict-policy-lexical
 malware-verdict-policy-context
 malware-verdict-policy-strip-eligibility
 scripts-dir-module-loader
-module-exec-scrub
 formatter-runtime-bundle
 malware-verdict-policy-rules-select
 malware-verdict-policy-rules-strip

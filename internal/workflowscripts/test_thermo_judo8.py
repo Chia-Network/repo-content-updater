@@ -17,7 +17,6 @@ _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy_strip_eligibility.py", 95),
     ("scripts_dir_module_loader.py", 85),
     ("formatter_runtime_bundle.py", 45),
-    ("module_exec_scrub.py", 20),
     ("formatter_bundle_inventory.py", 220),
     ("malware_verdict_policy_rules_select.py", 360),
     ("malware_verdict_policy_rules_strip.py", 300),
@@ -42,13 +41,14 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertNotIn("def _exec_module_isolated", combine)
         self.assertIn("runpy.run_path", combine)
         self.assertIn("resolve_loader_bundle", combine)
-        self.assertIn("exec_module_scrubbing_script_dir", iso_src)
+        self.assertIn("bootstrap_module_from_scripts_dir", iso_src)
         self.assertIn("register_util_from_scripts_dir", iso_src)
-        self.assertIn("scripts_dir_module_loader", cold_src)
+        self.assertIn("resolve_trusted_formatter_loader_for_dir", iso_src)
+        self.assertIn("cold_start_hop_load_self", cold_src)
         self.assertIn("_cold_start_hop_load_scripts_dir_module_loader", cold_src)
         self.assertNotIn("def _module_exec_scrub", cold_src)
-        self.assertNotIn("def _exec_module_scrubbing_script_dir", cold_src)
-        self.assertIn("exec_module_scrubbing_script_dir", iso_src)
+        self.assertIn("scripts_dir_module_loader._exec_scripts_dir_module", cold_src)
+        self.assertNotIn("resolve_trusted_formatter_loader_module", util_src)
         self.assertNotIn("register_util_from_disk", cold_src)
         self.assertIn("register_util_from_scripts_dir", cold_src)
         self.assertNotIn("resolve_trusted_formatter_loader_module", util_src)
@@ -87,6 +87,7 @@ class ThermoJudo8Test(unittest.TestCase):
         )
         self.assertFalse((_SCRIPTS / "module_exec_scrub_bootstrap.py").exists())
         self.assertFalse((_SCRIPTS / "trusted_formatter_loader_bootstrap.py").exists())
+        self.assertFalse((_SCRIPTS / "module_exec_scrub.py").exists())
         for filename, max_lines in _POLICY_MODULE_BOUNDS:
             path = _SCRIPTS / filename
             self.assertTrue(path.is_file(), filename)

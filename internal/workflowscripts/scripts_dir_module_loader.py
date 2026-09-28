@@ -59,8 +59,7 @@ def exec_module_scrubbing_script_dir(
     """Run module exec with the script directory removed from sys.path."""
     if spec.loader is None:
         raise RuntimeError(f"Could not load module spec from {script_path}")
-    script_dir = script_path.resolve().parent
-    script_dir_s = str(script_dir)
+    script_dir_s = str(script_path.resolve().parent)
     saved_path = sys.path.copy()
     try:
         sys.path = [entry for entry in sys.path if entry != script_dir_s]
@@ -70,7 +69,7 @@ def exec_module_scrubbing_script_dir(
 
 
 def cold_start_hop_load_self(script_dir: Path) -> types.ModuleType:
-    """Load scripts_dir_module_loader.py from script_dir (used by cold_start hop only)."""
+    """Cold-start hop: scrub-load scripts_dir_module_loader.py from script_dir."""
     return _exec_scripts_dir_module(
         script_dir,
         script_dir / "scripts_dir_module_loader.py",

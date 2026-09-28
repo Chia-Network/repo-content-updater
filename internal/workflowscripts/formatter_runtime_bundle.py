@@ -24,7 +24,6 @@ FORMATTER_SIBLING_MODULE_STEMS: tuple[str, ...] = (
 
 FORMATTER_RUNTIME_FILENAMES: tuple[str, ...] = (
     "scripts_dir_module_loader.py",
-    "module_exec_scrub.py",
     *LOADER_RESOLVE_MARKER_FILENAMES,
     "trusted_formatter_loader_cold_start.py",
     "formatter_runtime_bundle.py",

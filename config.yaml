@@ -36,7 +36,6 @@ groups:
       - malware-verdict-policy-context
       - malware-verdict-policy-strip-eligibility
       - scripts-dir-module-loader
-      - module-exec-scrub
       - formatter-runtime-bundle
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
@@ -79,7 +78,6 @@ files:
       - malware-verdict-policy-context
       - malware-verdict-policy-strip-eligibility
       - scripts-dir-module-loader
-      - module-exec-scrub
       - formatter-runtime-bundle
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
@@ -154,10 +152,6 @@ files:
   - name: malware-verdict-policy-analysis
     template_name: malware-verdict-policy-analysis.py
     repo_path: .github/scripts/malware_verdict_policy_analysis.py
-
-  - name: module-exec-scrub
-    template_name: module-exec-scrub.py
-    repo_path: .github/scripts/module_exec_scrub.py
 
   - name: scripts-dir-module-loader
     template_name: scripts-dir-module-loader.py
