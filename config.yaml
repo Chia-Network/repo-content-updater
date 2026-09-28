@@ -29,6 +29,11 @@ groups:
       - malware-verdict-formatter
       - malware-verdict-patterns
       - malware-verdict-policy
+      - malware-verdict-policy-types
+      - malware-verdict-policy-select
+      - malware-verdict-policy-strip
+      - malware-verdict-policy-analysis
+      - script-dir-isolated-load
       - companion-isolated-exec
       - trusted-formatter-loader
       - trusted-formatter-loader-bootstrap
@@ -58,6 +63,11 @@ files:
       - malware-verdict-formatter
       - malware-verdict-patterns
       - malware-verdict-policy
+      - malware-verdict-policy-types
+      - malware-verdict-policy-select
+      - malware-verdict-policy-strip
+      - malware-verdict-policy-analysis
+      - script-dir-isolated-load
       - companion-isolated-exec
       - trusted-formatter-loader
       - trusted-formatter-loader-bootstrap
@@ -90,6 +100,26 @@ files:
   - name: malware-verdict-policy
     template_name: malware-verdict-policy.py
     repo_path: .github/scripts/malware_verdict_policy.py
+
+  - name: malware-verdict-policy-types
+    template_name: malware-verdict-policy-types.py
+    repo_path: .github/scripts/malware_verdict_policy_types.py
+
+  - name: malware-verdict-policy-select
+    template_name: malware-verdict-policy-select.py
+    repo_path: .github/scripts/malware_verdict_policy_select.py
+
+  - name: malware-verdict-policy-strip
+    template_name: malware-verdict-policy-strip.py
+    repo_path: .github/scripts/malware_verdict_policy_strip.py
+
+  - name: malware-verdict-policy-analysis
+    template_name: malware-verdict-policy-analysis.py
+    repo_path: .github/scripts/malware_verdict_policy_analysis.py
+
+  - name: script-dir-isolated-load
+    template_name: script-dir-isolated-load.py
+    repo_path: .github/scripts/script_dir_isolated_load.py
 
   - name: companion-isolated-exec
     template_name: companion-isolated-exec.py

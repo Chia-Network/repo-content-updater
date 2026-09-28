@@ -15,6 +15,7 @@ _WORKFLOW = _REPO_ROOT / "templates" / "dependency-cursor-review.yml"
 
 # Minimal trusted bundle files needed for combine_outputs to reach formatter load.
 _BUNDLE_STEMS = (
+    "script_dir_isolated_load.py",
     "companion_isolated_exec.py",
     "dependency_cursor_review_combine_outputs.py",
     "dependency_cursor_review_trusted_loader.py",
@@ -22,6 +23,10 @@ _BUNDLE_STEMS = (
     "trusted_formatter_loader.py",
     "malware_verdict_formatter.py",
     "malware_verdict_patterns.py",
+    "malware_verdict_policy_types.py",
+    "malware_verdict_policy_select.py",
+    "malware_verdict_policy_strip.py",
+    "malware_verdict_policy_analysis.py",
     "malware_verdict_policy.py",
 )
 
@@ -57,12 +62,11 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             script_dir = str(scripts.resolve())
             sys.path.insert(0, script_dir)
             try:
-                from dependency_cursor_review_combine_outputs import _import_trusted_loader_entry
-
-                trusted_loader = _import_trusted_loader_entry()
-                loader = trusted_loader.resolve_trusted_formatter_loader_module(
-                    (scripts,),
+                from dependency_cursor_review_combine_outputs import (
+                    _load_trusted_formatter_loader_module,
                 )
+
+                loader = _load_trusted_formatter_loader_module(scripts)
                 self.assertTrue(hasattr(loader, "find_and_load_format_malware_review_verdict"))
             finally:
                 sys.path[:] = [p for p in sys.path if p != script_dir]

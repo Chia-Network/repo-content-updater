@@ -106,6 +106,11 @@ jobs:
             .github/scripts/malware_verdict_formatter.py
             .github/scripts/malware_verdict_patterns.py
             .github/scripts/malware_verdict_policy.py
+            .github/scripts/malware_verdict_policy_types.py
+            .github/scripts/malware_verdict_policy_select.py
+            .github/scripts/malware_verdict_policy_strip.py
+            .github/scripts/malware_verdict_policy_analysis.py
+            .github/scripts/script_dir_isolated_load.py
             .github/scripts/companion_isolated_exec.py
             .github/scripts/trusted_formatter_loader.py
             .github/scripts/trusted_formatter_loader_bootstrap.py

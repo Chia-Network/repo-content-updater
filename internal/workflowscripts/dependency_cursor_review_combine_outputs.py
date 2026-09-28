@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -13,11 +14,8 @@ _SCRIPT_CANDIDATES = (
 )
 
 
-def _companion_module(base: Path):
-    """Load companion_isolated_exec by path (works under python3 -I without scripts dir on sys.path)."""
-    import importlib.util
-
-    name = "companion_isolated_exec"
+def _load_util(base: Path):
+    name = "script_dir_isolated_load"
     path = base / f"{name}.py"
     existing = sys.modules.get(name)
     if existing is not None:
@@ -30,23 +28,19 @@ def _companion_module(base: Path):
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
-    module.ensure_companion_isolated_exec(base)
     return module
 
 
-def _import_trusted_loader_entry():
-    for base in _SCRIPT_CANDIDATES:
-        trusted_path = base / "dependency_cursor_review_trusted_loader.py"
-        bootstrap_path = base / "trusted_formatter_loader_bootstrap.py"
-        if not trusted_path.is_file() or not bootstrap_path.is_file():
-            continue
-        companion = _companion_module(base)
-        return companion.exec_companion_module(
-            trusted_path, "dependency_cursor_review_trusted_loader"
-        )
-    raise RuntimeError(
-        "dependency_cursor_review_trusted_loader.py not found under .github/scripts/."
+def _load_trusted_formatter_loader_module(base: Path):
+    util = _load_util(base)
+    util.load_module_isolated(
+        base / "companion_isolated_exec.py", "companion_isolated_exec"
     )
+    bootstrap = util.load_module_isolated(
+        base / "trusted_formatter_loader_bootstrap.py",
+        "trusted_formatter_loader_bootstrap",
+    )
+    return bootstrap.load_trusted_formatter_loader_module(base)
 
 
 def _load_any(path: str) -> dict:
@@ -77,10 +71,19 @@ def _extract_text(payload) -> str:
 
 
 def main() -> None:
-    trusted_loader = _import_trusted_loader_entry()
-    loader = trusted_loader.resolve_trusted_formatter_loader_module(_SCRIPT_CANDIDATES)
+    loader = None
+    for base in _SCRIPT_CANDIDATES:
+        base = base.resolve()
+        if (base / "trusted_formatter_loader_bootstrap.py").is_file():
+            loader = _load_trusted_formatter_loader_module(base)
+            script_dirs = (base,)
+            break
+    if loader is None:
+        raise RuntimeError(
+            "trusted_formatter_loader bundle not found under .github/scripts/."
+        )
     format_malware_review_verdict = loader.find_and_load_format_malware_review_verdict(
-        *_SCRIPT_CANDIDATES
+        *script_dirs
     )
 
     malware_payload = _load_any("cursor_output_malware.json")

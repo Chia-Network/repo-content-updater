@@ -7,22 +7,50 @@ import types
 from collections.abc import Callable
 from pathlib import Path
 
-from companion_isolated_exec import exec_module_isolated_from_scripts_dir
-
 TRUSTED_FORMATTER_MODULE_NAME = "trusted_malware_verdict_formatter"
 
 FORMATTER_SIBLING_MODULE_STEMS = (
+    "script_dir_isolated_load",
     "companion_isolated_exec",
     "malware_verdict_patterns",
+    "malware_verdict_policy_types",
+    "malware_verdict_policy_select",
+    "malware_verdict_policy_strip",
+    "malware_verdict_policy_analysis",
     "malware_verdict_policy",
 )
 
 _FORMATTER_ENV_PRIMED: set[Path] = set()
 
-# Contract: consumers must call load_format_malware_review_verdict(path) (or
-# find_and_load_format_malware_review_verdict) so sibling modules and this loader
-# are bootstrapped before the formatter module executes. Do not rely on importing
-# malware_verdict_formatter directly from an empty sys.modules.
+
+def _load_script_dir_isolated_util(script_dir: Path):
+    import importlib.util
+
+    script_dir = script_dir.resolve()
+    name = "script_dir_isolated_load"
+    path = script_dir / f"{name}.py"
+    existing = sys.modules.get(name)
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file and Path(existing_file).resolve() == path.resolve():
+            return existing
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Missing or invalid {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _companion_api(script_dir: Path):
+    util = _load_script_dir_isolated_util(script_dir)
+    companion_path = script_dir.resolve() / "companion_isolated_exec.py"
+    companion = util.load_module_isolated(companion_path, "companion_isolated_exec")
+    return (
+        companion.exec_companion_module,
+        companion.exec_module_isolated_from_scripts_dir,
+    )
 
 
 def import_module_from_trusted_script(
@@ -33,6 +61,7 @@ def import_module_from_trusted_script(
 
     script_path = script_path.resolve()
     name = module_name or f"trusted_script_{script_path.stem}"
+    _, exec_module_isolated_from_scripts_dir = _companion_api(script_path.parent)
     spec = importlib.util.spec_from_file_location(name, script_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load module spec from {script_path}")
@@ -43,8 +72,10 @@ def import_module_from_trusted_script(
 
 
 def ensure_formatter_sibling_modules(script_dir: Path) -> None:
-    """Load co-located formatter modules with scripts-dir isolation (canonical bootstrap)."""
+    """Load co-located formatter modules with scripts-dir isolation."""
     parent = script_dir.resolve()
+    _load_script_dir_isolated_util(parent)
+    _companion_api(parent)
     for stem in FORMATTER_SIBLING_MODULE_STEMS:
         mod_name = stem
         existing = sys.modules.get(mod_name)
@@ -59,34 +90,29 @@ def ensure_formatter_sibling_modules(script_dir: Path) -> None:
 
 
 def prime_formatter_environment(script_dir: Path) -> None:
-    """Load loader + formatter sibling modules once per trusted scripts directory."""
+    """Load formatter sibling modules once per trusted scripts directory."""
     parent = script_dir.resolve()
     if parent in _FORMATTER_ENV_PRIMED:
         return
-    _ensure_loader_module(parent)
+    util = _load_script_dir_isolated_util(parent)
+    _companion_api(parent)
+    bootstrap_path = parent / "trusted_formatter_loader_bootstrap.py"
+    existing = sys.modules.get("trusted_formatter_loader_bootstrap")
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if not existing_file or Path(existing_file).resolve().parent != parent:
+            del sys.modules["trusted_formatter_loader_bootstrap"]
+            existing = None
+    if existing is None:
+        util.load_module_isolated(bootstrap_path, "trusted_formatter_loader_bootstrap")
+    bootstrap = sys.modules["trusted_formatter_loader_bootstrap"]
     ensure_formatter_sibling_modules(parent)
+    bootstrap.load_trusted_formatter_loader_module(parent)
     _FORMATTER_ENV_PRIMED.add(parent)
 
 
-def _ensure_loader_module(script_dir: Path) -> None:
-    loader_path = (script_dir / "trusted_formatter_loader.py").resolve()
-    if not loader_path.is_file():
-        return
-    existing = sys.modules.get("trusted_formatter_loader")
-    if existing is not None:
-        existing_file = getattr(existing, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == loader_path:
-            return
-    import_module_from_trusted_script(loader_path, "trusted_formatter_loader")
-
-
 def load_format_malware_review_verdict(script_path: Path) -> Callable[[str], str]:
-    """Return format_malware_review_verdict loaded from an explicit trusted file path.
-
-    This is the supported entrypoint: it primes trusted_formatter_loader and formatter
-    sibling modules (patterns/policy) before executing the formatter
-    module, so callers never depend on undocumented sys.modules priming.
-    """
+    """Return format_malware_review_verdict loaded from an explicit trusted file path."""
     script_path = script_path.resolve()
     prime_formatter_environment(script_path.parent)
     module = import_module_from_trusted_script(script_path, TRUSTED_FORMATTER_MODULE_NAME)

@@ -11,6 +11,7 @@ __pycache__/
 templates/malware-verdict-*.py
 templates/trusted-formatter-loader*.py
 templates/companion-isolated-exec.py
+templates/script-dir-isolated-load.py
 templates/dependency-cursor-review-*.py
 templates/dependency-cursor-review-*.js
 templates/upstream-malware-scan*.sh

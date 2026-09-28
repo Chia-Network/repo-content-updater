@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +20,23 @@ _REPO_ROOT = _SCRIPTS.parents[1]
 _CANONICAL = _SCRIPTS / "malware_verdict_formatter.py"
 _LOADER_TEMPLATE = _REPO_ROOT / "templates" / "trusted-formatter-loader.py"
 _CANONICAL_LOADER = _SCRIPTS / "trusted_formatter_loader.py"
+_FORMATTER_BUNDLE = (
+    "script_dir_isolated_load.py",
+    "companion_isolated_exec.py",
+    "trusted_formatter_loader_bootstrap.py",
+    "trusted_formatter_loader.py",
+    "malware_verdict_patterns.py",
+    "malware_verdict_policy_types.py",
+    "malware_verdict_policy_select.py",
+    "malware_verdict_policy_strip.py",
+    "malware_verdict_policy_analysis.py",
+    "malware_verdict_policy.py",
+)
+
+
+def _copy_formatter_bundle(scripts: Path) -> None:
+    for name in _FORMATTER_BUNDLE:
+        shutil.copy2(_SCRIPTS / name, scripts / name)
 
 
 class TrustedFormatterLoaderTest(unittest.TestCase):
@@ -44,6 +62,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             scripts.mkdir()
             trusted = scripts / "malware_verdict_formatter.py"
             trusted.write_text(_CANONICAL.read_text(encoding="utf-8"), encoding="utf-8")
+            _copy_formatter_bundle(scripts)
             (scripts / "re.py").write_text(
                 "raise RuntimeError('untrusted re shadow')\n",
                 encoding="utf-8",
@@ -124,6 +143,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             scripts = Path(tmp) / "scripts"
             scripts.mkdir()
             for filename in (
+                "script_dir_isolated_load.py",
                 "companion_isolated_exec.py",
                 "trusted_formatter_loader.py",
                 "trusted_formatter_loader_bootstrap.py",
@@ -164,12 +184,18 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             companion_src = (_SCRIPTS / "companion_isolated_exec.py").read_text(
                 encoding="utf-8"
             )
+            util_src = (_SCRIPTS / "script_dir_isolated_load.py").read_text(
+                encoding="utf-8"
+            )
             (scripts / "trusted_formatter_loader.py").write_text(loader_src, encoding="utf-8")
             (scripts / "trusted_formatter_loader_bootstrap.py").write_text(
                 bootstrap_src, encoding="utf-8"
             )
             (scripts / "companion_isolated_exec.py").write_text(
                 companion_src, encoding="utf-8"
+            )
+            (scripts / "script_dir_isolated_load.py").write_text(
+                util_src, encoding="utf-8"
             )
             (scripts / "importlib.py").write_text(
                 "raise RuntimeError('untrusted importlib shadow')\n",
@@ -214,6 +240,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             )
             trusted = scripts / "malware_verdict_formatter.py"
             trusted.write_text(_CANONICAL.read_text(encoding="utf-8"), encoding="utf-8")
+            _copy_formatter_bundle(scripts)
             format_fn = load_format_malware_review_verdict(trusted)
             result = format_fn("Verdict: benign\n\nDetails.")
             self.assertTrue(result.startswith("**Verdict: benign**"))

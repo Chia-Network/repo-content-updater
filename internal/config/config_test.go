@@ -14,6 +14,11 @@ func dependencyCursorReviewCompanionFiles() []string {
 		"malware-verdict-formatter",
 		"malware-verdict-patterns",
 		"malware-verdict-policy",
+		"malware-verdict-policy-types",
+		"malware-verdict-policy-select",
+		"malware-verdict-policy-strip",
+		"malware-verdict-policy-analysis",
+		"script-dir-isolated-load",
 		"companion-isolated-exec",
 		"trusted-formatter-loader",
 		"trusted-formatter-loader-bootstrap",
@@ -47,6 +52,16 @@ func TestConfigIsValid(t *testing.T) {
 		"dependency-cursor-review-prompts",
 		"dependency-cursor-review-combine-outputs",
 		"dependency-cursor-review-trusted-loader",
+	} {
+		assert.Contains(t, dcrGroup, required)
+	}
+
+	// Bugbot d8695a0d: group must ship extracted companions, not formatter bundle alone.
+	for _, required := range []string{
+		"upstream-malware-scan-lib",
+		"dependency-cursor-review-dependabot-context",
+		"script-dir-isolated-load",
+		"malware-verdict-policy-analysis",
 	} {
 		assert.Contains(t, dcrGroup, required)
 	}

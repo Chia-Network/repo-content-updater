@@ -91,10 +91,10 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             / "workflowscripts"
             / "dependency_cursor_review_trusted_loader.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("dependency_cursor_review_trusted_loader", combine)
+        self.assertIn("_load_trusted_formatter_loader_module", combine)
+        self.assertIn("load_trusted_formatter_loader_module", combine)
         self.assertIn("resolve_trusted_formatter_loader_module", trusted_loader)
         self.assertNotIn("_bootstrap_module_for", combine)
-        self.assertIn("resolve_trusted_formatter_loader_module", combine)
         self.assertIn("dependency-cursor-review-dependabot-context.js", workflow)
 
     def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
