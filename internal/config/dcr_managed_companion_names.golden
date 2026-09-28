@@ -8,7 +8,6 @@ malware-verdict-policy-types
 malware-verdict-policy-lexical
 malware-verdict-policy-context
 malware-verdict-policy-strip-eligibility
-module-exec-scrub-bootstrap
 scripts-dir-module-loader
 module-exec-scrub
 formatter-runtime-bundle
@@ -18,7 +17,6 @@ malware-verdict-policy-analysis
 isolated-module-exec
 script-dir-isolated-load
 trusted-formatter-loader
-trusted-formatter-loader-bootstrap
 trusted-formatter-loader-cold-start
 upstream-malware-scan
 dependency-cursor-review-prompts

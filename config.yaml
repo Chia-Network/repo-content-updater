@@ -35,7 +35,6 @@ groups:
       - malware-verdict-policy-lexical
       - malware-verdict-policy-context
       - malware-verdict-policy-strip-eligibility
-      - module-exec-scrub-bootstrap
       - scripts-dir-module-loader
       - module-exec-scrub
       - formatter-runtime-bundle
@@ -45,7 +44,6 @@ groups:
       - isolated-module-exec
       - script-dir-isolated-load
       - trusted-formatter-loader
-      - trusted-formatter-loader-bootstrap
       - trusted-formatter-loader-cold-start
       - upstream-malware-scan
       - dependency-cursor-review-prompts
@@ -80,7 +78,6 @@ files:
       - malware-verdict-policy-lexical
       - malware-verdict-policy-context
       - malware-verdict-policy-strip-eligibility
-      - module-exec-scrub-bootstrap
       - scripts-dir-module-loader
       - module-exec-scrub
       - formatter-runtime-bundle
@@ -90,7 +87,6 @@ files:
       - isolated-module-exec
       - script-dir-isolated-load
       - trusted-formatter-loader
-      - trusted-formatter-loader-bootstrap
       - trusted-formatter-loader-cold-start
       - upstream-malware-scan
       - dependency-cursor-review-prompts
@@ -159,10 +155,6 @@ files:
     template_name: malware-verdict-policy-analysis.py
     repo_path: .github/scripts/malware_verdict_policy_analysis.py
 
-  - name: module-exec-scrub-bootstrap
-    template_name: module-exec-scrub-bootstrap.py
-    repo_path: .github/scripts/module_exec_scrub_bootstrap.py
-
   - name: module-exec-scrub
     template_name: module-exec-scrub.py
     repo_path: .github/scripts/module_exec_scrub.py
@@ -186,10 +178,6 @@ files:
   - name: trusted-formatter-loader
     template_name: trusted-formatter-loader.py
     repo_path: .github/scripts/trusted_formatter_loader.py
-
-  - name: trusted-formatter-loader-bootstrap
-    template_name: trusted-formatter-loader-bootstrap.py
-    repo_path: .github/scripts/trusted_formatter_loader_bootstrap.py
 
   - name: trusted-formatter-loader-cold-start
     template_name: trusted-formatter-loader-cold-start.py

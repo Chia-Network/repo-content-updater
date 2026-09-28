@@ -5,7 +5,6 @@ from __future__ import annotations
 LOADER_RESOLVE_MARKER_FILENAMES: tuple[str, ...] = (
     "isolated_module_exec.py",
     "script_dir_isolated_load.py",
-    "trusted_formatter_loader_bootstrap.py",
     "trusted_formatter_loader.py",
 )
 
@@ -25,11 +24,15 @@ FORMATTER_SIBLING_MODULE_STEMS: tuple[str, ...] = (
 
 FORMATTER_RUNTIME_FILENAMES: tuple[str, ...] = (
     "scripts_dir_module_loader.py",
-    "module_exec_scrub_bootstrap.py",
     "module_exec_scrub.py",
     *LOADER_RESOLVE_MARKER_FILENAMES,
     "trusted_formatter_loader_cold_start.py",
     "formatter_runtime_bundle.py",
     "malware_verdict_formatter.py",
     *(f"{stem}.py" for stem in FORMATTER_SIBLING_MODULE_STEMS),
+)
+
+# Combine workflow entry copies runtime bundle + this script (not cold-start preload).
+DCR_COMBINE_EXTRA_FILENAMES: tuple[str, ...] = (
+    "dependency_cursor_review_combine_outputs.py",
 )

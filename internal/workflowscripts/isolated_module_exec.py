@@ -7,8 +7,10 @@ import sys
 import types
 from pathlib import Path
 
-from module_exec_scrub import exec_module_scrubbing_script_dir
-from module_exec_scrub_bootstrap import bootstrap_module_from_scripts_dir
+from scripts_dir_module_loader import (
+    bootstrap_module_from_scripts_dir,
+    exec_module_scrubbing_script_dir,
+)
 
 
 def load_module_isolated(
@@ -47,10 +49,7 @@ def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:
         if existing_file and Path(existing_file).resolve() == path.resolve():
             return existing
     bootstrap_module_from_scripts_dir(
-        script_dir, "module_exec_scrub_bootstrap.py", "module_exec_scrub_bootstrap"
-    )
-    bootstrap_module_from_scripts_dir(
-        script_dir, "module_exec_scrub.py", "module_exec_scrub"
+        script_dir, "scripts_dir_module_loader.py", "scripts_dir_module_loader"
     )
     iso_path = script_dir / "isolated_module_exec.py"
     if not iso_path.is_file():

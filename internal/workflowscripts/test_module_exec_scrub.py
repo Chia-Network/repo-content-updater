@@ -1,4 +1,4 @@
-"""Regression: cold_start lazy scrub bootstrap matches module_exec_scrub."""
+"""Regression: cold_start scrub hop matches scripts_dir_module_loader primitive."""
 
 from __future__ import annotations
 
@@ -9,25 +9,22 @@ from pathlib import Path
 import scripts_dir_module_loader
 import trusted_formatter_loader_cold_start as cold_start
 
-_SCRIPTS = Path(__file__).resolve().parent
-
 
 class ModuleExecScrubTest(unittest.TestCase):
-    def test_cold_start_loads_module_exec_scrub_via_bootstrap_spine(self) -> None:
-        scrub_loader = inspect.getsource(cold_start._module_exec_scrub)
-        self.assertIn("_bootstrap_spine", scrub_loader)
-        self.assertIn("module_exec_scrub.py", scrub_loader)
+    def test_cold_start_uses_scripts_dir_loader_exec_for_isolated(self) -> None:
+        src = inspect.getsource(cold_start._ensure_isolated_module_exec)
+        self.assertIn("exec_module_scrubbing_script_dir", src)
+        self.assertIn("_scripts_dir_loader", src)
 
-    def test_cold_start_has_single_hop_for_scripts_dir_module_loader(self) -> None:
+    def test_cold_start_has_single_documented_hop(self) -> None:
         src = inspect.getsource(cold_start)
-        self.assertIn("_hop_load_scripts_dir_module_loader", src)
-        self.assertNotIn("def _module_exec_scrub_bootstrap", src)
+        self.assertIn("_cold_start_hop_load_scripts_dir_module_loader", src)
+        self.assertNotIn("def _module_exec_scrub", src)
+        self.assertNotIn("module_exec_scrub_bootstrap", src)
 
-    def test_hop_matches_shared_loader_implementation(self) -> None:
-        shared = inspect.getsource(
-            scripts_dir_module_loader.bootstrap_module_from_scripts_dir
-        )
-        hop = inspect.getsource(cold_start._hop_load_scripts_dir_module_loader)
+    def test_hop_matches_loader_exec_primitive(self) -> None:
+        shared = inspect.getsource(scripts_dir_module_loader._exec_scripts_dir_module)
+        hop = inspect.getsource(cold_start._cold_start_hop_load_scripts_dir_module_loader)
         self.assertIn(
             "sys.path = [entry for entry in sys.path if entry != script_dir_s]", shared
         )

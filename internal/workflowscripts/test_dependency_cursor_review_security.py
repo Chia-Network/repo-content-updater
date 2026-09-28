@@ -14,7 +14,12 @@ _REPO_ROOT = _SCRIPTS.parents[1]
 _WORKFLOW = _REPO_ROOT / "templates" / "dependency-cursor-review.yml"
 
 # Minimal trusted bundle files needed for combine_outputs to reach formatter load.
-from formatter_bundle_inventory import DCR_COMBINE_TEST_BUNDLE as _BUNDLE_STEMS  # noqa: E402
+import formatter_runtime_bundle as _runtime  # noqa: E402
+
+_BUNDLE_STEMS = (
+    *_runtime.FORMATTER_RUNTIME_FILENAMES,
+    *_runtime.DCR_COMBINE_EXTRA_FILENAMES,
+)
 
 
 class DependencyCursorReviewSecurityTest(unittest.TestCase):
@@ -111,7 +116,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             purge = (
                 "script_dir_isolated_load",
                 "isolated_module_exec",
-                "trusted_formatter_loader_bootstrap",
+                "trusted_formatter_loader",
             )
             saved = {name: sys.modules.pop(name, None) for name in purge}
             try:

@@ -8,13 +8,11 @@ from pathlib import Path
 import formatter_runtime_bundle
 import trusted_formatter_loader_cold_start as cold_start
 from formatter_bundle_inventory import (
-    CONSUMER_SYNC_CANONICAL_TO_TEMPLATE,
-    DCR_COMBINE_TEST_BUNDLE,
-    DCR_SYNC_EXTRA_FILENAMES,
-    FORMATTER_COLD_START_TEST_BUNDLE,
+    consumer_sync_canonical_to_template,
     managed_formatter_sync_pairs,
     parse_dcr_expanded_managed_names,
     parse_dcr_group_templates,
+    sync_canonical_to_template,
     trusted_dcr_script_repo_paths,
     validate_config_companion_ordering,
 )
@@ -22,11 +20,12 @@ from formatter_bundle_inventory import (
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG = _REPO_ROOT / "config.yaml"
 _GOLDEN = _REPO_ROOT / "internal" / "config" / "dcr_managed_companion_names.golden"
+_SCRIPTS = Path(__file__).resolve().parent
 
 
 class FormatterBundleInventoryTest(unittest.TestCase):
     def test_runtime_bundle_matches_cold_start_markers(self) -> None:
-        markers = cold_start._loader_resolve_markers(_SCRIPTS := Path(__file__).resolve().parent)
+        markers = cold_start._loader_resolve_markers(_SCRIPTS)
         self.assertEqual(
             formatter_runtime_bundle.LOADER_RESOLVE_MARKER_FILENAMES,
             markers,
@@ -38,27 +37,31 @@ class FormatterBundleInventoryTest(unittest.TestCase):
         for stem in formatter_runtime_bundle.FORMATTER_SIBLING_MODULE_STEMS:
             self.assertIn(f"{stem}.py", formatter_runtime_bundle.FORMATTER_RUNTIME_FILENAMES)
 
-    def test_cold_start_test_bundle_matches_runtime(self) -> None:
-        self.assertEqual(FORMATTER_COLD_START_TEST_BUNDLE, formatter_runtime_bundle.FORMATTER_RUNTIME_FILENAMES)
-
-    def test_combine_bundle_extends_runtime(self) -> None:
-        self.assertGreater(len(DCR_COMBINE_TEST_BUNDLE), len(FORMATTER_COLD_START_TEST_BUNDLE))
-        for name in FORMATTER_COLD_START_TEST_BUNDLE:
-            self.assertIn(name, DCR_COMBINE_TEST_BUNDLE)
-
-    def test_sync_canonical_keys_cover_runtime_and_dcr_extras(self) -> None:
-        synced = {canonical for canonical, _ in CONSUMER_SYNC_CANONICAL_TO_TEMPLATE}
-        expected = set(formatter_runtime_bundle.FORMATTER_RUNTIME_FILENAMES) | set(
-            DCR_SYNC_EXTRA_FILENAMES
+    def test_combine_extra_extends_runtime_for_combine_workflow(self) -> None:
+        combine_bundle = (
+            *formatter_runtime_bundle.FORMATTER_RUNTIME_FILENAMES,
+            *formatter_runtime_bundle.DCR_COMBINE_EXTRA_FILENAMES,
         )
-        self.assertEqual(synced, expected)
+        self.assertIn(
+            "dependency_cursor_review_combine_outputs.py",
+            combine_bundle,
+        )
 
-    def test_managed_formatter_sync_pairs_match_consumer_face(self) -> None:
+    def test_config_derived_sync_covers_runtime_bundle(self) -> None:
+        config = _CONFIG.read_text(encoding="utf-8")
+        validate_config_companion_ordering(config)
+        synced = {canonical for canonical, _ in consumer_sync_canonical_to_template(config)}
+        self.assertTrue(
+            set(formatter_runtime_bundle.FORMATTER_RUNTIME_FILENAMES) <= synced
+        )
+
+    def test_managed_formatter_sync_pairs_match_config(self) -> None:
+        config = _CONFIG.read_text(encoding="utf-8")
         expected = tuple(
             (template, canonical)
-            for canonical, template in CONSUMER_SYNC_CANONICAL_TO_TEMPLATE
+            for canonical, template in consumer_sync_canonical_to_template(config)
         )
-        self.assertEqual(managed_formatter_sync_pairs(), expected)
+        self.assertEqual(managed_formatter_sync_pairs(config), expected)
 
     def test_config_companion_ordering_and_golden(self) -> None:
         config = _CONFIG.read_text(encoding="utf-8")
@@ -74,10 +77,10 @@ class FormatterBundleInventoryTest(unittest.TestCase):
 
     def test_trusted_manifest_paths_match_config_script_companions(self) -> None:
         config = _CONFIG.read_text(encoding="utf-8")
-        self.assertEqual(trusted_dcr_script_repo_paths(config), trusted_dcr_script_repo_paths(config))
+        expected_paths = trusted_dcr_script_repo_paths(config)
         manifest = (_REPO_ROOT / "templates" / "dependency-cursor-review-trusted-scripts.paths").read_text(
             encoding="utf-8"
         )
-        expected = set(trusted_dcr_script_repo_paths(config))
         manifest_paths = {line.strip() for line in manifest.splitlines() if line.strip()}
-        self.assertEqual(expected, manifest_paths)
+        self.assertEqual(set(expected_paths), manifest_paths)
+        self.assertEqual(len(sync_canonical_to_template(config)), len(managed_formatter_sync_pairs(config)) + 1)

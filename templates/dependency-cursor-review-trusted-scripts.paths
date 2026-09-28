@@ -8,7 +8,6 @@
 .github/scripts/malware_verdict_policy_lexical.py
 .github/scripts/malware_verdict_policy_context.py
 .github/scripts/malware_verdict_policy_strip_eligibility.py
-.github/scripts/module_exec_scrub_bootstrap.py
 .github/scripts/scripts_dir_module_loader.py
 .github/scripts/module_exec_scrub.py
 .github/scripts/formatter_runtime_bundle.py
@@ -18,7 +17,6 @@
 .github/scripts/isolated_module_exec.py
 .github/scripts/script_dir_isolated_load.py
 .github/scripts/trusted_formatter_loader.py
-.github/scripts/trusted_formatter_loader_bootstrap.py
 .github/scripts/trusted_formatter_loader_cold_start.py
 .github/scripts/upstream_malware_scan.sh
 .github/scripts/dependency_cursor_review_prompts.py

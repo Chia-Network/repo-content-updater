@@ -21,7 +21,9 @@ _REPO_ROOT = _SCRIPTS.parents[1]
 _CANONICAL = _SCRIPTS / "malware_verdict_formatter.py"
 _LOADER_TEMPLATE = _REPO_ROOT / "templates" / "trusted-formatter-loader.py"
 _CANONICAL_LOADER = _SCRIPTS / "trusted_formatter_loader.py"
-from formatter_bundle_inventory import FORMATTER_COLD_START_TEST_BUNDLE as _FORMATTER_BUNDLE  # noqa: E402
+import formatter_runtime_bundle as _runtime  # noqa: E402
+
+_FORMATTER_BUNDLE = _runtime.FORMATTER_RUNTIME_FILENAMES
 
 
 def _copy_formatter_bundle(scripts: Path) -> None:
@@ -110,7 +112,6 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
         """Cold-start spine matches combine: run_path cold_start → resolve_loader_bundle."""
         purge = (
             "trusted_formatter_loader",
-            "trusted_formatter_loader_bootstrap",
             "script_dir_isolated_load",
             "isolated_module_exec",
         )
@@ -127,14 +128,13 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                     sys.modules[name] = module
 
     def test_e03b8638_load_loader_module_without_primed_bootstrap(self) -> None:
-        """Isolated loader exec must not ModuleNotFoundError on bootstrap import (Bugbot e03b8638)."""
+        """Isolated loader exec must not ModuleNotFoundError (Bugbot e03b8638)."""
         with tempfile.TemporaryDirectory() as tmp:
             scripts = Path(tmp) / "scripts"
             scripts.mkdir()
             _copy_formatter_bundle(scripts)
             purge = (
                 "trusted_formatter_loader",
-                "trusted_formatter_loader_bootstrap",
                 "script_dir_isolated_load",
                 "isolated_module_exec",
             )
@@ -144,7 +144,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                     str(scripts / "trusted_formatter_loader_cold_start.py")
                 )
                 loader = ns["resolve_loader_for_dir"](scripts)
-                self.assertIn("trusted_formatter_loader_bootstrap", sys.modules)
+                self.assertIn("scripts_dir_module_loader", sys.modules)
                 self.assertTrue(hasattr(loader, "find_and_load_format_malware_review_verdict"))
             finally:
                 for name, module in saved.items():
@@ -164,7 +164,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             )
             script_dir = str(scripts.resolve())
             sys.path.insert(0, script_dir)
-            purge = ("trusted_formatter_loader", "trusted_formatter_loader_bootstrap")
+            purge = ("trusted_formatter_loader",)
             saved = {name: sys.modules.pop(name, None) for name in purge}
             try:
                 ns = runpy.run_path(

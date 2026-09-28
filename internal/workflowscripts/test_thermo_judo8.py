@@ -15,10 +15,9 @@ _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy_lexical.py", 35),
     ("malware_verdict_policy_context.py", 350),
     ("malware_verdict_policy_strip_eligibility.py", 95),
-    ("scripts_dir_module_loader.py", 45),
+    ("scripts_dir_module_loader.py", 85),
     ("formatter_runtime_bundle.py", 45),
-    ("module_exec_scrub_bootstrap.py", 15),
-    ("module_exec_scrub.py", 35),
+    ("module_exec_scrub.py", 20),
     ("formatter_bundle_inventory.py", 220),
     ("malware_verdict_policy_rules_select.py", 360),
     ("malware_verdict_policy_rules_strip.py", 300),
@@ -45,9 +44,9 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("resolve_loader_bundle", combine)
         self.assertIn("exec_module_scrubbing_script_dir", iso_src)
         self.assertIn("register_util_from_scripts_dir", iso_src)
-        self.assertIn("module_exec_scrub", cold_src)
-        self.assertIn("_hop_load_scripts_dir_module_loader", cold_src)
-        self.assertNotIn("def _module_exec_scrub_bootstrap", cold_src)
+        self.assertIn("scripts_dir_module_loader", cold_src)
+        self.assertIn("_cold_start_hop_load_scripts_dir_module_loader", cold_src)
+        self.assertNotIn("def _module_exec_scrub", cold_src)
         self.assertNotIn("def _exec_module_scrubbing_script_dir", cold_src)
         self.assertIn("exec_module_scrubbing_script_dir", iso_src)
         self.assertNotIn("register_util_from_disk", cold_src)
@@ -86,6 +85,8 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertFalse(
             (_SCRIPTS / "malware_verdict_policy_catalog.py").exists(),
         )
+        self.assertFalse((_SCRIPTS / "module_exec_scrub_bootstrap.py").exists())
+        self.assertFalse((_SCRIPTS / "trusted_formatter_loader_bootstrap.py").exists())
         for filename, max_lines in _POLICY_MODULE_BOUNDS:
             path = _SCRIPTS / filename
             self.assertTrue(path.is_file(), filename)
@@ -111,7 +112,7 @@ class ThermoJudo8Test(unittest.TestCase):
         ):
             self.assertIn(pattern, gitignore, msg=f"missing gitignore pattern {pattern!r}")
         for mirror_name in (
-            "module-exec-scrub-bootstrap.py",
+            "scripts-dir-module-loader.py",
             "formatter-runtime-bundle.py",
             "malware-verdict-policy-context.py",
         ):

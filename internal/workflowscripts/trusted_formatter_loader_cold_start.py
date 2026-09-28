@@ -1,9 +1,9 @@
 """Stdlib-only cold start for python3 -I workflow scripts (single loader resolve spine).
 
 Load sequence:
-  cold_start → hop scripts_dir_module_loader → module_exec_scrub_bootstrap → module_exec_scrub
-  → isolated_module_exec → register util → trusted_formatter_loader_bootstrap
-  → trusted_formatter_loader → sibling preload (formatter policy stack).
+  cold_start → hop scripts_dir_module_loader → isolated_module_exec
+  → register util → script_dir_isolated_load.resolve_trusted_formatter_loader_for_dir
+  → sibling preload (formatter policy stack).
 """
 
 from __future__ import annotations
@@ -22,15 +22,10 @@ _ISO_NAME = "isolated_module_exec"
 _SCRIPTS_DIR_LOADER = "scripts_dir_module_loader"
 
 
-def _hop_load_scripts_dir_module_loader(script_dir: Path) -> types.ModuleType:
-    """Sole cold-start path-scrub hop (loads scripts_dir_module_loader.py only)."""
+def _cold_start_hop_load_scripts_dir_module_loader(script_dir: Path) -> types.ModuleType:
+    """Documented sole chicken-and-egg bootstrap site (loads scripts_dir_module_loader.py)."""
     script_dir = script_dir.resolve()
-    existing = sys.modules.get(_SCRIPTS_DIR_LOADER)
     loader_path = script_dir / f"{_SCRIPTS_DIR_LOADER}.py"
-    if existing is not None:
-        existing_file = getattr(existing, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == loader_path.resolve():
-            return existing
     if not loader_path.is_file():
         raise RuntimeError(f"Missing {loader_path}")
     spec = importlib.util.spec_from_file_location(_SCRIPTS_DIR_LOADER, loader_path)
@@ -48,22 +43,19 @@ def _hop_load_scripts_dir_module_loader(script_dir: Path) -> types.ModuleType:
     return module
 
 
-def _bootstrap_spine(script_dir: Path):
-    return _hop_load_scripts_dir_module_loader(script_dir).bootstrap_module_from_scripts_dir
-
-
-def _module_exec_scrub(script_dir: Path) -> types.ModuleType:
-    """Load module_exec_scrub via bootstrap spine (python3 -I safe)."""
+def _scripts_dir_loader(script_dir: Path) -> types.ModuleType:
     script_dir = script_dir.resolve()
-    existing = sys.modules.get("module_exec_scrub")
+    existing = sys.modules.get(_SCRIPTS_DIR_LOADER)
+    loader_path = script_dir / f"{_SCRIPTS_DIR_LOADER}.py"
     if existing is not None:
         existing_file = getattr(existing, "__file__", None)
-        scrub_path = script_dir / "module_exec_scrub.py"
-        if existing_file and Path(existing_file).resolve() == scrub_path.resolve():
+        if existing_file and Path(existing_file).resolve() == loader_path.resolve():
             return existing
-    spine = _bootstrap_spine(script_dir)
-    spine(script_dir, "module_exec_scrub_bootstrap.py", "module_exec_scrub_bootstrap")
-    return spine(script_dir, "module_exec_scrub.py", "module_exec_scrub")
+    return _cold_start_hop_load_scripts_dir_module_loader(script_dir)
+
+
+def _bootstrap_spine(script_dir: Path):
+    return _scripts_dir_loader(script_dir).bootstrap_module_from_scripts_dir
 
 
 def _loader_resolve_markers(script_dir: Path) -> tuple[str, ...]:
@@ -84,13 +76,13 @@ def _ensure_isolated_module_exec(script_dir: Path) -> types.ModuleType:
             return existing
     if not path.is_file():
         raise RuntimeError(f"Missing {path}")
-    scrub = _module_exec_scrub(script_dir)
+    loader = _scripts_dir_loader(script_dir)
     spec = importlib.util.spec_from_file_location(_ISO_NAME, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load module spec from {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[_ISO_NAME] = module
-    scrub.exec_module_scrubbing_script_dir(spec, module, path)
+    loader.exec_module_scrubbing_script_dir(spec, module, path)
     return module
 
 

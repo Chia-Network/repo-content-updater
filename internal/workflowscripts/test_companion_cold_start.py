@@ -12,7 +12,12 @@ from pathlib import Path
 
 _SCRIPTS = Path(__file__).resolve().parent
 
-from formatter_bundle_inventory import DCR_COMBINE_TEST_BUNDLE as _BUNDLE  # noqa: E402
+import formatter_runtime_bundle as _runtime  # noqa: E402
+
+_BUNDLE = (
+    *_runtime.FORMATTER_RUNTIME_FILENAMES,
+    *_runtime.DCR_COMBINE_EXTRA_FILENAMES,
+)
 
 
 class CompanionColdStartTest(unittest.TestCase):
@@ -20,7 +25,6 @@ class CompanionColdStartTest(unittest.TestCase):
         purge = (
             "isolated_module_exec",
             "script_dir_isolated_load",
-            "trusted_formatter_loader_bootstrap",
             "trusted_formatter_loader",
         )
         saved = {name: sys.modules.pop(name, None) for name in purge}
