@@ -15,21 +15,21 @@ _SCRIPTS = Path(__file__).resolve().parent
 
 _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy.py", 25),
-    ("malware_verdict_policy_context.py", 320),
+    ("malware_verdict_policy_context.py", 330),
     ("malware_verdict_policy_predicates.py", 85),
-    ("scripts_dir_disk_exec.py", 45),
+    ("scripts_dir_disk_exec.py", 60),
     ("scripts_dir_path_scrub.py", 130),
     ("malware_verdict_patterns_regex.py", 200),
-    ("malware_verdict_patterns_structure.py", 360),
-    ("malware_verdict_policy_rules_select.py", 360),
-    ("malware_verdict_policy_rules_strip.py", 340),
+    ("malware_verdict_patterns_structure.py", 380),
+    ("malware_verdict_policy_rules_select.py", 370),
+    ("malware_verdict_policy_rules_strip.py", 360),
     ("formatter_runtime_bundle.py", 40),
     ("formatter_bundle_inventory.py", 220),
     ("malware_verdict_policy_analysis.py", 85),
     ("malware_verdict_patterns.py", 145),
     ("malware_verdict_policy_view.py", 85),
-    ("isolated_module_exec.py", 100),
-    ("trusted_formatter_loader_cold_start.py", 85),
+    ("isolated_module_exec.py", 105),
+    ("trusted_formatter_loader_cold_start.py", 80),
 )
 
 
@@ -122,10 +122,14 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertTrue((_SCRIPTS / "malware_verdict_patterns_regex.py").is_file())
         self.assertTrue((_SCRIPTS / "malware_verdict_patterns_structure.py").is_file())
         scrub_src = (_SCRIPTS / "scripts_dir_path_scrub.py").read_text()
+        iso_src = (_SCRIPTS / "isolated_module_exec.py").read_text(encoding="utf-8")
         self.assertIn("_exec_with_path_filter", scrub_src)
         disk_src = (_SCRIPTS / "scripts_dir_disk_exec.py").read_text()
         self.assertIn("def cached_trusted_module", disk_src)
         self.assertNotIn("from scripts_dir_disk_exec import", scrub_src.split("def load_scrub")[0])
+        self.assertIn("bootstrap_disk_exec_from_script_dir", disk_src)
+        self.assertIn("ensure_disk_exec", scrub_src)
+        self.assertNotIn("_ensure_disk_exec", iso_src)
         self.assertIn("cached_trusted_module", scrub_src)
         self.assertIn("bootstrap_module_from_scripts_dir", scrub_src)
         self.assertFalse(

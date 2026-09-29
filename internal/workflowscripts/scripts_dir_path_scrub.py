@@ -19,15 +19,13 @@ _SCRUB_MODULE = "scripts_dir_path_scrub"
 _DISK_EXEC_MODULE = "scripts_dir_disk_exec"
 
 
-def _ensure_disk_exec(script_dir: Path) -> types.ModuleType:
-    """Load scripts_dir_disk_exec from script_dir (no top-level sibling import)."""
+def ensure_disk_exec(script_dir: Path) -> types.ModuleType:
+    """Return ``scripts_dir_disk_exec`` primed from script_dir (no top-level sibling import)."""
     script_dir = script_dir.resolve()
+    mod = sys.modules.get(_DISK_EXEC_MODULE)
+    if mod is not None:
+        return mod.bootstrap_disk_exec_from_script_dir(script_dir)
     path = script_dir / f"{_DISK_EXEC_MODULE}.py"
-    existing = sys.modules.get(_DISK_EXEC_MODULE)
-    if existing is not None:
-        existing_file = getattr(existing, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == path.resolve():
-            return existing
     spec = importlib.util.spec_from_file_location(_DISK_EXEC_MODULE, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(
@@ -36,14 +34,14 @@ def _ensure_disk_exec(script_dir: Path) -> types.ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[_DISK_EXEC_MODULE] = module
     spec.loader.exec_module(module)
-    return module
+    return module.bootstrap_disk_exec_from_script_dir(script_dir)
 
 
 def load_scrub_from_disk_under_dash_i(script_dir: Path) -> types.ModuleType:
     """Cold-start owner: exec stdlib-only path_scrub once (no path-filter)."""
     script_dir = script_dir.resolve()
     path = script_dir / f"{_SCRUB_MODULE}.py"
-    disk = _ensure_disk_exec(script_dir)
+    disk = ensure_disk_exec(script_dir)
     cached = disk.cached_trusted_module(_SCRUB_MODULE, path)
     if cached is not None:
         return cached
@@ -61,7 +59,7 @@ def _exec_with_path_filter(
     """Exec module source while script_dir is removed from sys.path."""
     script_dir = script_dir.resolve()
     path = path.resolve()
-    disk = _ensure_disk_exec(script_dir)
+    disk = ensure_disk_exec(script_dir)
     if register:
         cached = disk.cached_trusted_module(module_name, path)
         if cached is not None:

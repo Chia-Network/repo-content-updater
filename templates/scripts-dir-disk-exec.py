@@ -7,6 +7,8 @@ import sys
 import types
 from pathlib import Path
 
+_DISK_EXEC = "scripts_dir_disk_exec"
+
 
 def cached_trusted_module(module_name: str, path: Path) -> types.ModuleType | None:
     """Return a sys.modules entry when it already points at the resolved trusted path."""
@@ -18,6 +20,23 @@ def cached_trusted_module(module_name: str, path: Path) -> types.ModuleType | No
     if existing_file and Path(existing_file).resolve() == path:
         return existing
     return None
+
+
+def bootstrap_disk_exec_from_script_dir(script_dir: Path) -> types.ModuleType:
+    """Idempotent no-filter load of this module from co-located script_dir."""
+    script_dir = script_dir.resolve()
+    path = script_dir / f"{_DISK_EXEC}.py"
+    cached = cached_trusted_module(_DISK_EXEC, path)
+    if cached is not None:
+        return cached
+    spec = importlib.util.spec_from_file_location(_DISK_EXEC, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_DISK_EXEC] = module
+    spec.loader.exec_module(module)
+    registered = cached_trusted_module(_DISK_EXEC, path)
+    return registered if registered is not None else module
 
 
 def exec_trusted_module_from_disk(module_name: str, module_path: Path) -> types.ModuleType:

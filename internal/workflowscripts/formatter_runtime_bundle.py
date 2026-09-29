@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+# Source of truth for cold_start.LOADER_RESOLVE_MARKER_FILENAMES (equality-tested).
 LOADER_RESOLVE_MARKER_FILENAMES: tuple[str, ...] = (
     "isolated_module_exec.py",
     "trusted_formatter_loader.py",

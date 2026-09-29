@@ -1,10 +1,6 @@
 """Stdlib-only cold start for python3 -I (resolve_loader_bundle public entry).
 
-Load sequence under python3 -I:
-  1. Minimal chicken-egg bootstrap of ``scripts_dir_disk_exec`` only
-  2. ``_require_scrub`` → ``disk.exec_trusted_module_from_disk`` (same as load_scrub)
-  3. bootstrap siblings via ``path_scrub.bootstrap_module_from_scripts_dir``
-  4. isolated_module_exec → resolve_trusted_formatter_loader_for_dir → sibling preload
+Spine: disk_exec → scrub (``load_scrub_from_disk_under_dash_i``) → path-filtered iso/loader.
 """
 
 from __future__ import annotations
@@ -23,7 +19,7 @@ _SCRUB = "scripts_dir_path_scrub"
 _DISK_EXEC = "scripts_dir_disk_exec"
 _ISO = "isolated_module_exec"
 
-# Keep in sync with formatter_runtime_bundle.LOADER_RESOLVE_MARKER_FILENAMES (tested).
+# Contract: must equal formatter_runtime_bundle.LOADER_RESOLVE_MARKER_FILENAMES (equality-tested).
 LOADER_RESOLVE_MARKER_FILENAMES: tuple[str, ...] = (
     "isolated_module_exec.py",
     "trusted_formatter_loader.py",
@@ -31,38 +27,34 @@ LOADER_RESOLVE_MARKER_FILENAMES: tuple[str, ...] = (
 
 
 def _bootstrap_disk_exec(script_dir: Path) -> types.ModuleType:
-    """Minimal chicken-egg: load scripts_dir_disk_exec without any sibling imports."""
+    """Chicken-egg entry; bootstrap body lives in disk_exec.bootstrap_disk_exec_from_script_dir."""
     script_dir = script_dir.resolve()
+    mod = sys.modules.get(_DISK_EXEC)
+    if mod is not None:
+        return mod.bootstrap_disk_exec_from_script_dir(script_dir)
     path = script_dir / f"{_DISK_EXEC}.py"
-    existing = sys.modules.get(_DISK_EXEC)
-    if existing is not None:
-        existing_file = getattr(existing, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == path.resolve():
-            return existing
     spec = importlib.util.spec_from_file_location(_DISK_EXEC, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load module spec from {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[_DISK_EXEC] = module
     spec.loader.exec_module(module)
-    return module
+    return module.bootstrap_disk_exec_from_script_dir(script_dir)
 
 
 def _require_scrub(script_dir: Path) -> types.ModuleType:
-    """Return primed path_scrub at the trusted path (single no-filter exec)."""
+    """Return primed path_scrub; cold_start must not call load_scrub before scrub is registered."""
     script_dir = script_dir.resolve()
     disk = _bootstrap_disk_exec(script_dir)
     scrub_path = script_dir / f"{_SCRUB}.py"
     cached = disk.cached_trusted_module(_SCRUB, scrub_path)
     if cached is not None:
         return cached
-    scrub = disk.exec_trusted_module_from_disk(_SCRUB, scrub_path)
-    registered = disk.cached_trusted_module(_SCRUB, scrub_path)
-    return registered if registered is not None else scrub
+    disk.exec_trusted_module_from_disk(_SCRUB, scrub_path)
+    return getattr(sys.modules[_SCRUB], "load_scrub_from_disk_under_dash_i")(script_dir)
 
 
 def resolve_loader_for_dir(script_dir: Path) -> types.ModuleType:
-    """Return trusted_formatter_loader via isolated_module_exec resolve spine."""
     script_dir = script_dir.resolve()
     scrub = _require_scrub(script_dir)
     iso = scrub.bootstrap_module_from_scripts_dir(script_dir, f"{_ISO}.py", _ISO)
@@ -73,7 +65,6 @@ def resolve_loader_for_dir(script_dir: Path) -> types.ModuleType:
 def resolve_loader_bundle(
     candidate_script_dirs: tuple[Path, ...] = DEFAULT_SCRIPT_CANDIDATES,
 ) -> tuple[types.ModuleType, Path]:
-    """Find scripts dir; return (trusted_formatter_loader module, chosen directory)."""
     for script_dir in candidate_script_dirs:
         script_dir = script_dir.resolve()
         if not all((script_dir / name).is_file() for name in LOADER_RESOLVE_MARKER_FILENAMES):

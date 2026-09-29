@@ -11,6 +11,7 @@ import types
 from pathlib import Path
 
 _SCRUB = "scripts_dir_path_scrub"
+_DISK_EXEC = "scripts_dir_disk_exec"
 
 
 def _require_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
@@ -31,6 +32,18 @@ def _require_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
     return scrub
 
 
+def _disk_exec_for_script_dir(script_dir: Path) -> types.ModuleType:
+    scrub = _require_scripts_dir_path_scrub(script_dir)
+    script_dir = script_dir.resolve()
+    disk = sys.modules.get(_DISK_EXEC)
+    disk_path = script_dir / f"{_DISK_EXEC}.py"
+    if disk is not None:
+        existing_file = getattr(disk, "__file__", None)
+        if existing_file and Path(existing_file).resolve() == disk_path.resolve():
+            return disk
+    return scrub.ensure_disk_exec(script_dir)
+
+
 def _bootstrap_via_spine(
     script_dir: Path,
     filename: str,
@@ -48,12 +61,12 @@ def load_module_isolated(
     """Register and exec a module without leaving its directory on sys.path."""
     script_path = script_path.resolve()
     name = module_name or f"isolated_{script_path.stem}"
-    scrub = _require_scripts_dir_path_scrub(script_path.parent)
-    disk = scrub._ensure_disk_exec(script_path.parent)
+    parent = script_path.parent
+    disk = _disk_exec_for_script_dir(parent)
     cached = disk.cached_trusted_module(name, script_path)
     if cached is not None:
         return cached
-    return _bootstrap_via_spine(script_path.parent, script_path.name, name)
+    return _bootstrap_via_spine(parent, script_path.name, name)
 
 
 def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:
@@ -61,8 +74,7 @@ def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:
     script_dir = script_dir.resolve()
     name = "isolated_module_exec"
     path = script_dir / f"{name}.py"
-    scrub = _require_scripts_dir_path_scrub(script_dir)
-    disk = scrub._ensure_disk_exec(script_dir)
+    disk = _disk_exec_for_script_dir(script_dir)
     cached = disk.cached_trusted_module(name, path)
     if cached is not None:
         return cached
