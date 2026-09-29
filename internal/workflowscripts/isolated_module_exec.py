@@ -1,4 +1,9 @@
-"""Stdlib-only module isolation and trusted formatter loader resolve spine."""
+"""Stdlib-only module isolation and trusted formatter loader resolve spine.
+
+``scripts_dir_module_loader.bootstrap_module_from_scripts_dir`` is the canonical
+one-liner bootstrap. ``bootstrap_module_from_scripts_dir`` here is the cold-start-aware
+façade (requires primed ``scripts_dir_path_scrub`` via ``_bootstrap_via_spine``).
+"""
 
 from __future__ import annotations
 
@@ -40,14 +45,23 @@ def _ensure_loader_spine(script_dir: Path) -> types.ModuleType:
     return scrub.exec_scripts_dir_module(script_dir, loader_path, _LOADER)
 
 
+def _bootstrap_via_spine(
+    script_dir: Path,
+    filename: str,
+    module_name: str,
+) -> types.ModuleType:
+    """Cold-start-aware load: require primed path_scrub, then delegate to canonical loader."""
+    loader = _ensure_loader_spine(script_dir)
+    return loader.bootstrap_module_from_scripts_dir(script_dir, filename, module_name)
+
+
 def bootstrap_module_from_scripts_dir(
     script_dir: Path,
     filename: str,
     module_name: str,
 ) -> types.ModuleType:
-    """Load a stdlib-only scripts-dir module with the script directory removed from sys.path."""
-    loader = _ensure_loader_spine(script_dir)
-    return loader.bootstrap_module_from_scripts_dir(script_dir, filename, module_name)
+    """Façade for isolated exec; canonical one-liner lives on scripts_dir_module_loader."""
+    return _bootstrap_via_spine(script_dir, filename, module_name)
 
 
 def load_module_isolated(
@@ -62,7 +76,7 @@ def load_module_isolated(
         existing_file = getattr(existing, "__file__", None)
         if existing_file and Path(existing_file).resolve() == script_path:
             return existing
-    return bootstrap_module_from_scripts_dir(script_path.parent, script_path.name, name)
+    return _bootstrap_via_spine(script_path.parent, script_path.name, name)
 
 
 def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:

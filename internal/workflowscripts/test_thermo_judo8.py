@@ -15,17 +15,21 @@ _SCRIPTS = Path(__file__).resolve().parent
 
 _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy.py", 25),
-    ("malware_verdict_policy_view.py", 45),
     ("malware_verdict_policy_selection.py", 320),
     ("malware_verdict_policy_context.py", 100),
-    ("scripts_dir_path_scrub.py", 45),
+    ("scripts_dir_path_scrub.py", 65),
+    ("malware_verdict_patterns_regex.py", 200),
+    ("malware_verdict_patterns_structure.py", 360),
+    ("malware_verdict_policy_rules_select.py", 360),
+    ("malware_verdict_policy_rules_strip.py", 360),
     ("scripts_dir_module_loader.py", 25),
     ("formatter_runtime_bundle.py", 40),
     ("formatter_bundle_inventory.py", 220),
-    ("malware_verdict_policy_rules.py", 680),
+    ("malware_verdict_policy_rules.py", 55),
     ("malware_verdict_policy_analysis.py", 55),
-    ("malware_verdict_patterns.py", 530),
-    ("isolated_module_exec.py", 110),
+    ("malware_verdict_patterns.py", 60),
+    ("malware_verdict_policy_view.py", 75),
+    ("isolated_module_exec.py", 120),
     ("trusted_formatter_loader_cold_start.py", 110),
 )
 
@@ -52,6 +56,7 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("runpy.run_path", combine)
         self.assertIn("resolve_loader_bundle", combine)
         self.assertIn("bootstrap_module_from_scripts_dir", iso_src)
+        self.assertIn("_bootstrap_via_spine", iso_src)
         self.assertIn("register_util_from_scripts_dir", iso_src)
         self.assertIn("resolve_trusted_formatter_loader_for_dir", iso_src)
         self.assertIn("bootstrap_scripts_dir_path_scrub", cold_src)
@@ -105,8 +110,11 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("_OFFICIAL_SELECT_PIPELINE", rules)
         self.assertIn("_BODY_STRIP_RULES", rules)
         self.assertNotIn("from malware_verdict_classification import", deploy)
-        self.assertFalse((_SCRIPTS / "malware_verdict_policy_rules_select.py").exists())
-        self.assertFalse((_SCRIPTS / "malware_verdict_policy_rules_strip.py").exists())
+        self.assertTrue((_SCRIPTS / "malware_verdict_policy_rules_select.py").is_file())
+        self.assertTrue((_SCRIPTS / "malware_verdict_policy_rules_strip.py").is_file())
+        self.assertTrue((_SCRIPTS / "malware_verdict_patterns_regex.py").is_file())
+        self.assertTrue((_SCRIPTS / "malware_verdict_patterns_structure.py").is_file())
+        self.assertIn("_exec_with_path_filter", (_SCRIPTS / "scripts_dir_path_scrub.py").read_text())
         self.assertFalse(
             (_SCRIPTS / "malware_verdict_policy_catalog.py").exists(),
         )
@@ -167,9 +175,8 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn(".github/scripts/malware_verdict_formatter.py", manifest_text)
         self.assertIn(".github/scripts/malware_verdict_policy_rules.py", manifest_text)
         self.assertIn(".github/scripts/malware_verdict_policy_selection.py", manifest_text)
-        self.assertNotIn(
-            ".github/scripts/malware_verdict_policy_rules_select.py", manifest_text
-        )
+        self.assertIn(".github/scripts/malware_verdict_policy_rules_select.py", manifest_text)
+        self.assertIn(".github/scripts/malware_verdict_patterns_regex.py", manifest_text)
         self.assertNotIn(".github/scripts/script_dir_isolated_load.py", manifest_text)
         self.assertNotIn(".github/scripts/malware_verdict_policy_lexical.py", manifest_text)
 

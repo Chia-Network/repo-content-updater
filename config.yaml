@@ -28,6 +28,8 @@ groups:
       - dependency-cursor-review
       - malware-verdict-formatter
       - malware-verdict-patterns
+      - malware-verdict-patterns-regex
+      - malware-verdict-patterns-structure
       - malware-verdict-policy
       - malware-verdict-policy-view
       - malware-verdict-policy-selection
@@ -36,6 +38,8 @@ groups:
       - scripts-dir-module-loader
       - formatter-runtime-bundle
       - malware-verdict-policy-rules
+      - malware-verdict-policy-rules-select
+      - malware-verdict-policy-rules-strip
       - malware-verdict-policy-analysis
       - isolated-module-exec
       - trusted-formatter-loader
@@ -66,6 +70,8 @@ files:
     companion_files:
       - malware-verdict-formatter
       - malware-verdict-patterns
+      - malware-verdict-patterns-regex
+      - malware-verdict-patterns-structure
       - malware-verdict-policy
       - malware-verdict-policy-view
       - malware-verdict-policy-selection
@@ -74,6 +80,8 @@ files:
       - scripts-dir-module-loader
       - formatter-runtime-bundle
       - malware-verdict-policy-rules
+      - malware-verdict-policy-rules-select
+      - malware-verdict-policy-rules-strip
       - malware-verdict-policy-analysis
       - isolated-module-exec
       - trusted-formatter-loader
@@ -105,6 +113,14 @@ files:
     template_name: malware-verdict-patterns.py
     repo_path: .github/scripts/malware_verdict_patterns.py
 
+  - name: malware-verdict-patterns-regex
+    template_name: malware-verdict-patterns-regex.py
+    repo_path: .github/scripts/malware_verdict_patterns_regex.py
+
+  - name: malware-verdict-patterns-structure
+    template_name: malware-verdict-patterns-structure.py
+    repo_path: .github/scripts/malware_verdict_patterns_structure.py
+
   - name: malware-verdict-policy
     template_name: malware-verdict-policy.py
     repo_path: .github/scripts/malware_verdict_policy.py
@@ -124,6 +140,14 @@ files:
   - name: malware-verdict-policy-rules
     template_name: malware-verdict-policy-rules.py
     repo_path: .github/scripts/malware_verdict_policy_rules.py
+
+  - name: malware-verdict-policy-rules-select
+    template_name: malware-verdict-policy-rules-select.py
+    repo_path: .github/scripts/malware_verdict_policy_rules_select.py
+
+  - name: malware-verdict-policy-rules-strip
+    template_name: malware-verdict-policy-rules-strip.py
+    repo_path: .github/scripts/malware_verdict_policy_rules_strip.py
 
   - name: malware-verdict-policy-analysis
     template_name: malware-verdict-policy-analysis.py

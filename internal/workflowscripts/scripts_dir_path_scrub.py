@@ -5,17 +5,19 @@ from __future__ import annotations
 import importlib.util
 import sys
 import types
+from collections.abc import Callable
 from pathlib import Path
 
 
-def exec_scripts_dir_module(
+def _exec_with_path_filter(
     script_dir: Path,
     path: Path,
     module_name: str,
     *,
-    register: bool = True,
+    register: bool,
+    exec_module: Callable[[types.ModuleType], object],
 ) -> types.ModuleType:
-    """Load a module from script_dir while that directory is removed from sys.path."""
+    """Exec module source while script_dir is removed from sys.path."""
     script_dir = script_dir.resolve()
     path = path.resolve()
     if register:
@@ -34,7 +36,29 @@ def exec_scripts_dir_module(
     saved_path = sys.path.copy()
     try:
         sys.path = [entry for entry in sys.path if entry != script_dir_s]
-        spec.loader.exec_module(module)
+        exec_module(module)
     finally:
         sys.path[:] = saved_path
     return module
+
+
+def exec_scripts_dir_module(
+    script_dir: Path,
+    path: Path,
+    module_name: str,
+    *,
+    register: bool = True,
+) -> types.ModuleType:
+    """Load a module from script_dir while that directory is removed from sys.path."""
+    path = path.resolve()
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec from {path}")
+    loader = spec.loader
+
+    def _run(module: types.ModuleType) -> None:
+        loader.exec_module(module)
+
+    return _exec_with_path_filter(
+        script_dir, path, module_name, register=register, exec_module=_run
+    )

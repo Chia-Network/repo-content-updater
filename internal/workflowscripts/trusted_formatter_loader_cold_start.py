@@ -1,7 +1,7 @@
 """Stdlib-only cold start for python3 -I (resolve_loader_bundle public entry).
 
 Load sequence under python3 -I:
-  1. bootstrap scripts_dir_path_scrub (single inline scrub exec — chicken-and-egg)
+  1. bootstrap scripts_dir_path_scrub (disk load; path-filter body parity-tested vs _exec_with_path_filter)
   2. exec scripts_dir_module_loader via path_scrub.exec_scripts_dir_module
   3. isolated_module_exec → resolve_trusted_formatter_loader_for_dir → sibling preload
 """
@@ -24,7 +24,7 @@ _ISO = "isolated_module_exec"
 
 
 def bootstrap_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
-    """Single owner of path_scrub bootstrap (inline scrub exec before helper is importable)."""
+    """Single owner of path_scrub bootstrap (stdlib-only module; exec once from disk)."""
     script_dir = script_dir.resolve()
     scrub_path = script_dir / f"{_SCRUB}.py"
     existing = sys.modules.get(_SCRUB)
@@ -37,13 +37,7 @@ def bootstrap_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
         raise RuntimeError(f"Could not load module spec from {scrub_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[_SCRUB] = module
-    script_dir_s = str(script_dir)
-    saved_path = sys.path.copy()
-    try:
-        sys.path = [entry for entry in sys.path if entry != script_dir_s]
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = saved_path
+    spec.loader.exec_module(module)
     return module
 
 

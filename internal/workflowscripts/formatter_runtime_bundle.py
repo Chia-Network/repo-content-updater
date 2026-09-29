@@ -8,10 +8,14 @@ LOADER_RESOLVE_MARKER_FILENAMES: tuple[str, ...] = (
 )
 
 FORMATTER_SIBLING_MODULE_STEMS: tuple[str, ...] = (
+    "malware_verdict_patterns_regex",
+    "malware_verdict_patterns_structure",
     "malware_verdict_patterns",
     "malware_verdict_policy_selection",
     "malware_verdict_policy_view",
     "malware_verdict_policy_context",
+    "malware_verdict_policy_rules_select",
+    "malware_verdict_policy_rules_strip",
     "malware_verdict_policy_rules",
     "malware_verdict_policy_analysis",
     "malware_verdict_policy",

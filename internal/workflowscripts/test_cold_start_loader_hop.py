@@ -15,6 +15,19 @@ import trusted_formatter_loader_cold_start as cold_start
 _SCRIPTS = Path(__file__).resolve().parent
 
 
+def _path_filter_try_body(source: str) -> ast.Try:
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Try):
+            for stmt in node.body:
+                if (
+                    isinstance(stmt, ast.Assign)
+                    and isinstance(stmt.value, ast.ListComp)
+                ):
+                    return node
+    raise AssertionError("expected sys.path list-comp try/finally in source")
+
+
 class ColdStartLoaderHopTest(unittest.TestCase):
     def test_cold_start_hop_delegates_to_path_scrub_exec(self) -> None:
         hop_src = inspect.getsource(cold_start._cold_start_hop_load_scripts_dir_module_loader)
@@ -32,21 +45,33 @@ class ColdStartLoaderHopTest(unittest.TestCase):
         )
         self.assertNotIn("cold_start_hop_load_self", hop_src)
 
-    def test_bootstrap_path_scrub_matches_exec_helper(self) -> None:
-        bootstrap_src = inspect.getsource(cold_start.bootstrap_scripts_dir_path_scrub)
+    def test_exec_helper_uses_shared_path_filter_primitive(self) -> None:
         exec_src = inspect.getsource(scripts_dir_path_scrub.exec_scripts_dir_module)
-        for needle in (
-            "sys.path = [entry for entry in sys.path if entry != script_dir_s]",
-            "sys.path[:] = saved_path",
-        ):
-            self.assertIn(needle, bootstrap_src, msg="bootstrap scrub must match exec helper")
-            self.assertIn(needle, exec_src)
+        self.assertIn("_exec_with_path_filter", exec_src)
+        filter_src = inspect.getsource(scripts_dir_path_scrub._exec_with_path_filter)
+        _path_filter_try_body(filter_src)
+        tree = ast.parse(exec_src)
+        calls_shared = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_exec_with_path_filter"
+            for node in ast.walk(tree)
+        )
+        self.assertTrue(calls_shared)
+
+    def test_bootstrap_scrub_is_stdlib_only_disk_exec(self) -> None:
+        bootstrap_src = inspect.getsource(cold_start.bootstrap_scripts_dir_path_scrub)
+        self.assertNotIn("_exec_with_path_filter", bootstrap_src)
+        self.assertIn("spec.loader.exec_module", bootstrap_src)
+        filter_src = inspect.getsource(scripts_dir_path_scrub._exec_with_path_filter)
+        self.assertIn("sys.path = [entry for entry in sys.path", filter_src)
 
     def test_isolated_exec_has_no_duplicate_bootstrap(self) -> None:
         iso_src = (_SCRIPTS / "isolated_module_exec.py").read_text(encoding="utf-8")
         self.assertNotIn("def _bootstrap_scripts_dir_path_scrub", iso_src)
         self.assertNotIn("def bootstrap_scripts_dir_path_scrub", iso_src)
         self.assertIn("_require_scripts_dir_path_scrub", iso_src)
+        self.assertIn("_bootstrap_via_spine", iso_src)
 
     def test_hop_matches_exec_loader_behavior(self) -> None:
         script_dir = _SCRIPTS
@@ -85,11 +110,11 @@ class ColdStartLoaderHopTest(unittest.TestCase):
             if scrub_saved is not None:
                 sys.modules["scripts_dir_path_scrub"] = scrub_saved
 
-    def test_load_module_isolated_delegates_to_bootstrap(self) -> None:
+    def test_load_module_isolated_delegates_to_spine_bootstrap(self) -> None:
         from isolated_module_exec import load_module_isolated
 
         src = inspect.getsource(load_module_isolated)
-        self.assertIn("bootstrap_module_from_scripts_dir", src)
+        self.assertIn("_bootstrap_via_spine", src)
 
 
 if __name__ == "__main__":

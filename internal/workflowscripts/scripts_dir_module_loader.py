@@ -13,7 +13,7 @@ def bootstrap_module_from_scripts_dir(
     filename: str,
     module_name: str,
 ) -> types.ModuleType:
-    """Load a stdlib-only scripts-dir module with the script directory removed from sys.path."""
+    """Canonical scripts-dir bootstrap (delegates to scripts_dir_path_scrub.exec_scripts_dir_module)."""
     return exec_scripts_dir_module(
         script_dir, script_dir / filename, module_name, register=True
     )
