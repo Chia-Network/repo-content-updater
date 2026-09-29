@@ -1,7 +1,7 @@
 """Stdlib-only cold start for python3 -I (resolve_loader_bundle public entry).
 
 Load sequence under python3 -I:
-  1. ``_require_scrub`` → disk exec of path_scrub (mirrors ``load_scrub_from_disk_under_dash_i``)
+  1. ``_require_scrub`` primes ``scripts_dir_disk_exec`` then ``load_scrub_from_disk_under_dash_i``
   2. bootstrap siblings via ``path_scrub.bootstrap_module_from_scripts_dir``
   3. isolated_module_exec → resolve_trusted_formatter_loader_for_dir → sibling preload
 """
@@ -19,6 +19,7 @@ DEFAULT_SCRIPT_CANDIDATES: tuple[Path, ...] = (
 )
 
 _SCRUB = "scripts_dir_path_scrub"
+_DISK_EXEC = "scripts_dir_disk_exec"
 _ISO = "isolated_module_exec"
 
 # Keep in sync with formatter_runtime_bundle.LOADER_RESOLVE_MARKER_FILENAMES (tested).
@@ -28,26 +29,32 @@ LOADER_RESOLVE_MARKER_FILENAMES: tuple[str, ...] = (
 )
 
 
-def _require_scrub(script_dir: Path) -> types.ModuleType:
-    """Return primed path_scrub (single disk exec when missing under python3 -I)."""
+def _ensure_disk_exec(script_dir: Path) -> types.ModuleType:
+    """Load scripts_dir_disk_exec from disk (no top-level sibling import under python3 -I)."""
     script_dir = script_dir.resolve()
-    scrub_path = script_dir / f"{_SCRUB}.py"
-    existing = sys.modules.get(_SCRUB)
+    path = script_dir / f"{_DISK_EXEC}.py"
+    existing = sys.modules.get(_DISK_EXEC)
     if existing is not None:
         existing_file = getattr(existing, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == scrub_path.resolve():
+        if existing_file and Path(existing_file).resolve() == path.resolve():
             return existing
-    spec = importlib.util.spec_from_file_location(_SCRUB, scrub_path)
+    spec = importlib.util.spec_from_file_location(_DISK_EXEC, path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {scrub_path}")
+        raise RuntimeError(f"Could not load module spec from {path}")
     module = importlib.util.module_from_spec(spec)
-    sys.modules[_SCRUB] = module
+    sys.modules[_DISK_EXEC] = module
     spec.loader.exec_module(module)
     return module
 
 
-def _loader_resolve_markers(_script_dir: Path) -> tuple[str, ...]:
-    return LOADER_RESOLVE_MARKER_FILENAMES
+def _require_scrub(script_dir: Path) -> types.ModuleType:
+    """Return primed path_scrub via the same cold-load path as load_scrub_from_disk_under_dash_i."""
+    script_dir = script_dir.resolve()
+    disk = _ensure_disk_exec(script_dir)
+    scrub_path = script_dir / f"{_SCRUB}.py"
+    if _SCRUB not in sys.modules:
+        disk.exec_trusted_module_from_disk(_SCRUB, scrub_path)
+    return sys.modules[_SCRUB].load_scrub_from_disk_under_dash_i(script_dir)
 
 
 def resolve_loader_for_dir(script_dir: Path) -> types.ModuleType:
@@ -65,11 +72,7 @@ def resolve_loader_bundle(
     """Find scripts dir; return (trusted_formatter_loader module, chosen directory)."""
     for script_dir in candidate_script_dirs:
         script_dir = script_dir.resolve()
-        try:
-            markers = _loader_resolve_markers(script_dir)
-        except (RuntimeError, OSError):
-            continue
-        if not all((script_dir / name).is_file() for name in markers):
+        if not all((script_dir / name).is_file() for name in LOADER_RESOLVE_MARKER_FILENAMES):
             continue
         return resolve_loader_for_dir(script_dir), script_dir
     raise RuntimeError(

@@ -1,7 +1,7 @@
 """Stdlib-only path-scrub + importlib exec (single bootstrap surface for scripts-dir modules).
 
 Intentional exception: ``load_scrub_from_disk_under_dash_i`` loads ``scripts_dir_path_scrub``
-from disk **without** path-filter (module imports are stdlib-only). Every other trusted
+from disk **without** path-filter (via ``scripts_dir_disk_exec``). Every other trusted
 module load uses ``bootstrap_module_from_scripts_dir`` / ``exec_scripts_dir_module`` →
 ``_exec_with_path_filter``.
 """
@@ -12,7 +12,10 @@ import importlib.util
 import sys
 import types
 from collections.abc import Callable
+from importlib.abc import Loader
 from pathlib import Path
+
+from scripts_dir_disk_exec import exec_trusted_module_from_disk
 
 _SCRUB_MODULE = "scripts_dir_path_scrub"
 
@@ -36,16 +39,7 @@ def load_scrub_from_disk_under_dash_i(script_dir: Path) -> types.ModuleType:
     cached = cached_trusted_module(_SCRUB_MODULE, path)
     if cached is not None:
         return cached
-    spec = importlib.util.spec_from_file_location(_SCRUB_MODULE, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[_SCRUB_MODULE] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-bootstrap_scripts_dir_path_scrub = load_scrub_from_disk_under_dash_i
+    return exec_trusted_module_from_disk(_SCRUB_MODULE, path)
 
 
 def _exec_with_path_filter(
@@ -54,7 +48,7 @@ def _exec_with_path_filter(
     module_name: str,
     *,
     register: bool,
-    exec_module: Callable[[types.ModuleType], object],
+    exec_module: Callable[[types.ModuleType, Loader], object],
 ) -> types.ModuleType:
     """Exec module source while script_dir is removed from sys.path."""
     script_dir = script_dir.resolve()
@@ -73,7 +67,7 @@ def _exec_with_path_filter(
     saved_path = sys.path.copy()
     try:
         sys.path = [entry for entry in sys.path if entry != script_dir_s]
-        exec_module(module)
+        exec_module(module, spec.loader)
     finally:
         sys.path[:] = saved_path
     return module
@@ -88,12 +82,8 @@ def exec_scripts_dir_module(
 ) -> types.ModuleType:
     """Load a module from script_dir while that directory is removed from sys.path."""
     path = path.resolve()
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {path}")
-    loader = spec.loader
 
-    def _run(module: types.ModuleType) -> None:
+    def _run(module: types.ModuleType, loader: Loader) -> None:
         loader.exec_module(module)
 
     return _exec_with_path_filter(

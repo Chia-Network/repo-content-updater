@@ -32,6 +32,7 @@ class ColdStartLoaderHopTest(unittest.TestCase):
     def test_exec_helper_uses_shared_path_filter_primitive(self) -> None:
         exec_src = inspect.getsource(scripts_dir_path_scrub.exec_scripts_dir_module)
         self.assertIn("_exec_with_path_filter", exec_src)
+        self.assertNotIn("spec_from_file_location", exec_src)
         tree = ast.parse(exec_src)
         calls_shared = any(
             isinstance(node, ast.Call)
@@ -52,6 +53,25 @@ class ColdStartLoaderHopTest(unittest.TestCase):
         self.assertNotIn("def bootstrap_module_from_scripts_dir", iso_src)
         self.assertIn("_require_scripts_dir_path_scrub", iso_src)
         self.assertIn("_bootstrap_via_spine", iso_src)
+
+    def test_scrub_cold_load_equivalence(self) -> None:
+        script_dir = _SCRIPTS
+        scrub_saved = sys.modules.pop("scripts_dir_path_scrub", None)
+        try:
+            via_cold = cold_start._require_scrub(script_dir)
+            sys.modules.pop("scripts_dir_path_scrub", None)
+            via_scrub = scripts_dir_path_scrub.load_scrub_from_disk_under_dash_i(script_dir)
+            self.assertEqual(
+                Path(via_cold.__file__).resolve(),
+                Path(via_scrub.__file__).resolve(),
+            )
+            cold_src = inspect.getsource(cold_start._require_scrub)
+            self.assertIn("load_scrub_from_disk_under_dash_i", cold_src)
+            self.assertIn("_ensure_disk_exec", cold_src)
+            self.assertIn("exec_trusted_module_from_disk", cold_src)
+        finally:
+            if scrub_saved is not None:
+                sys.modules["scripts_dir_path_scrub"] = scrub_saved
 
     def test_hop_matches_scrub_bootstrap_behavior(self) -> None:
         script_dir = _SCRIPTS

@@ -33,9 +33,12 @@ groups:
       - malware-verdict-policy
       - malware-verdict-policy-view
       - malware-verdict-policy-context
+      - malware-verdict-policy-official-selection-rows
       - malware-verdict-policy-predicates
+      - scripts-dir-disk-exec
       - scripts-dir-path-scrub
       - formatter-runtime-bundle
+      - malware-verdict-policy-rules-select-precedence
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
       - malware-verdict-policy-analysis
@@ -73,9 +76,12 @@ files:
       - malware-verdict-policy
       - malware-verdict-policy-view
       - malware-verdict-policy-context
+      - malware-verdict-policy-official-selection-rows
       - malware-verdict-policy-predicates
+      - scripts-dir-disk-exec
       - scripts-dir-path-scrub
       - formatter-runtime-bundle
+      - malware-verdict-policy-rules-select-precedence
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
       - malware-verdict-policy-analysis
@@ -129,9 +135,17 @@ files:
     template_name: malware-verdict-policy-context.py
     repo_path: .github/scripts/malware_verdict_policy_context.py
 
+  - name: malware-verdict-policy-official-selection-rows
+    template_name: malware-verdict-policy-official-selection-rows.py
+    repo_path: .github/scripts/malware_verdict_policy_official_selection_rows.py
+
   - name: malware-verdict-policy-predicates
     template_name: malware-verdict-policy-predicates.py
     repo_path: .github/scripts/malware_verdict_policy_predicates.py
+
+  - name: malware-verdict-policy-rules-select-precedence
+    template_name: malware-verdict-policy-rules-select-precedence.py
+    repo_path: .github/scripts/malware_verdict_policy_rules_select_precedence.py
 
   - name: malware-verdict-policy-rules-select
     template_name: malware-verdict-policy-rules-select.py
@@ -144,6 +158,10 @@ files:
   - name: malware-verdict-policy-analysis
     template_name: malware-verdict-policy-analysis.py
     repo_path: .github/scripts/malware_verdict_policy_analysis.py
+
+  - name: scripts-dir-disk-exec
+    template_name: scripts-dir-disk-exec.py
+    repo_path: .github/scripts/scripts_dir_disk_exec.py
 
   - name: scripts-dir-path-scrub
     template_name: scripts-dir-path-scrub.py

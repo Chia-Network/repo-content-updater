@@ -11,9 +11,11 @@ FORMATTER_SIBLING_MODULE_STEMS: tuple[str, ...] = (
     "malware_verdict_patterns_regex",
     "malware_verdict_patterns_structure",
     "malware_verdict_patterns",
+    "malware_verdict_policy_official_selection_rows",
     "malware_verdict_policy_context",
     "malware_verdict_policy_predicates",
     "malware_verdict_policy_view",
+    "malware_verdict_policy_rules_select_precedence",
     "malware_verdict_policy_rules_select",
     "malware_verdict_policy_rules_strip",
     "malware_verdict_policy_analysis",
@@ -21,6 +23,7 @@ FORMATTER_SIBLING_MODULE_STEMS: tuple[str, ...] = (
 )
 
 FORMATTER_RUNTIME_FILENAMES: tuple[str, ...] = (
+    "scripts_dir_disk_exec.py",
     "scripts_dir_path_scrub.py",
     *LOADER_RESOLVE_MARKER_FILENAMES,
     "trusted_formatter_loader_cold_start.py",

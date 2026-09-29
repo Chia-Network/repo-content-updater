@@ -25,10 +25,9 @@ _SCRIPTS = Path(__file__).resolve().parent
 
 class FormatterBundleInventoryTest(unittest.TestCase):
     def test_runtime_bundle_matches_cold_start_markers(self) -> None:
-        markers = cold_start._loader_resolve_markers(_SCRIPTS)
         self.assertEqual(
             formatter_runtime_bundle.LOADER_RESOLVE_MARKER_FILENAMES,
-            markers,
+            cold_start.LOADER_RESOLVE_MARKER_FILENAMES,
         )
 
     def test_runtime_bundle_includes_loader_markers_and_siblings(self) -> None:
