@@ -5,11 +5,10 @@ malware-verdict-patterns-regex
 malware-verdict-patterns-structure
 malware-verdict-policy
 malware-verdict-policy-view
-malware-verdict-policy-selection
 malware-verdict-policy-context
+malware-verdict-policy-predicates
 scripts-dir-path-scrub
 formatter-runtime-bundle
-malware-verdict-policy-rules
 malware-verdict-policy-rules-select
 malware-verdict-policy-rules-strip
 malware-verdict-policy-analysis

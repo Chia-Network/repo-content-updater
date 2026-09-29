@@ -50,7 +50,8 @@ func TestConfigIsValid(t *testing.T) {
 	for _, required := range []string{
 		"upstream-malware-scan-lib",
 		"dependency-cursor-review-dependabot-context",
-		"malware-verdict-policy-rules",
+		"malware-verdict-policy-rules-select",
+		"malware-verdict-policy-predicates",
 		"isolated-module-exec",
 		"malware-verdict-policy-analysis",
 	} {

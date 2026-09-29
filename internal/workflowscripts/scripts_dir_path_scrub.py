@@ -1,6 +1,6 @@
 """Stdlib-only path-scrub + importlib exec (single bootstrap surface for scripts-dir modules).
 
-Intentional exception: ``bootstrap_scripts_dir_path_scrub`` loads ``scripts_dir_path_scrub``
+Intentional exception: ``load_scrub_from_disk_under_dash_i`` loads ``scripts_dir_path_scrub``
 from disk **without** path-filter (module imports are stdlib-only). Every other trusted
 module load uses ``bootstrap_module_from_scripts_dir`` / ``exec_scripts_dir_module`` →
 ``_exec_with_path_filter``.
@@ -29,7 +29,7 @@ def cached_trusted_module(module_name: str, path: Path) -> types.ModuleType | No
     return None
 
 
-def bootstrap_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
+def load_scrub_from_disk_under_dash_i(script_dir: Path) -> types.ModuleType:
     """Cold-start owner: exec stdlib-only path_scrub once (no path-filter — see module docstring)."""
     script_dir = script_dir.resolve()
     path = script_dir / f"{_SCRUB_MODULE}.py"
@@ -43,6 +43,9 @@ def bootstrap_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
     sys.modules[_SCRUB_MODULE] = module
     spec.loader.exec_module(module)
     return module
+
+
+bootstrap_scripts_dir_path_scrub = load_scrub_from_disk_under_dash_i
 
 
 def _exec_with_path_filter(

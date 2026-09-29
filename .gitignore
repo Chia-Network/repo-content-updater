@@ -14,6 +14,7 @@ templates/module-exec-*.py
 templates/formatter-bundle-*.py
 templates/formatter-runtime-bundle.py
 templates/scripts-dir-path-scrub.py
+templates/scripts-dir-module-loader.py
 templates/isolated-module-exec.py
 templates/dependency-cursor-review-*.py
 templates/dependency-cursor-review-*.js

@@ -1,8 +1,8 @@
 """Stdlib-only cold start for python3 -I (resolve_loader_bundle public entry).
 
 Load sequence under python3 -I:
-  1. prime scripts_dir_path_scrub (stdlib-only disk exec — see path_scrub module docstring)
-  2. bootstrap sibling modules via path_scrub.bootstrap_module_from_scripts_dir
+  1. ``_require_scrub`` → disk exec of path_scrub (mirrors ``load_scrub_from_disk_under_dash_i``)
+  2. bootstrap siblings via ``path_scrub.bootstrap_module_from_scripts_dir``
   3. isolated_module_exec → resolve_trusted_formatter_loader_for_dir → sibling preload
 """
 
@@ -21,9 +21,15 @@ DEFAULT_SCRIPT_CANDIDATES: tuple[Path, ...] = (
 _SCRUB = "scripts_dir_path_scrub"
 _ISO = "isolated_module_exec"
 
+# Keep in sync with formatter_runtime_bundle.LOADER_RESOLVE_MARKER_FILENAMES (tested).
+LOADER_RESOLVE_MARKER_FILENAMES: tuple[str, ...] = (
+    "isolated_module_exec.py",
+    "trusted_formatter_loader.py",
+)
 
-def _prime_path_scrub(script_dir: Path) -> types.ModuleType:
-    """Chicken-and-egg: exec path_scrub from disk before it is importable under python3 -I."""
+
+def _require_scrub(script_dir: Path) -> types.ModuleType:
+    """Return primed path_scrub (single disk exec when missing under python3 -I)."""
     script_dir = script_dir.resolve()
     scrub_path = script_dir / f"{_SCRUB}.py"
     existing = sys.modules.get(_SCRUB)
@@ -40,22 +46,8 @@ def _prime_path_scrub(script_dir: Path) -> types.ModuleType:
     return module
 
 
-def bootstrap_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
-    """Cold-start entry; delegates to path_scrub.bootstrap_scripts_dir_path_scrub after prime."""
-    scrub = _prime_path_scrub(script_dir)
-    return scrub.bootstrap_scripts_dir_path_scrub(script_dir)
-
-
-def _require_scrub(script_dir: Path) -> types.ModuleType:
-    return bootstrap_scripts_dir_path_scrub(script_dir)
-
-
-def _loader_resolve_markers(script_dir: Path) -> tuple[str, ...]:
-    scrub = _require_scrub(script_dir)
-    bundle = scrub.bootstrap_module_from_scripts_dir(
-        script_dir, "formatter_runtime_bundle.py", "formatter_runtime_bundle"
-    )
-    return bundle.LOADER_RESOLVE_MARKER_FILENAMES
+def _loader_resolve_markers(_script_dir: Path) -> tuple[str, ...]:
+    return LOADER_RESOLVE_MARKER_FILENAMES
 
 
 def resolve_loader_for_dir(script_dir: Path) -> types.ModuleType:

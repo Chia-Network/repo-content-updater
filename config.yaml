@@ -32,11 +32,10 @@ groups:
       - malware-verdict-patterns-structure
       - malware-verdict-policy
       - malware-verdict-policy-view
-      - malware-verdict-policy-selection
       - malware-verdict-policy-context
+      - malware-verdict-policy-predicates
       - scripts-dir-path-scrub
       - formatter-runtime-bundle
-      - malware-verdict-policy-rules
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
       - malware-verdict-policy-analysis
@@ -73,11 +72,10 @@ files:
       - malware-verdict-patterns-structure
       - malware-verdict-policy
       - malware-verdict-policy-view
-      - malware-verdict-policy-selection
       - malware-verdict-policy-context
+      - malware-verdict-policy-predicates
       - scripts-dir-path-scrub
       - formatter-runtime-bundle
-      - malware-verdict-policy-rules
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
       - malware-verdict-policy-analysis
@@ -127,17 +125,13 @@ files:
     template_name: malware-verdict-policy-view.py
     repo_path: .github/scripts/malware_verdict_policy_view.py
 
-  - name: malware-verdict-policy-selection
-    template_name: malware-verdict-policy-selection.py
-    repo_path: .github/scripts/malware_verdict_policy_selection.py
-
   - name: malware-verdict-policy-context
     template_name: malware-verdict-policy-context.py
     repo_path: .github/scripts/malware_verdict_policy_context.py
 
-  - name: malware-verdict-policy-rules
-    template_name: malware-verdict-policy-rules.py
-    repo_path: .github/scripts/malware_verdict_policy_rules.py
+  - name: malware-verdict-policy-predicates
+    template_name: malware-verdict-policy-predicates.py
+    repo_path: .github/scripts/malware_verdict_policy_predicates.py
 
   - name: malware-verdict-policy-rules-select
     template_name: malware-verdict-policy-rules-select.py

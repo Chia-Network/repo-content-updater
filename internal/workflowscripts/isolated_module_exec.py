@@ -1,8 +1,7 @@
 """Stdlib-only module isolation and trusted formatter loader resolve spine.
 
 ``scripts_dir_path_scrub.bootstrap_module_from_scripts_dir`` is the canonical bootstrap.
-``bootstrap_module_from_scripts_dir`` here is the cold-start-aware façade (requires primed
-``scripts_dir_path_scrub`` via ``_bootstrap_via_spine``).
+``_bootstrap_via_spine`` requires primed ``scripts_dir_path_scrub`` (cold-start under python3 -I).
 """
 
 from __future__ import annotations
@@ -40,15 +39,6 @@ def _bootstrap_via_spine(
     """Cold-start-aware load: require primed path_scrub, then delegate to canonical bootstrap."""
     scrub = _require_scripts_dir_path_scrub(script_dir)
     return scrub.bootstrap_module_from_scripts_dir(script_dir, filename, module_name)
-
-
-def bootstrap_module_from_scripts_dir(
-    script_dir: Path,
-    filename: str,
-    module_name: str,
-) -> types.ModuleType:
-    """Façade for isolated exec; canonical bootstrap lives on scripts_dir_path_scrub."""
-    return _bootstrap_via_spine(script_dir, filename, module_name)
 
 
 def load_module_isolated(
