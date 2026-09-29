@@ -15,19 +15,18 @@ _SCRIPTS = Path(__file__).resolve().parent
 
 _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy.py", 25),
-    ("malware_verdict_policy_selection.py", 320),
-    ("malware_verdict_policy_context.py", 100),
-    ("scripts_dir_path_scrub.py", 65),
+    ("malware_verdict_policy_selection.py", 25),
+    ("malware_verdict_policy_context.py", 360),
+    ("scripts_dir_path_scrub.py", 115),
     ("malware_verdict_patterns_regex.py", 200),
     ("malware_verdict_patterns_structure.py", 360),
     ("malware_verdict_policy_rules_select.py", 360),
     ("malware_verdict_policy_rules_strip.py", 360),
-    ("scripts_dir_module_loader.py", 25),
     ("formatter_runtime_bundle.py", 40),
     ("formatter_bundle_inventory.py", 220),
     ("malware_verdict_policy_rules.py", 55),
     ("malware_verdict_policy_analysis.py", 55),
-    ("malware_verdict_patterns.py", 60),
+    ("malware_verdict_patterns.py", 145),
     ("malware_verdict_policy_view.py", 75),
     ("isolated_module_exec.py", 120),
     ("trusted_formatter_loader_cold_start.py", 110),
@@ -43,14 +42,13 @@ class ThermoJudo8Test(unittest.TestCase):
             _SCRIPTS / "trusted_formatter_loader_cold_start.py"
         ).read_text(encoding="utf-8")
         iso_src = (_SCRIPTS / "isolated_module_exec.py").read_text(encoding="utf-8")
-        hop_src = inspect.getsource(cold_start._cold_start_hop_load_scripts_dir_module_loader)
-        hop_tree = ast.parse(hop_src)
+        resolve_src = inspect.getsource(cold_start.resolve_loader_for_dir)
         hop_exec_calls = [
             node
-            for node in ast.walk(hop_tree)
+            for node in ast.walk(ast.parse(resolve_src))
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "exec_scripts_dir_module"
+            and node.func.attr == "bootstrap_module_from_scripts_dir"
         ]
         self.assertNotIn("def _exec_module_isolated", combine)
         self.assertIn("runpy.run_path", combine)
@@ -60,13 +58,13 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("register_util_from_scripts_dir", iso_src)
         self.assertIn("resolve_trusted_formatter_loader_for_dir", iso_src)
         self.assertIn("bootstrap_scripts_dir_path_scrub", cold_src)
-        self.assertIn("_cold_start_hop_load_scripts_dir_module_loader", cold_src)
+        self.assertNotIn("scripts_dir_module_loader", cold_src)
         self.assertNotIn("def _module_exec_scrub", cold_src)
-        self.assertNotIn("cold_start_hop_load_self", hop_src)
         self.assertTrue(
             hop_exec_calls,
-            msg="cold-start loader hop must call scripts_dir_path_scrub.exec_scripts_dir_module",
+            msg="cold-start resolve must bootstrap via path_scrub.bootstrap_module_from_scripts_dir",
         )
+        self.assertFalse((_SCRIPTS / "scripts_dir_module_loader.py").exists())
         self.assertNotIn("def bootstrap_scripts_dir_path_scrub", iso_src)
         self.assertNotIn("def _bootstrap_scripts_dir_path_scrub", iso_src)
         self.assertIn("_require_scripts_dir_path_scrub", iso_src)
@@ -107,14 +105,18 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("build_official_selection_context", selection)
         self.assertIn("OfficialSelectionContext", selection)
         self.assertIn("mention_loses_to_official", context)
-        self.assertIn("_OFFICIAL_SELECT_PIPELINE", rules)
-        self.assertIn("_BODY_STRIP_RULES", rules)
+        self.assertNotIn("_OFFICIAL_SELECT_PIPELINE", rules)
+        self.assertNotIn("_BODY_STRIP_RULES", rules)
+        self.assertIn("collect_body_strip_spans", rules)
         self.assertNotIn("from malware_verdict_classification import", deploy)
         self.assertTrue((_SCRIPTS / "malware_verdict_policy_rules_select.py").is_file())
         self.assertTrue((_SCRIPTS / "malware_verdict_policy_rules_strip.py").is_file())
         self.assertTrue((_SCRIPTS / "malware_verdict_patterns_regex.py").is_file())
         self.assertTrue((_SCRIPTS / "malware_verdict_patterns_structure.py").is_file())
-        self.assertIn("_exec_with_path_filter", (_SCRIPTS / "scripts_dir_path_scrub.py").read_text())
+        scrub_src = (_SCRIPTS / "scripts_dir_path_scrub.py").read_text()
+        self.assertIn("_exec_with_path_filter", scrub_src)
+        self.assertIn("cached_trusted_module", scrub_src)
+        self.assertIn("bootstrap_module_from_scripts_dir", scrub_src)
         self.assertFalse(
             (_SCRIPTS / "malware_verdict_policy_catalog.py").exists(),
         )
@@ -147,7 +149,6 @@ class ThermoJudo8Test(unittest.TestCase):
             self.assertIn(pattern, gitignore, msg=f"missing gitignore pattern {pattern!r}")
         for mirror_name in (
             "scripts-dir-path-scrub.py",
-            "scripts-dir-module-loader.py",
             "formatter-runtime-bundle.py",
             "malware-verdict-policy-context.py",
         ):

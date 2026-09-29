@@ -144,7 +144,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                     str(scripts / "trusted_formatter_loader_cold_start.py")
                 )
                 loader = ns["resolve_loader_for_dir"](scripts)
-                self.assertIn("scripts_dir_module_loader", sys.modules)
+                self.assertIn("scripts_dir_path_scrub", sys.modules)
                 self.assertTrue(hasattr(loader, "find_and_load_format_malware_review_verdict"))
             finally:
                 for name, module in saved.items():

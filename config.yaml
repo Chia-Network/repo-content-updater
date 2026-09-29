@@ -35,7 +35,6 @@ groups:
       - malware-verdict-policy-selection
       - malware-verdict-policy-context
       - scripts-dir-path-scrub
-      - scripts-dir-module-loader
       - formatter-runtime-bundle
       - malware-verdict-policy-rules
       - malware-verdict-policy-rules-select
@@ -77,7 +76,6 @@ files:
       - malware-verdict-policy-selection
       - malware-verdict-policy-context
       - scripts-dir-path-scrub
-      - scripts-dir-module-loader
       - formatter-runtime-bundle
       - malware-verdict-policy-rules
       - malware-verdict-policy-rules-select
@@ -156,10 +154,6 @@ files:
   - name: scripts-dir-path-scrub
     template_name: scripts-dir-path-scrub.py
     repo_path: .github/scripts/scripts_dir_path_scrub.py
-
-  - name: scripts-dir-module-loader
-    template_name: scripts-dir-module-loader.py
-    repo_path: .github/scripts/scripts_dir_module_loader.py
 
   - name: formatter-runtime-bundle
     template_name: formatter-runtime-bundle.py

@@ -1,4 +1,10 @@
-"""Stdlib-only path-scrub + importlib exec (single source for cold-start and loader)."""
+"""Stdlib-only path-scrub + importlib exec (single bootstrap surface for scripts-dir modules).
+
+Intentional exception: ``bootstrap_scripts_dir_path_scrub`` loads ``scripts_dir_path_scrub``
+from disk **without** path-filter (module imports are stdlib-only). Every other trusted
+module load uses ``bootstrap_module_from_scripts_dir`` / ``exec_scripts_dir_module`` →
+``_exec_with_path_filter``.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +13,36 @@ import sys
 import types
 from collections.abc import Callable
 from pathlib import Path
+
+_SCRUB_MODULE = "scripts_dir_path_scrub"
+
+
+def cached_trusted_module(module_name: str, path: Path) -> types.ModuleType | None:
+    """Return a sys.modules entry when it already points at the resolved trusted path."""
+    path = path.resolve()
+    existing = sys.modules.get(module_name)
+    if existing is None:
+        return None
+    existing_file = getattr(existing, "__file__", None)
+    if existing_file and Path(existing_file).resolve() == path:
+        return existing
+    return None
+
+
+def bootstrap_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
+    """Cold-start owner: exec stdlib-only path_scrub once (no path-filter — see module docstring)."""
+    script_dir = script_dir.resolve()
+    path = script_dir / f"{_SCRUB_MODULE}.py"
+    cached = cached_trusted_module(_SCRUB_MODULE, path)
+    if cached is not None:
+        return cached
+    spec = importlib.util.spec_from_file_location(_SCRUB_MODULE, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_SCRUB_MODULE] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _exec_with_path_filter(
@@ -21,11 +57,9 @@ def _exec_with_path_filter(
     script_dir = script_dir.resolve()
     path = path.resolve()
     if register:
-        existing = sys.modules.get(module_name)
-        if existing is not None:
-            existing_file = getattr(existing, "__file__", None)
-            if existing_file and Path(existing_file).resolve() == path:
-                return existing
+        cached = cached_trusted_module(module_name, path)
+        if cached is not None:
+            return cached
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load module spec from {path}")
@@ -61,4 +95,15 @@ def exec_scripts_dir_module(
 
     return _exec_with_path_filter(
         script_dir, path, module_name, register=register, exec_module=_run
+    )
+
+
+def bootstrap_module_from_scripts_dir(
+    script_dir: Path,
+    filename: str,
+    module_name: str,
+) -> types.ModuleType:
+    """Canonical scripts-dir bootstrap (path-filtered exec)."""
+    return exec_scripts_dir_module(
+        script_dir, script_dir / filename, module_name, register=True
     )

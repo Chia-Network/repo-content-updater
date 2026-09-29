@@ -1,8 +1,8 @@
 """Stdlib-only module isolation and trusted formatter loader resolve spine.
 
-``scripts_dir_module_loader.bootstrap_module_from_scripts_dir`` is the canonical
-one-liner bootstrap. ``bootstrap_module_from_scripts_dir`` here is the cold-start-aware
-façade (requires primed ``scripts_dir_path_scrub`` via ``_bootstrap_via_spine``).
+``scripts_dir_path_scrub.bootstrap_module_from_scripts_dir`` is the canonical bootstrap.
+``bootstrap_module_from_scripts_dir`` here is the cold-start-aware façade (requires primed
+``scripts_dir_path_scrub`` via ``_bootstrap_via_spine``).
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import types
 from pathlib import Path
 
 _SCRUB = "scripts_dir_path_scrub"
-_LOADER = "scripts_dir_module_loader"
 
 
 def _require_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
@@ -33,26 +32,14 @@ def _require_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
     return scrub
 
 
-def _ensure_loader_spine(script_dir: Path) -> types.ModuleType:
-    script_dir = script_dir.resolve()
-    scrub = _require_scripts_dir_path_scrub(script_dir)
-    loader = sys.modules.get(_LOADER)
-    loader_path = script_dir / f"{_LOADER}.py"
-    if loader is not None:
-        existing_file = getattr(loader, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == loader_path.resolve():
-            return loader
-    return scrub.exec_scripts_dir_module(script_dir, loader_path, _LOADER)
-
-
 def _bootstrap_via_spine(
     script_dir: Path,
     filename: str,
     module_name: str,
 ) -> types.ModuleType:
-    """Cold-start-aware load: require primed path_scrub, then delegate to canonical loader."""
-    loader = _ensure_loader_spine(script_dir)
-    return loader.bootstrap_module_from_scripts_dir(script_dir, filename, module_name)
+    """Cold-start-aware load: require primed path_scrub, then delegate to canonical bootstrap."""
+    scrub = _require_scripts_dir_path_scrub(script_dir)
+    return scrub.bootstrap_module_from_scripts_dir(script_dir, filename, module_name)
 
 
 def bootstrap_module_from_scripts_dir(
@@ -60,7 +47,7 @@ def bootstrap_module_from_scripts_dir(
     filename: str,
     module_name: str,
 ) -> types.ModuleType:
-    """Façade for isolated exec; canonical one-liner lives on scripts_dir_module_loader."""
+    """Façade for isolated exec; canonical bootstrap lives on scripts_dir_path_scrub."""
     return _bootstrap_via_spine(script_dir, filename, module_name)
 
 
@@ -71,25 +58,22 @@ def load_module_isolated(
     """Register and exec a module without leaving its directory on sys.path."""
     script_path = script_path.resolve()
     name = module_name or f"isolated_{script_path.stem}"
-    existing = sys.modules.get(name)
-    if existing is not None:
-        existing_file = getattr(existing, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == script_path:
-            return existing
+    scrub = _require_scripts_dir_path_scrub(script_path.parent)
+    cached = scrub.cached_trusted_module(name, script_path)
+    if cached is not None:
+        return cached
     return _bootstrap_via_spine(script_path.parent, script_path.name, name)
 
 
 def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:
-    """Prime loader spine + isolated_module_exec (requires path_scrub already bootstrapped)."""
+    """Prime isolated_module_exec (requires path_scrub already bootstrapped)."""
     script_dir = script_dir.resolve()
     name = "isolated_module_exec"
     path = script_dir / f"{name}.py"
-    existing = sys.modules.get(name)
-    if existing is not None:
-        existing_file = getattr(existing, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == path.resolve():
-            return existing
-    _ensure_loader_spine(script_dir)
+    scrub = _require_scripts_dir_path_scrub(script_dir)
+    cached = scrub.cached_trusted_module(name, path)
+    if cached is not None:
+        return cached
     if not path.is_file():
         raise RuntimeError(f"Missing {path}")
     return load_module_isolated(path, name)

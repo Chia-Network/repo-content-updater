@@ -8,7 +8,6 @@ malware-verdict-policy-view
 malware-verdict-policy-selection
 malware-verdict-policy-context
 scripts-dir-path-scrub
-scripts-dir-module-loader
 formatter-runtime-bundle
 malware-verdict-policy-rules
 malware-verdict-policy-rules-select

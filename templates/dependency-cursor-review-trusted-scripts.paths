@@ -8,7 +8,6 @@
 .github/scripts/malware_verdict_policy_selection.py
 .github/scripts/malware_verdict_policy_context.py
 .github/scripts/scripts_dir_path_scrub.py
-.github/scripts/scripts_dir_module_loader.py
 .github/scripts/formatter_runtime_bundle.py
 .github/scripts/malware_verdict_policy_rules.py
 .github/scripts/malware_verdict_policy_rules_select.py
