@@ -11,7 +11,6 @@ import types
 from pathlib import Path
 
 _SCRUB = "scripts_dir_path_scrub"
-_DISK_EXEC = "scripts_dir_disk_exec"
 
 
 def _require_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
@@ -33,15 +32,7 @@ def _require_scripts_dir_path_scrub(script_dir: Path) -> types.ModuleType:
 
 
 def _disk_exec_for_script_dir(script_dir: Path) -> types.ModuleType:
-    scrub = _require_scripts_dir_path_scrub(script_dir)
-    script_dir = script_dir.resolve()
-    disk = sys.modules.get(_DISK_EXEC)
-    disk_path = script_dir / f"{_DISK_EXEC}.py"
-    if disk is not None:
-        existing_file = getattr(disk, "__file__", None)
-        if existing_file and Path(existing_file).resolve() == disk_path.resolve():
-            return disk
-    return scrub.ensure_disk_exec(script_dir)
+    return _require_scripts_dir_path_scrub(script_dir).ensure_disk_exec(script_dir)
 
 
 def _bootstrap_via_spine(

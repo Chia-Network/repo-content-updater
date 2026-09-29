@@ -75,8 +75,8 @@ class ColdStartLoaderHopTest(unittest.TestCase):
             cold_src = inspect.getsource(cold_start._require_scrub)
             self.assertIn("cached_trusted_module", cold_src)
             self.assertIn("exec_trusted_module_from_disk", cold_src)
-            self.assertIn("load_scrub_from_disk_under_dash_i", cold_src)
-            self.assertIn("getattr", cold_src)
+            self.assertNotIn("load_scrub_from_disk_under_dash_i", cold_src)
+            self.assertNotIn("getattr", cold_src)
         finally:
             if scrub_saved is not None:
                 sys.modules["scripts_dir_path_scrub"] = scrub_saved

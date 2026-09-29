@@ -17,7 +17,7 @@ _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy.py", 25),
     ("malware_verdict_policy_context.py", 330),
     ("malware_verdict_policy_predicates.py", 85),
-    ("scripts_dir_disk_exec.py", 60),
+    ("scripts_dir_disk_exec.py", 65),
     ("scripts_dir_path_scrub.py", 130),
     ("malware_verdict_patterns_regex.py", 200),
     ("malware_verdict_patterns_structure.py", 380),
@@ -28,8 +28,8 @@ _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy_analysis.py", 85),
     ("malware_verdict_patterns.py", 145),
     ("malware_verdict_policy_view.py", 85),
-    ("isolated_module_exec.py", 105),
-    ("trusted_formatter_loader_cold_start.py", 80),
+    ("isolated_module_exec.py", 100),
+    ("trusted_formatter_loader_cold_start.py", 78),
 )
 
 
@@ -127,7 +127,8 @@ class ThermoJudo8Test(unittest.TestCase):
         disk_src = (_SCRIPTS / "scripts_dir_disk_exec.py").read_text()
         self.assertIn("def cached_trusted_module", disk_src)
         self.assertNotIn("from scripts_dir_disk_exec import", scrub_src.split("def load_scrub")[0])
-        self.assertIn("bootstrap_disk_exec_from_script_dir", disk_src)
+        self.assertIn("chicken_egg_import_disk_exec", disk_src)
+        self.assertIn("_paired_chicken_egg_import_disk_exec", scrub_src)
         self.assertIn("ensure_disk_exec", scrub_src)
         self.assertNotIn("_ensure_disk_exec", iso_src)
         self.assertIn("cached_trusted_module", scrub_src)

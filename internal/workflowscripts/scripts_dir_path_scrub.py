@@ -19,22 +19,25 @@ _SCRUB_MODULE = "scripts_dir_path_scrub"
 _DISK_EXEC_MODULE = "scripts_dir_disk_exec"
 
 
+def _paired_chicken_egg_import_disk_exec(script_dir: Path) -> types.ModuleType:
+    """PAIRED with trusted_formatter_loader_cold_start._bootstrap_disk_exec (importlib tail only)."""
+    script_dir = script_dir.resolve()
+    if sys.modules.get(_DISK_EXEC_MODULE) is None:
+        path = script_dir / f"{_DISK_EXEC_MODULE}.py"
+        spec = importlib.util.spec_from_file_location(_DISK_EXEC_MODULE, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(
+                f"{_DISK_EXEC_MODULE}.py must be co-located with path_scrub under {script_dir}"
+            )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[_DISK_EXEC_MODULE] = module
+        spec.loader.exec_module(module)
+    return sys.modules[_DISK_EXEC_MODULE].chicken_egg_import_disk_exec(script_dir)
+
+
 def ensure_disk_exec(script_dir: Path) -> types.ModuleType:
     """Return ``scripts_dir_disk_exec`` primed from script_dir (no top-level sibling import)."""
-    script_dir = script_dir.resolve()
-    mod = sys.modules.get(_DISK_EXEC_MODULE)
-    if mod is not None:
-        return mod.bootstrap_disk_exec_from_script_dir(script_dir)
-    path = script_dir / f"{_DISK_EXEC_MODULE}.py"
-    spec = importlib.util.spec_from_file_location(_DISK_EXEC_MODULE, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(
-            f"{_DISK_EXEC_MODULE}.py must be co-located with path_scrub under {script_dir}"
-        )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[_DISK_EXEC_MODULE] = module
-    spec.loader.exec_module(module)
-    return module.bootstrap_disk_exec_from_script_dir(script_dir)
+    return _paired_chicken_egg_import_disk_exec(script_dir)
 
 
 def load_scrub_from_disk_under_dash_i(script_dir: Path) -> types.ModuleType:

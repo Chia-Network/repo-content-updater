@@ -23,7 +23,7 @@ def cached_trusted_module(module_name: str, path: Path) -> types.ModuleType | No
 
 
 def bootstrap_disk_exec_from_script_dir(script_dir: Path) -> types.ModuleType:
-    """Idempotent no-filter load of this module from co-located script_dir."""
+    """Idempotent no-filter load of this module from co-located script_dir (__file__-safe)."""
     script_dir = script_dir.resolve()
     path = script_dir / f"{_DISK_EXEC}.py"
     cached = cached_trusted_module(_DISK_EXEC, path)
@@ -37,6 +37,11 @@ def bootstrap_disk_exec_from_script_dir(script_dir: Path) -> types.ModuleType:
     spec.loader.exec_module(module)
     registered = cached_trusted_module(_DISK_EXEC, path)
     return registered if registered is not None else module
+
+
+def chicken_egg_import_disk_exec(script_dir: Path) -> types.ModuleType:
+    """After optional paired importlib stub, resolve disk_exec from script_dir."""
+    return bootstrap_disk_exec_from_script_dir(script_dir)
 
 
 def exec_trusted_module_from_disk(module_name: str, module_path: Path) -> types.ModuleType:

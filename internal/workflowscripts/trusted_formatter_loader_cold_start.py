@@ -1,13 +1,12 @@
 """Stdlib-only cold start for python3 -I (resolve_loader_bundle public entry).
 
-Spine: disk_exec → scrub (``load_scrub_from_disk_under_dash_i``) → path-filtered iso/loader.
+Spine: disk_exec → scrub → path-filtered iso/loader.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import sys
-import types
 from pathlib import Path
 
 DEFAULT_SCRIPT_CANDIDATES: tuple[Path, ...] = (
@@ -27,23 +26,20 @@ LOADER_RESOLVE_MARKER_FILENAMES: tuple[str, ...] = (
 
 
 def _bootstrap_disk_exec(script_dir: Path) -> types.ModuleType:
-    """Chicken-egg entry; bootstrap body lives in disk_exec.bootstrap_disk_exec_from_script_dir."""
+    """PAIRED with scripts_dir_path_scrub._paired_chicken_egg_import_disk_exec."""
     script_dir = script_dir.resolve()
-    mod = sys.modules.get(_DISK_EXEC)
-    if mod is not None:
-        return mod.bootstrap_disk_exec_from_script_dir(script_dir)
-    path = script_dir / f"{_DISK_EXEC}.py"
-    spec = importlib.util.spec_from_file_location(_DISK_EXEC, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec from {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[_DISK_EXEC] = module
-    spec.loader.exec_module(module)
-    return module.bootstrap_disk_exec_from_script_dir(script_dir)
+    if sys.modules.get(_DISK_EXEC) is None:
+        path = script_dir / f"{_DISK_EXEC}.py"
+        spec = importlib.util.spec_from_file_location(_DISK_EXEC, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Could not load module spec from {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[_DISK_EXEC] = module
+        spec.loader.exec_module(module)
+    return sys.modules[_DISK_EXEC].chicken_egg_import_disk_exec(script_dir)
 
 
 def _require_scrub(script_dir: Path) -> types.ModuleType:
-    """Return primed path_scrub; cold_start must not call load_scrub before scrub is registered."""
     script_dir = script_dir.resolve()
     disk = _bootstrap_disk_exec(script_dir)
     scrub_path = script_dir / f"{_SCRUB}.py"
@@ -51,7 +47,10 @@ def _require_scrub(script_dir: Path) -> types.ModuleType:
     if cached is not None:
         return cached
     disk.exec_trusted_module_from_disk(_SCRUB, scrub_path)
-    return getattr(sys.modules[_SCRUB], "load_scrub_from_disk_under_dash_i")(script_dir)
+    registered = disk.cached_trusted_module(_SCRUB, scrub_path)
+    if registered is None:
+        raise RuntimeError(f"Failed to register {_SCRUB} from {scrub_path}")
+    return registered
 
 
 def resolve_loader_for_dir(script_dir: Path) -> types.ModuleType:
