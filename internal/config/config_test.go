@@ -50,7 +50,9 @@ func TestConfigIsValid(t *testing.T) {
 	for _, required := range []string{
 		"upstream-malware-scan-lib",
 		"dependency-cursor-review-dependabot-context",
-		"script-dir-isolated-load",
+		"malware-verdict-policy-rules-select",
+		"malware-verdict-policy-predicates",
+		"isolated-module-exec",
 		"malware-verdict-policy-analysis",
 	} {
 		assert.Contains(t, dcrGroup, required)

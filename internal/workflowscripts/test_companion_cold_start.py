@@ -24,7 +24,7 @@ class CompanionColdStartTest(unittest.TestCase):
     def test_3c948013_prime_formatter_without_preimported_companion(self) -> None:
         purge = (
             "isolated_module_exec",
-            "script_dir_isolated_load",
+            "isolated_module_exec",
             "trusted_formatter_loader",
         )
         saved = {name: sys.modules.pop(name, None) for name in purge}

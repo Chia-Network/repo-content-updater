@@ -31,17 +31,16 @@ groups:
       - malware-verdict-patterns-regex
       - malware-verdict-patterns-structure
       - malware-verdict-policy
-      - malware-verdict-policy-types
-      - malware-verdict-policy-lexical
+      - malware-verdict-policy-view
       - malware-verdict-policy-context
-      - malware-verdict-policy-strip-eligibility
-      - scripts-dir-module-loader
+      - malware-verdict-policy-predicates
+      - scripts-dir-disk-exec
+      - scripts-dir-path-scrub
       - formatter-runtime-bundle
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
       - malware-verdict-policy-analysis
       - isolated-module-exec
-      - script-dir-isolated-load
       - trusted-formatter-loader
       - trusted-formatter-loader-cold-start
       - upstream-malware-scan
@@ -73,17 +72,16 @@ files:
       - malware-verdict-patterns-regex
       - malware-verdict-patterns-structure
       - malware-verdict-policy
-      - malware-verdict-policy-types
-      - malware-verdict-policy-lexical
+      - malware-verdict-policy-view
       - malware-verdict-policy-context
-      - malware-verdict-policy-strip-eligibility
-      - scripts-dir-module-loader
+      - malware-verdict-policy-predicates
+      - scripts-dir-disk-exec
+      - scripts-dir-path-scrub
       - formatter-runtime-bundle
       - malware-verdict-policy-rules-select
       - malware-verdict-policy-rules-strip
       - malware-verdict-policy-analysis
       - isolated-module-exec
-      - script-dir-isolated-load
       - trusted-formatter-loader
       - trusted-formatter-loader-cold-start
       - upstream-malware-scan
@@ -125,21 +123,17 @@ files:
     template_name: malware-verdict-policy.py
     repo_path: .github/scripts/malware_verdict_policy.py
 
-  - name: malware-verdict-policy-types
-    template_name: malware-verdict-policy-types.py
-    repo_path: .github/scripts/malware_verdict_policy_types.py
-
-  - name: malware-verdict-policy-lexical
-    template_name: malware-verdict-policy-lexical.py
-    repo_path: .github/scripts/malware_verdict_policy_lexical.py
+  - name: malware-verdict-policy-view
+    template_name: malware-verdict-policy-view.py
+    repo_path: .github/scripts/malware_verdict_policy_view.py
 
   - name: malware-verdict-policy-context
     template_name: malware-verdict-policy-context.py
     repo_path: .github/scripts/malware_verdict_policy_context.py
 
-  - name: malware-verdict-policy-strip-eligibility
-    template_name: malware-verdict-policy-strip-eligibility.py
-    repo_path: .github/scripts/malware_verdict_policy_strip_eligibility.py
+  - name: malware-verdict-policy-predicates
+    template_name: malware-verdict-policy-predicates.py
+    repo_path: .github/scripts/malware_verdict_policy_predicates.py
 
   - name: malware-verdict-policy-rules-select
     template_name: malware-verdict-policy-rules-select.py
@@ -153,9 +147,13 @@ files:
     template_name: malware-verdict-policy-analysis.py
     repo_path: .github/scripts/malware_verdict_policy_analysis.py
 
-  - name: scripts-dir-module-loader
-    template_name: scripts-dir-module-loader.py
-    repo_path: .github/scripts/scripts_dir_module_loader.py
+  - name: scripts-dir-disk-exec
+    template_name: scripts-dir-disk-exec.py
+    repo_path: .github/scripts/scripts_dir_disk_exec.py
+
+  - name: scripts-dir-path-scrub
+    template_name: scripts-dir-path-scrub.py
+    repo_path: .github/scripts/scripts_dir_path_scrub.py
 
   - name: formatter-runtime-bundle
     template_name: formatter-runtime-bundle.py
@@ -164,10 +162,6 @@ files:
   - name: isolated-module-exec
     template_name: isolated-module-exec.py
     repo_path: .github/scripts/isolated_module_exec.py
-
-  - name: script-dir-isolated-load
-    template_name: script-dir-isolated-load.py
-    repo_path: .github/scripts/script_dir_isolated_load.py
 
   - name: trusted-formatter-loader
     template_name: trusted-formatter-loader.py

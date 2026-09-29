@@ -112,7 +112,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
         """Cold-start spine matches combine: run_path cold_start → resolve_loader_bundle."""
         purge = (
             "trusted_formatter_loader",
-            "script_dir_isolated_load",
+            "isolated_module_exec",
             "isolated_module_exec",
         )
         saved = {name: sys.modules.pop(name, None) for name in purge}
@@ -135,7 +135,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             _copy_formatter_bundle(scripts)
             purge = (
                 "trusted_formatter_loader",
-                "script_dir_isolated_load",
+                "isolated_module_exec",
                 "isolated_module_exec",
             )
             saved = {name: sys.modules.pop(name, None) for name in purge}
@@ -144,7 +144,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                     str(scripts / "trusted_formatter_loader_cold_start.py")
                 )
                 loader = ns["resolve_loader_for_dir"](scripts)
-                self.assertIn("scripts_dir_module_loader", sys.modules)
+                self.assertIn("scripts_dir_path_scrub", sys.modules)
                 self.assertTrue(hasattr(loader, "find_and_load_format_malware_review_verdict"))
             finally:
                 for name, module in saved.items():

@@ -114,7 +114,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             script_dir = str(scripts.resolve())
             sys.path.insert(0, script_dir)
             purge = (
-                "script_dir_isolated_load",
+                "isolated_module_exec",
                 "isolated_module_exec",
                 "trusted_formatter_loader",
             )
