@@ -1,9 +1,9 @@
 """Stdlib-only path-scrub + importlib exec (single bootstrap surface for scripts-dir modules).
 
-Intentional exception: ``load_scrub_from_disk_under_dash_i`` loads ``scripts_dir_path_scrub``
-from disk **without** path-filter (via ``scripts_dir_disk_exec``). Every other trusted
-module load uses ``bootstrap_module_from_scripts_dir`` / ``exec_scripts_dir_module`` →
-``_exec_with_path_filter``.
+``load_scrub_from_disk_under_dash_i`` is the cold-entry for ``scripts_dir_path_scrub`` itself
+(no path-filter). It lazy-loads ``scripts_dir_disk_exec`` from the same ``script_dir`` first.
+Every other trusted module load uses ``bootstrap_module_from_scripts_dir`` /
+``exec_scripts_dir_module`` → ``_exec_with_path_filter``.
 """
 
 from __future__ import annotations
@@ -15,31 +15,39 @@ from collections.abc import Callable
 from importlib.abc import Loader
 from pathlib import Path
 
-from scripts_dir_disk_exec import exec_trusted_module_from_disk
-
 _SCRUB_MODULE = "scripts_dir_path_scrub"
+_DISK_EXEC_MODULE = "scripts_dir_disk_exec"
 
 
-def cached_trusted_module(module_name: str, path: Path) -> types.ModuleType | None:
-    """Return a sys.modules entry when it already points at the resolved trusted path."""
-    path = path.resolve()
-    existing = sys.modules.get(module_name)
-    if existing is None:
-        return None
-    existing_file = getattr(existing, "__file__", None)
-    if existing_file and Path(existing_file).resolve() == path:
-        return existing
-    return None
+def _ensure_disk_exec(script_dir: Path) -> types.ModuleType:
+    """Load scripts_dir_disk_exec from script_dir (no top-level sibling import)."""
+    script_dir = script_dir.resolve()
+    path = script_dir / f"{_DISK_EXEC_MODULE}.py"
+    existing = sys.modules.get(_DISK_EXEC_MODULE)
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file and Path(existing_file).resolve() == path.resolve():
+            return existing
+    spec = importlib.util.spec_from_file_location(_DISK_EXEC_MODULE, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"{_DISK_EXEC_MODULE}.py must be co-located with path_scrub under {script_dir}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[_DISK_EXEC_MODULE] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def load_scrub_from_disk_under_dash_i(script_dir: Path) -> types.ModuleType:
-    """Cold-start owner: exec stdlib-only path_scrub once (no path-filter — see module docstring)."""
+    """Cold-start owner: exec stdlib-only path_scrub once (no path-filter)."""
     script_dir = script_dir.resolve()
     path = script_dir / f"{_SCRUB_MODULE}.py"
-    cached = cached_trusted_module(_SCRUB_MODULE, path)
+    disk = _ensure_disk_exec(script_dir)
+    cached = disk.cached_trusted_module(_SCRUB_MODULE, path)
     if cached is not None:
         return cached
-    return exec_trusted_module_from_disk(_SCRUB_MODULE, path)
+    return disk.exec_trusted_module_from_disk(_SCRUB_MODULE, path)
 
 
 def _exec_with_path_filter(
@@ -53,8 +61,9 @@ def _exec_with_path_filter(
     """Exec module source while script_dir is removed from sys.path."""
     script_dir = script_dir.resolve()
     path = path.resolve()
+    disk = _ensure_disk_exec(script_dir)
     if register:
-        cached = cached_trusted_module(module_name, path)
+        cached = disk.cached_trusted_module(module_name, path)
         if cached is not None:
             return cached
     spec = importlib.util.spec_from_file_location(module_name, path)

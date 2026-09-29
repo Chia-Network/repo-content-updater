@@ -1,9 +1,10 @@
 """Stdlib-only cold start for python3 -I (resolve_loader_bundle public entry).
 
 Load sequence under python3 -I:
-  1. ``_require_scrub`` primes ``scripts_dir_disk_exec`` then ``load_scrub_from_disk_under_dash_i``
-  2. bootstrap siblings via ``path_scrub.bootstrap_module_from_scripts_dir``
-  3. isolated_module_exec → resolve_trusted_formatter_loader_for_dir → sibling preload
+  1. Minimal chicken-egg bootstrap of ``scripts_dir_disk_exec`` only
+  2. ``_require_scrub`` → ``disk.exec_trusted_module_from_disk`` (same as load_scrub)
+  3. bootstrap siblings via ``path_scrub.bootstrap_module_from_scripts_dir``
+  4. isolated_module_exec → resolve_trusted_formatter_loader_for_dir → sibling preload
 """
 
 from __future__ import annotations
@@ -29,8 +30,8 @@ LOADER_RESOLVE_MARKER_FILENAMES: tuple[str, ...] = (
 )
 
 
-def _ensure_disk_exec(script_dir: Path) -> types.ModuleType:
-    """Load scripts_dir_disk_exec from disk (no top-level sibling import under python3 -I)."""
+def _bootstrap_disk_exec(script_dir: Path) -> types.ModuleType:
+    """Minimal chicken-egg: load scripts_dir_disk_exec without any sibling imports."""
     script_dir = script_dir.resolve()
     path = script_dir / f"{_DISK_EXEC}.py"
     existing = sys.modules.get(_DISK_EXEC)
@@ -48,13 +49,16 @@ def _ensure_disk_exec(script_dir: Path) -> types.ModuleType:
 
 
 def _require_scrub(script_dir: Path) -> types.ModuleType:
-    """Return primed path_scrub via the same cold-load path as load_scrub_from_disk_under_dash_i."""
+    """Return primed path_scrub at the trusted path (single no-filter exec)."""
     script_dir = script_dir.resolve()
-    disk = _ensure_disk_exec(script_dir)
+    disk = _bootstrap_disk_exec(script_dir)
     scrub_path = script_dir / f"{_SCRUB}.py"
-    if _SCRUB not in sys.modules:
-        disk.exec_trusted_module_from_disk(_SCRUB, scrub_path)
-    return sys.modules[_SCRUB].load_scrub_from_disk_under_dash_i(script_dir)
+    cached = disk.cached_trusted_module(_SCRUB, scrub_path)
+    if cached is not None:
+        return cached
+    scrub = disk.exec_trusted_module_from_disk(_SCRUB, scrub_path)
+    registered = disk.cached_trusted_module(_SCRUB, scrub_path)
+    return registered if registered is not None else scrub
 
 
 def resolve_loader_for_dir(script_dir: Path) -> types.ModuleType:

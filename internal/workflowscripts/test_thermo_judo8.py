@@ -15,15 +15,13 @@ _SCRIPTS = Path(__file__).resolve().parent
 
 _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("malware_verdict_policy.py", 25),
-    ("malware_verdict_policy_context.py", 110),
-    ("malware_verdict_policy_official_selection_rows.py", 220),
+    ("malware_verdict_policy_context.py", 320),
     ("malware_verdict_policy_predicates.py", 85),
-    ("scripts_dir_disk_exec.py", 35),
-    ("scripts_dir_path_scrub.py", 120),
-    ("malware_verdict_policy_rules_select_precedence.py", 165),
+    ("scripts_dir_disk_exec.py", 45),
+    ("scripts_dir_path_scrub.py", 130),
     ("malware_verdict_patterns_regex.py", 200),
     ("malware_verdict_patterns_structure.py", 360),
-    ("malware_verdict_policy_rules_select.py", 200),
+    ("malware_verdict_policy_rules_select.py", 360),
     ("malware_verdict_policy_rules_strip.py", 340),
     ("formatter_runtime_bundle.py", 40),
     ("formatter_bundle_inventory.py", 220),
@@ -61,7 +59,7 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("resolve_trusted_formatter_loader_for_dir", iso_src)
         self.assertIn("_require_scrub", cold_src)
         self.assertIn("load_scrub_from_disk_under_dash_i", (_SCRIPTS / "scripts_dir_path_scrub.py").read_text())
-        self.assertIn("_ensure_disk_exec", cold_src)
+        self.assertIn("_bootstrap_disk_exec", cold_src)
         self.assertTrue((_SCRIPTS / "scripts_dir_disk_exec.py").is_file())
         self.assertNotIn("scripts_dir_module_loader", cold_src)
         self.assertNotIn("def _module_exec_scrub", cold_src)
@@ -109,9 +107,13 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("build_official_selection_context", context)
         self.assertIn("OfficialSelectionContext", context)
         self.assertNotIn("build_official_selection_context", view.split("__all__")[1])
-        self.assertIn("line_start_official_from_row_flags", (
-            _SCRIPTS / "malware_verdict_policy_official_selection_rows.py"
-        ).read_text(encoding="utf-8"))
+        self.assertIn("_line_start_official_from_row_flags", context)
+        self.assertFalse(
+            (_SCRIPTS / "malware_verdict_policy_official_selection_rows.py").exists()
+        )
+        self.assertFalse(
+            (_SCRIPTS / "malware_verdict_policy_rules_select_precedence.py").exists()
+        )
         self.assertIn("mention_loses_to_official", predicates)
         self.assertNotIn("mention_loses_to_official", context)
         self.assertNotIn("from malware_verdict_classification import", deploy)
@@ -121,6 +123,9 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertTrue((_SCRIPTS / "malware_verdict_patterns_structure.py").is_file())
         scrub_src = (_SCRIPTS / "scripts_dir_path_scrub.py").read_text()
         self.assertIn("_exec_with_path_filter", scrub_src)
+        disk_src = (_SCRIPTS / "scripts_dir_disk_exec.py").read_text()
+        self.assertIn("def cached_trusted_module", disk_src)
+        self.assertNotIn("from scripts_dir_disk_exec import", scrub_src.split("def load_scrub")[0])
         self.assertIn("cached_trusted_module", scrub_src)
         self.assertIn("bootstrap_module_from_scripts_dir", scrub_src)
         self.assertFalse(

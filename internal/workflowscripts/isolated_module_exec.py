@@ -49,7 +49,8 @@ def load_module_isolated(
     script_path = script_path.resolve()
     name = module_name or f"isolated_{script_path.stem}"
     scrub = _require_scripts_dir_path_scrub(script_path.parent)
-    cached = scrub.cached_trusted_module(name, script_path)
+    disk = scrub._ensure_disk_exec(script_path.parent)
+    cached = disk.cached_trusted_module(name, script_path)
     if cached is not None:
         return cached
     return _bootstrap_via_spine(script_path.parent, script_path.name, name)
@@ -61,7 +62,8 @@ def register_util_from_scripts_dir(script_dir: Path) -> types.ModuleType:
     name = "isolated_module_exec"
     path = script_dir / f"{name}.py"
     scrub = _require_scripts_dir_path_scrub(script_dir)
-    cached = scrub.cached_trusted_module(name, path)
+    disk = scrub._ensure_disk_exec(script_dir)
+    cached = disk.cached_trusted_module(name, path)
     if cached is not None:
         return cached
     if not path.is_file():
