@@ -7,6 +7,16 @@
 # - Local usage hints in the target repo
 #
 # Source documentation: https://cursor.com/docs/cli/github-actions
+#
+# Dependabot pull_request runs again on rebase, recreate, and rebuild. The
+# trusted helper is copied to RUNNER_TEMP before the PR checkout, which
+# deletes the workspace copy. The marker is the stable patch id of the PR
+# diff from the API, not a commit message. Later steps skip when
+# github-actions[bot] has already commented that marker. A content change
+# still reviews. If the commits are not verified Dependabot commits created
+# by web-flow, or the diff has no patch id, the review runs. The resolve and
+# comment steps load the RUNNER_TEMP copies. Renovate and workflow_dispatch
+# always run. A skip leaves this check green.
 name: Dependency Cursor Review
 
 on:
@@ -40,18 +50,33 @@ jobs:
           path: .trusted-dcr-helper
           sparse-checkout: |
             .github/scripts/dependency-cursor-review-target-pr.js
+            .github/scripts/dependency-cursor-review-dependabot-context.js
+            .github/scripts/dependency-cursor-review-post-comment.js
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - name: Copy trusted helper out of the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="${RUNNER_TEMP}/trusted-dcr-helper"
+          rm -rf "${dest}"
+          mkdir -p "${dest}"
+          cp -a .trusted-dcr-helper/.github/scripts/. "${dest}/"
+          test -s "${dest}/dependency-cursor-review-target-pr.js"
+          test -s "${dest}/dependency-cursor-review-dependabot-context.js"
+          test -s "${dest}/dependency-cursor-review-post-comment.js"
 
       - name: Resolve target PR context
         id: target_pr
         uses: actions/github-script@v9
         with:
           script: |
-            const run = require(`${process.env.GITHUB_WORKSPACE}/.trusted-dcr-helper/.github/scripts/dependency-cursor-review-target-pr.js`);
+            const run = require(`${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-target-pr.js`);
             await run.run({ github, context, core });
 
       - name: Checkout repository
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         uses: actions/checkout@v7
         with:
           ref: ${{`{{ steps.target_pr.outputs.head_sha }}`}}
@@ -59,6 +84,7 @@ jobs:
 
       # PR head is untrusted: overwrite composite action.yml from default branch before uses: ./…
       - name: Install trusted git path checkout action definition
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{`{{ github.token }}`}}
@@ -78,6 +104,7 @@ jobs:
           fi
 
       - name: Ensure malware verdict formatter bundle
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         uses: ./.github/actions/trusted-git-path-checkout
         with:
           token: ${{`{{ github.token }}`}}
@@ -85,6 +112,7 @@ jobs:
           paths_manifest: .github/scripts/dependency-cursor-review-trusted-scripts.paths
 
       - name: Install Cursor CLI
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         run: |
           installer="$(mktemp)"
@@ -107,6 +135,7 @@ jobs:
           fi
 
       - name: Extract Dependabot comment context
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         id: dependabot_context
         uses: actions/github-script@v9
         env:
@@ -118,9 +147,11 @@ jobs:
             const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-dependabot-context.js`);
             await run({ github, context, core });
       - name: Prepare upstream checkout directory
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         run: mkdir -p ".upstream-dependency"
 
       - name: Checkout upstream repository
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         uses: actions/checkout@v7
         with:
           repository: ${{`{{ steps.dependabot_context.outputs.upstream_repo }}`}}
@@ -129,6 +160,7 @@ jobs:
           persist-credentials: false
 
       - name: Remove upstream agent-instruction files
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         run: |
           rm -rf .upstream-dependency/.cursor || true
@@ -138,6 +170,7 @@ jobs:
           rm -f .upstream-dependency/CLAUDE.md || true
 
       - name: Run upstream malware scan
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         id: malware_scan
         shell: bash
         env:
@@ -161,6 +194,7 @@ jobs:
           sudo apt-get install -y ripgrep jq
           bash .github/scripts/upstream_malware_scan.sh
       - name: Gather local usage hints
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         env:
           PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
@@ -176,6 +210,7 @@ jobs:
           fi
 
       - name: Run Cursor analysis
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         timeout-minutes: 10
         env:
           CURSOR_API_KEY: ${{`{{ secrets.CURSOR_API_KEY }}`}}
@@ -187,7 +222,7 @@ jobs:
         shell: bash
         run: |
           if [ -z "$CURSOR_API_KEY" ]; then
-            echo '{"result":"CURSOR_API_KEY is not set; analysis was skipped."}' > cursor_output.json
+            echo '{"result":"CURSOR_API_KEY is not set; analysis was skipped.","complete":false}' > cursor_output.json
             exit 0
           fi
 
@@ -207,7 +242,7 @@ jobs:
 
           python3 -I .github/scripts/dependency_cursor_review_combine_outputs.py
       - name: Upload malware scan artifacts
-        if: always()
+        if: always() && steps.target_pr.outputs.already_reviewed != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: dependabot-malware-scan-${{`{{ steps.target_pr.outputs.number }}`}}
@@ -218,13 +253,15 @@ jobs:
             upstream_changed_files.txt
 
       - name: Post or update PR comment
+        if: steps.target_pr.outputs.already_reviewed != 'true'
         uses: actions/github-script@v9
         env:
           PR_NUMBER: ${{`{{ steps.target_pr.outputs.number }}`}}
+          REVIEW_MARKER: ${{`{{ steps.target_pr.outputs.review_marker }}`}}
           MALWARE_SCAN_STATUS: ${{`{{ steps.malware_scan.outputs.status }}`}}
           MALWARE_SCAN_CHANGED_COUNT: ${{`{{ steps.malware_scan.outputs.changed_files_count }}`}}
           MALWARE_SCAN_SUMMARY: ${{`{{ steps.malware_scan.outputs.summary }}`}}
         with:
           script: |
-            const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-post-comment.js`);
+            const run = require(`${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`);
             await run({ github, context, core });

@@ -63,6 +63,7 @@ check test tests: fmt lint vet staticcheck errcheck vulncheck; $(info $(M) runni
 	$Q $(GO) test -timeout $(TIMEOUT)s $(ARGS) $(TESTPKGS)
 	$Q python3 internal/workflowscripts/sync_malware_formatter_templates.py
 	$Q python3 -m unittest discover -s internal/workflowscripts -p 'test_*.py'
+	$Q node --test internal/workflowscripts/*.test.js
 
 .PHONY: fmt
 fmt: ; $(info $(M) running gofmt…) @ ## Run gofmt on all source files

@@ -31,6 +31,29 @@ def _load_any(path: str) -> dict:
         return {"result": raw}
 
 
+def _successful_analysis_text(path: str) -> str:
+    """Non-empty analysis text from a successful agent JSON result, or ''."""
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    if not raw.strip():
+        return ""
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return ""
+    if not isinstance(payload, dict) or payload.get("error") or payload.get("is_error") is True:
+        return ""
+    for key in ("result", "output", "text", "message"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip() and not value.startswith("Missing output file:"):
+            if value.startswith("Error: agent exited"):
+                return ""
+            return value.strip()
+    return ""
+
+
 def _extract_text(payload) -> str:
     if not isinstance(payload, dict):
         try:
@@ -66,8 +89,12 @@ def main() -> None:
         "## Compatibility Analysis\n\n"
         f"{compatibility_text}"
     )
+    # complete is display-only. The trusted post script decides the skip
+    # marker from the agent files and ignores this field.
     combined = {
         "result": combined_text,
+        "complete": bool(_successful_analysis_text("cursor_output_malware.json"))
+        and bool(_successful_analysis_text("cursor_output_compatibility.json")),
         "malware_review": malware_payload,
         "compatibility_review": compatibility_payload,
     }

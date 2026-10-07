@@ -2,8 +2,62 @@
 
 const fs = require('fs');
 
-module.exports = async function runPostComment({ github, context, core }) {
-  const marker = '<!-- cursor-dependabot-review -->';
+const { isActionsBotMarkerComment, LEGACY_REVIEW_MARKER } = require('./dependency-cursor-review-dependabot-context.js');
+
+function readText(path, fallback = '') {
+  try {
+    return fs.readFileSync(path, 'utf8');
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function analysisTextFromRaw(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (_) {
+    parsed = { result: raw };
+  }
+  const analysis = parsed.result || parsed.output || parsed.text || parsed.message || raw;
+  return typeof analysis === 'string' ? analysis : JSON.stringify(analysis, null, 2) || String(analysis);
+}
+
+function successfulAnalysisText(filePath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, 'utf8');
+  } catch (_) {
+    return '';
+  }
+  if (!String(raw).trim()) return '';
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch (_) {
+    return '';
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.error || payload.is_error === true) {
+    return '';
+  }
+  for (const key of ['result', 'output', 'text', 'message']) {
+    const value = payload[key];
+    if (typeof value !== 'string' || !value.trim() || value.startsWith('Missing output file:')) continue;
+    if (value.startsWith('Error: agent exited')) return '';
+    return value.trim();
+  }
+  return '';
+}
+
+/** Stamp the upgrade marker only after both agent files are real analyses. */
+function selectPostedMarker(marker) {
+  const malware = successfulAnalysisText('cursor_output_malware.json');
+  const compatibility = successfulAnalysisText('cursor_output_compatibility.json');
+  if (!marker || !malware || !compatibility) return LEGACY_REVIEW_MARKER;
+  return marker;
+}
+
+async function runPostComment({ github, context, core }) {
   const analysisMaxLen = 48000;
   const malwareMaxLen = 10000;
   const githubCommentLimit = 65536;
@@ -11,33 +65,11 @@ module.exports = async function runPostComment({ github, context, core }) {
   const malwareScanChangedCount = process.env.MALWARE_SCAN_CHANGED_COUNT || '';
   const malwareScanSummaryOutput = process.env.MALWARE_SCAN_SUMMARY || '';
   const issueNumber = Number(process.env.PR_NUMBER || '0');
+  const reviewMarker = process.env.REVIEW_MARKER || '';
 
-  function readText(path, fallback = '') {
-    try {
-      return fs.readFileSync(path, 'utf8');
-    } catch (_) {
-      return fallback;
-    }
-  }
-
-  const raw = readText('cursor_output.json', '{"result":"No Cursor output generated."}');
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (_) {
-    parsed = { result: raw };
-  }
-
-  const analysis =
-    parsed.result ||
-    parsed.output ||
-    parsed.text ||
-    parsed.message ||
-    raw;
-  const analysisText =
-    typeof analysis === 'string'
-      ? analysis
-      : JSON.stringify(analysis, null, 2) || String(analysis);
+  const raw = readText('cursor_output.json', '{"result":"No Cursor output generated.","complete":false}');
+  const analysisText = analysisTextFromRaw(raw);
+  const marker = selectPostedMarker(reviewMarker);
   const malwareSummaryFallback =
     (typeof malwareScanSummaryOutput === 'string' && malwareScanSummaryOutput.trim()) ||
     [
@@ -52,22 +84,10 @@ module.exports = async function runPostComment({ github, context, core }) {
   let trimmedAnalysis = analysisText.slice(0, analysisMaxLen);
   let trimmedMalware = malwareSummary.slice(0, malwareMaxLen);
   const renderBody = (analysisPart, malwarePart) =>
-    [
-      marker,
-      '## 🤖 Cursor Dependency Analysis',
-      '',
-      analysisPart,
-      '',
-      '---',
-      '',
-      malwarePart,
-    ].join('\n');
+    [marker, '## 🤖 Cursor Dependency Analysis', '', analysisPart, '', '---', '', malwarePart].join('\n');
   let body = renderBody(trimmedAnalysis, trimmedMalware);
   if (body.length > githubCommentLimit) {
-    const allowedAnalysis = Math.max(
-      0,
-      analysisMaxLen - (body.length - githubCommentLimit) - 256
-    );
+    const allowedAnalysis = Math.max(0, analysisMaxLen - (body.length - githubCommentLimit) - 256);
     trimmedAnalysis = analysisText.slice(0, allowedAnalysis);
     body = renderBody(trimmedAnalysis, trimmedMalware);
   }
@@ -80,21 +100,20 @@ module.exports = async function runPostComment({ github, context, core }) {
     per_page: 100,
   });
   const markerComments = comments
-    .filter((c) => typeof c.body === 'string' && c.body.includes(marker))
+    .filter(isActionsBotMarkerComment)
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-  const latestMarker =
-    markerComments.length > 0 ? markerComments[markerComments.length - 1] : null;
+  const latestMarker = markerComments.length > 0 ? markerComments[markerComments.length - 1] : null;
 
-  const hasNonManagedCommentaryAfterLatest =
+  const hasCommentaryAfterLatest =
     latestMarker &&
     comments.some(
-      (c) =>
-        c.id !== latestMarker.id &&
-        !(typeof c.body === 'string' && c.body.includes(marker)) &&
-        new Date(c.created_at).getTime() > new Date(latestMarker.created_at).getTime()
+      (comment) =>
+        comment.id !== latestMarker.id &&
+        !isActionsBotMarkerComment(comment) &&
+        new Date(comment.created_at).getTime() > new Date(latestMarker.created_at).getTime(),
     );
 
-  if (latestMarker && !hasNonManagedCommentaryAfterLatest) {
+  if (latestMarker && !hasCommentaryAfterLatest) {
     await github.rest.issues.updateComment({
       owner,
       repo,
@@ -109,4 +128,15 @@ module.exports = async function runPostComment({ github, context, core }) {
       body,
     });
   }
-};
+  if (typeof core?.info === 'function') {
+    core.info(
+      marker !== LEGACY_REVIEW_MARKER
+        ? 'Posted Dependabot review marker for this dependency upgrade.'
+        : 'Posted dependency review comment without an upgrade marker.',
+    );
+  }
+}
+
+module.exports = runPostComment;
+module.exports.selectPostedMarker = selectPostedMarker;
+module.exports.successfulAnalysisText = successfulAnalysisText;

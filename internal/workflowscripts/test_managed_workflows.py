@@ -97,7 +97,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         )[0]
         self.assertIn("path: .trusted-dcr-helper", helper_block)
         self.assertIn(
-            ".trusted-dcr-helper/.github/scripts/dependency-cursor-review-target-pr.js",
+            "RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-target-pr.js",
             workflow,
         )
         pr_block = workflow.split("Checkout repository", 1)[1].split(
