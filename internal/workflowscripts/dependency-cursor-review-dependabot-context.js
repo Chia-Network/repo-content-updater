@@ -4,7 +4,6 @@ const fs = require('fs');
 
 // The review marker is produced once, here, and passed through as that single line.
 
-const REVIEW_MARKER_PREFIX = '<!-- cursor-dependabot-review';
 const LEGACY_REVIEW_MARKER = '<!-- cursor-dependabot-review -->';
 const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 
@@ -119,11 +118,40 @@ function cleanVersionToken(value) {
     .replace(/[.,;:)]+$/g, '');
 }
 
+function dependabotTitleUpgrade(title) {
+  const match =
+    String(title || '').match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
+    String(title || '').match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
+    String(title || '').match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
+  if (!match) return null;
+  const packageName = match[1].trim();
+  const toVersion = cleanVersionToken(match[3]);
+  if (!packageName || !toVersion) return null;
+  return [{ packageName, toVersion }];
+}
+
+function outsideDetails(text) {
+  const tagRe = /<details\b[^>]*>|<\/details>/gi;
+  let result = '';
+  let last = 0;
+  let depth = 0;
+  let match;
+  while ((match = tagRe.exec(text)) !== null) {
+    if (depth === 0) result += text.slice(last, match.index);
+    if (match[0].toLowerCase().startsWith('<details')) depth += 1;
+    else depth = Math.max(0, depth - 1);
+    if (depth === 0) last = tagRe.lastIndex;
+  }
+  if (depth === 0) result += text.slice(last);
+  return result;
+}
+
 function extractExplicitUpdates(body) {
   const pairs = [];
   const re = /^Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+)\s*$/gim;
+  const visible = outsideDetails(body || '');
   let match;
-  while ((match = re.exec(body || '')) !== null) {
+  while ((match = re.exec(visible)) !== null) {
     const packageName = match[1].trim();
     const toVersion = cleanVersionToken(match[3]);
     if (packageName && toVersion) pairs.push({ packageName, toVersion });
@@ -132,13 +160,7 @@ function extractExplicitUpdates(body) {
 }
 
 function upgradePairs(title, body) {
-  const parsed = parseDependencyUpdate(title || '', body || '');
-  const explicit = extractExplicitUpdates(body || '');
-  if (explicit.length > 1) return explicit;
-  if (parsed.packageName && parsed.toVersion) {
-    return [{ packageName: parsed.packageName, toVersion: cleanVersionToken(parsed.toVersion) }];
-  }
-  return explicit;
+  return dependabotTitleUpgrade(title) || extractExplicitUpdates(body);
 }
 
 /** One-line comment marker for this upgrade, or '' when the upgrade is unknown. */
@@ -151,16 +173,20 @@ function reviewMarkerForUpgrade(title, body) {
   return `<!-- cursor-dependabot-review ${Buffer.from(canonical, 'utf8').toString('base64')} -->`;
 }
 
-function commentHasReviewMarker(body) {
-  return typeof body === 'string' && body.includes(REVIEW_MARKER_PREFIX);
+function commentFirstLine(body) {
+  if (typeof body !== 'string') return '';
+  const end = body.indexOf('\n');
+  return (end === -1 ? body : body.slice(0, end)).trim();
 }
 
 function isActionsBotMarkerComment(comment) {
-  return comment?.user?.login === ACTIONS_BOT_LOGIN && commentHasReviewMarker(comment?.body);
+  if (comment?.user?.login !== ACTIONS_BOT_LOGIN) return false;
+  const line = commentFirstLine(comment.body);
+  return line === LEGACY_REVIEW_MARKER || /^<!-- cursor-dependabot-review \S+ -->$/.test(line);
 }
 
 function isActionsBotUpgradeReview(comment, marker) {
-  return Boolean(marker) && isActionsBotMarkerComment(comment) && comment.body.includes(marker);
+  return Boolean(marker) && comment?.user?.login === ACTIONS_BOT_LOGIN && commentFirstLine(comment.body) === marker;
 }
 
 async function runDependabotContext({ core }) {

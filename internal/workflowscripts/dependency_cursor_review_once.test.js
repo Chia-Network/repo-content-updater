@@ -169,14 +169,23 @@ test('group marker ignores commit SHAs and follows every Updates line', () => {
   assert.notEqual(marker, changed);
 });
 
-test('several Updates lines beat a title that names one package', () => {
-  const body = [
-    'Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21.',
-    'Updates `lodash` from 4.17.20 to 4.17.21',
-    'Updates `semver` from 7.5.0 to 7.6.0',
+test('release-note Updates lines do not override a parsed title version', () => {
+  const notes = [
+    '<details>',
+    '<summary>Release notes</summary>',
+    'Updates `lodash` from 4.17.20 to 9.9.9',
+    'Updates `semver` from 1.0.0 to 2.0.0',
+    '</details>',
   ].join('\n');
-  const payload = payloadOf(reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', body));
-  assert.match(payload, /semver\t7\.6\.0/);
+  const body = `Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21.\n${notes}`;
+  const marker = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', body);
+  const payload = payloadOf(marker);
+  assert.equal(payload.includes('9.9.9'), false);
+  assert.equal(payload.includes('semver'), false);
+  assert.match(payload, /lodash\t4\.17\.21/);
+  const next = reviewMarkerForUpgrade('Bump lodash from 4.17.21 to 4.17.22', body);
+  assert.notEqual(marker, next);
+  assert.match(payloadOf(next), /lodash\t4\.17\.22/);
 });
 
 test('parseDependencyUpdate still extracts upstream notes and commits', () => {
@@ -251,6 +260,30 @@ test('same pull request with a new target version is reviewed again', async () =
     head: { sha: 'head2' },
   };
   const { core } = await resolve('pull_request', pr, { commentsFor: () => [botComment(oldMarker)] });
+  assert.equal(core.outputs.already_reviewed, 'false');
+});
+
+test('a marker quoted after the first line does not suppress the review', async () => {
+  const title = 'Bump lodash from 4.17.20 to 4.17.22';
+  const marker = reviewMarkerForUpgrade(title, singleBody('abc1234'));
+  const older = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
+  const pr = {
+    number: 42,
+    title,
+    body: singleBody('abc1234'),
+    user: { login: 'dependabot[bot]' },
+    head: { sha: 'head' },
+  };
+  const { core } = await resolve('pull_request', pr, {
+    commentsFor: () => [
+      {
+        id: 8,
+        user: { login: 'github-actions[bot]' },
+        body: `${older}\n## analysis\nRelease notes quote ${marker}\n`,
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ],
+  });
   assert.equal(core.outputs.already_reviewed, 'false');
 });
 
@@ -381,5 +414,24 @@ test('completed analysis updates an Actions bot marker and treats a human quote 
     );
     const created = quoted.calls.find((call) => call[0] === 'createComment');
     assert.equal(created[1].body.startsWith(marker), true);
+
+    const unrelated = fakeGithub({
+      commentsFor: () => [
+        {
+          id: 21,
+          user: { login: 'github-actions[bot]' },
+          body: `Coverage report\n<!-- cursor-dependabot-review quoted in the body`,
+          created_at: '2026-01-03T00:00:00Z',
+        },
+      ],
+    });
+    await postComment({ github: unrelated, context: { repo: { owner: 'acme', repo: 'widgets' } }, core: fakeCore() });
+    assert.equal(
+      unrelated.calls.some((call) => call[0] === 'updateComment'),
+      false,
+    );
+    const added = unrelated.calls.find((call) => call[0] === 'createComment');
+    assert.equal(added[1].issue_number, 42);
+    assert.equal(added[1].body.startsWith(marker), true);
   });
 });
