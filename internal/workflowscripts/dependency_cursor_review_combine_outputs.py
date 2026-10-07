@@ -31,6 +31,16 @@ def _load_any(path: str) -> dict:
         return {"result": raw}
 
 
+def _is_real_analysis(payload: object) -> bool:
+    """True only for an agent result. Missing files and error objects are not."""
+    if not isinstance(payload, dict) or payload.get("error"):
+        return False
+    result = payload.get("result")
+    if isinstance(result, str) and result.startswith("Missing output file:"):
+        return False
+    return bool(_extract_text(payload).strip())
+
+
 def _extract_text(payload) -> str:
     if not isinstance(payload, dict):
         try:
@@ -68,7 +78,8 @@ def main() -> None:
     )
     combined = {
         "result": combined_text,
-        "complete": True,
+        "complete": _is_real_analysis(malware_payload)
+        and _is_real_analysis(compatibility_payload),
         "malware_review": malware_payload,
         "compatibility_review": compatibility_payload,
     }

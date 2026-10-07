@@ -2,27 +2,16 @@
 
 from __future__ import annotations
 
-import subprocess
 import unittest
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW = _REPO_ROOT / "templates" / "dependency-cursor-review.yml"
 _TARGET_PR = _REPO_ROOT / "internal" / "workflowscripts" / "dependency-cursor-review-target-pr.js"
-_NODE_TEST = _REPO_ROOT / "internal" / "workflowscripts" / "dependency_cursor_review_once.test.js"
 _SKIP_UNREVIEWED = "steps.target_pr.outputs.already_reviewed != 'true'"
 
 
 class DependencyCursorReviewOnceTest(unittest.TestCase):
-    def test_node_once_per_upgrade_suite(self) -> None:
-        proc = subprocess.run(
-            ["node", "--test", str(_NODE_TEST)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(proc.returncode, 0, msg=proc.stdout + proc.stderr)
-
     def test_one_job_skips_after_the_trusted_helper(self) -> None:
         workflow = _WORKFLOW.read_text(encoding="utf-8")
         self.assertNotIn("pull_request_target", workflow)

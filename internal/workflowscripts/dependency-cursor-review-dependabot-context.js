@@ -67,12 +67,9 @@ function parseDependencyUpdate(title, body) {
     if (shaMatches && shaMatches.length > 0) commits = shaMatches.join('\n');
   }
 
-  const titleMatch =
-    title.match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-    title.match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-    title.match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
+  const titled = dependabotTitleVersions(title);
   const renovateTitleMatch =
-    !titleMatch &&
+    !titled &&
     (title.match(/(?:update|pin)\s+dependency\s+(.+?)\s+to\s+v?([^\s]+)/i) ||
       title.match(/(?:update|pin)\s+(.+?)\s+(?:action|digest|docker\s+tag)\s+to\s+v?([^\s]+)/i) ||
       title.match(/(?:update|pin)\s+(.+?)\s+to\s+v?([^\s]+)/i));
@@ -80,10 +77,10 @@ function parseDependencyUpdate(title, body) {
   let packageName;
   let fromVersion;
   let toVersion;
-  if (titleMatch) {
-    packageName = titleMatch[1].trim();
-    fromVersion = titleMatch[2].trim();
-    toVersion = titleMatch[3].trim();
+  if (titled) {
+    packageName = titled.packageName;
+    fromVersion = titled.fromVersion;
+    toVersion = titled.toVersion;
   } else if (renovateTitleMatch) {
     packageName = renovateTitleMatch[1].trim();
     fromVersion = '';
@@ -118,55 +115,77 @@ function cleanVersionToken(value) {
     .replace(/[.,;:)]+$/g, '');
 }
 
-function dependabotTitleUpgrade(title) {
-  const match =
-    String(title || '').match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-    String(title || '').match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-    String(title || '').match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
+const VERSION_CLAUSE = '(?:~>|>=|<=|!=|\\^|~|>|<)\\s+\\S+|\\S+';
+
+/** Shared by the prompt parser and the skip token. Null when this is not a from/to title. */
+function dependabotTitleVersions(title) {
+  const match = String(title || '').match(
+    new RegExp(
+      `^(?:update|bump)\\s+(.+?)(?:\\s+requirement)?\\s+from\\s+(.+?)\\s+to\\s+(.+?)(?:\\s+in\\s+\\/\\S+|\\s+in\\s+the\\s+.+?\\s+group)?\\s*$`,
+      'i',
+    ),
+  );
   if (!match) return null;
   const packageName = match[1].trim();
+  const fromVersion = cleanVersionToken(match[2]);
   const toVersion = cleanVersionToken(match[3]);
-  if (!packageName || !toVersion) return null;
-  return [{ packageName, toVersion }];
+  if (!packageName || !fromVersion || !toVersion) return null;
+  return { packageName, fromVersion, toVersion };
 }
 
-function outsideDetails(text) {
+/** Text outside <details>, or null when the tags do not balance. */
+function textOutsideDetails(text) {
   const tagRe = /<details\b[^>]*>|<\/details>/gi;
   let result = '';
   let last = 0;
   let depth = 0;
   let match;
   while ((match = tagRe.exec(text)) !== null) {
+    if (depth === 0 && !match[0].toLowerCase().startsWith('<details')) return null;
     if (depth === 0) result += text.slice(last, match.index);
     if (match[0].toLowerCase().startsWith('<details')) depth += 1;
-    else depth = Math.max(0, depth - 1);
+    else depth -= 1;
+    if (depth < 0) return null;
     if (depth === 0) last = tagRe.lastIndex;
   }
-  if (depth === 0) result += text.slice(last);
-  return result;
+  if (depth !== 0) return null;
+  return result + text.slice(last);
 }
 
-function extractExplicitUpdates(body) {
+const UPDATES_LINE = new RegExp(
+  `^Updates\\s+\`([^\`]+)\`\\s+from\\s+(${VERSION_CLAUSE})\\s+to\\s+(${VERSION_CLAUSE})(?:\\s+.*)?$`,
+  'i',
+);
+
+/**
+ * Complete package/target pairs, or null when the upgrade is unknown.
+ * A partial set is not returned: unknown fails open and runs the review.
+ */
+function upgradeIdentity(title, body) {
+  const titled = dependabotTitleVersions(title);
+  if (titled) return [{ packageName: titled.packageName, toVersion: titled.toVersion }];
+
+  const visible = textOutsideDetails(body || '');
+  if (visible === null) return null;
   const pairs = [];
-  const re = /^Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+)\s*$/gim;
-  const visible = outsideDetails(body || '');
-  let match;
-  while ((match = re.exec(visible)) !== null) {
+  for (const line of visible.split('\n')) {
+    const trimmed = line.trim();
+    if (!/^Updates\b/i.test(trimmed)) continue;
+    const match = UPDATES_LINE.exec(trimmed);
+    if (!match) return null;
     const packageName = match[1].trim();
     const toVersion = cleanVersionToken(match[3]);
-    if (packageName && toVersion) pairs.push({ packageName, toVersion });
+    if (!packageName || !toVersion) return null;
+    pairs.push({ packageName, toVersion });
   }
+  if (pairs.length === 0) return null;
   return pairs;
-}
-
-function upgradePairs(title, body) {
-  return dependabotTitleUpgrade(title) || extractExplicitUpdates(body);
 }
 
 /** One-line comment marker for this upgrade, or '' when the upgrade is unknown. */
 function reviewMarkerForUpgrade(title, body) {
-  const pairs = upgradePairs(title, body);
-  if (pairs.length === 0) return '';
+  const pairs = upgradeIdentity(title, body);
+  if (!pairs) return '';
   const canonical = Array.from(new Set(pairs.map((pair) => `${pair.packageName}\t${pair.toVersion}`)))
     .sort()
     .join('\n');

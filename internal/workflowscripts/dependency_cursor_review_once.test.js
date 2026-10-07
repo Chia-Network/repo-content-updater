@@ -169,6 +169,75 @@ test('group marker ignores commit SHAs and follows every Updates line', () => {
   assert.notEqual(marker, changed);
 });
 
+test('operator target versions stay intact and disagree across targets', () => {
+  const older = reviewMarkerForUpgrade('Update business requirement from 2468a0 to ~> 1.5.0', '');
+  const newer = reviewMarkerForUpgrade('Update business requirement from 2468a0 to ~> 1.6.0', '');
+  assert.equal(payloadOf(older), 'business\t~> 1.5.0');
+  assert.equal(payloadOf(newer), 'business\t~> 1.6.0');
+  assert.notEqual(older, newer);
+  const parsed = parseDependencyUpdate('Update business requirement from 2468a0 to ~> 1.5.0', '');
+  assert.equal(parsed.packageName, 'business');
+  assert.equal(parsed.fromVersion, '2468a0');
+  assert.equal(parsed.toVersion, '~> 1.5.0');
+});
+
+test('a title whose from version is an operator still matches', () => {
+  const marker = reviewMarkerForUpgrade('Update business requirement from ~> 1.4.0 to ~> 1.5.0', '');
+  assert.equal(payloadOf(marker), 'business\t~> 1.5.0');
+  assert.equal(marker, reviewMarkerForUpgrade('Update business requirement from ~> 1.3.0 to ~> 1.5.0', ''));
+  const parsed = parseDependencyUpdate('Update business requirement from ~> 1.4.0 to ~> 1.5.0', '');
+  assert.equal(parsed.fromVersion, '~> 1.4.0');
+  assert.equal(parsed.toVersion, '~> 1.5.0');
+});
+
+test('a security-fix sentence does not drop the Updates target version', () => {
+  const title = 'Bump the npm_and_yarn group with 1 update';
+  const line = (to) => `Updates \`minimist\` from 1.2.5 to ${to} **This update includes a security fix.**`;
+  assert.equal(payloadOf(reviewMarkerForUpgrade(title, line('1.2.6'))), 'minimist\t1.2.6');
+  assert.notEqual(reviewMarkerForUpgrade(title, line('1.2.6')), reviewMarkerForUpgrade(title, line('1.2.8')));
+});
+
+test('an operator Updates line beside a normal one changes the marker', () => {
+  const title = 'Bump the bundler group with 2 updates';
+  const body = (to) =>
+    [`Updates \`business\` from ~> 1.4.0 to ${to}`, 'Updates `minimist` from 1.2.5 to 1.2.6'].join('\n');
+  const marker = reviewMarkerForUpgrade(title, body('~> 1.5.0'));
+  assert.match(payloadOf(marker), /business\t~> 1\.5\.0/);
+  assert.match(payloadOf(marker), /minimist\t1\.2\.6/);
+  assert.notEqual(marker, reviewMarkerForUpgrade(title, body('~> 1.8.0')));
+});
+
+test('an Updates line that does not fully parse makes the identity unknown', () => {
+  const body = ['Updates `minimist` from 1.2.5 to 1.2.6', 'Updates `business` from ~> 1.4.0'].join('\n');
+  assert.equal(reviewMarkerForUpgrade('Bump the npm_and_yarn group with 2 updates', body), '');
+});
+
+test('unbalanced details make the identity unknown instead of a partial marker', () => {
+  const title = 'Bump the npm_and_yarn group with 2 updates';
+  const body = (lodashTo) =>
+    [
+      'Updates `brace-expansion` from 1.1.11 to 2.0.2',
+      '<details><summary>Release notes</summary>',
+      `Updates \`lodash\` from 4.17.20 to ${lodashTo}`,
+    ].join('\n');
+  assert.equal(reviewMarkerForUpgrade(title, body('4.17.21')), '');
+  assert.equal(reviewMarkerForUpgrade(title, body('4.17.22')), '');
+});
+
+test('a parsed title stays authoritative over header Updates lines and a details breakout', () => {
+  const body = [
+    'Updates `lodash` from 4.17.20 to 9.9.9',
+    '<details><summary>Release notes</summary>',
+    'notes',
+    '</details>',
+    'Updates `semver` from 1.0.0 to 9.9.9',
+    '<details>',
+    'rest of the notes',
+    '</details>',
+  ].join('\n');
+  assert.equal(payloadOf(reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', body)), 'lodash\t4.17.21');
+});
+
 test('release-note Updates lines do not override a parsed title version', () => {
   const notes = [
     '<details>',
