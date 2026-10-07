@@ -31,14 +31,27 @@ def _load_any(path: str) -> dict:
         return {"result": raw}
 
 
-def _is_real_analysis(payload: object) -> bool:
-    """True only for an agent result. Missing files and error objects are not."""
-    if not isinstance(payload, dict) or payload.get("error"):
-        return False
-    result = payload.get("result")
-    if isinstance(result, str) and result.startswith("Missing output file:"):
-        return False
-    return bool(_extract_text(payload).strip())
+def _successful_analysis_text(path: str) -> str:
+    """Non-empty analysis text from a successful agent JSON result, or ''."""
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    if not raw.strip():
+        return ""
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return ""
+    if not isinstance(payload, dict) or payload.get("error") or payload.get("is_error") is True:
+        return ""
+    for key in ("result", "output", "text", "message"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip() and not value.startswith("Missing output file:"):
+            if value.startswith("Error: agent exited"):
+                return ""
+            return value.strip()
+    return ""
 
 
 def _extract_text(payload) -> str:
@@ -78,8 +91,8 @@ def main() -> None:
     )
     combined = {
         "result": combined_text,
-        "complete": _is_real_analysis(malware_payload)
-        and _is_real_analysis(compatibility_payload),
+        "complete": bool(_successful_analysis_text("cursor_output_malware.json"))
+        and bool(_successful_analysis_text("cursor_output_compatibility.json")),
         "malware_review": malware_payload,
         "compatibility_review": compatibility_payload,
     }

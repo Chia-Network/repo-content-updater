@@ -47,6 +47,27 @@ class CombineCompleteTest(unittest.TestCase):
     def test_both_files_missing(self) -> None:
         self.assertIs(self._run(None, None)["complete"], False)
 
+    def test_empty_files(self) -> None:
+        self.assertIs(self._run("", "")["complete"], False)
+
+    def test_plain_text_agent_exit(self) -> None:
+        text = "Error: agent exited"
+        self.assertIs(self._run(text, text)["complete"], False)
+
+    def test_result_string_agent_exit(self) -> None:
+        payload = '{"result": "Error: agent exited with code 1"}'
+        self.assertIs(self._run(payload, payload)["complete"], False)
+
+    def test_is_error_result(self) -> None:
+        payload = '{"type":"result","is_error":true,"result":"agent failed"}'
+        self.assertIs(self._run(payload, payload)["complete"], False)
+
+    def test_json_without_analysis_string(self) -> None:
+        payload = '{"type":"result","duration_ms":1}'
+        written = self._run(payload, payload)
+        self.assertIs(written["complete"], False)
+        self.assertIn("duration_ms", written["result"])
+
     def test_both_files_with_errors(self) -> None:
         error = '{"error": "model failed"}'
         self.assertIs(self._run(error, error)["complete"], False)

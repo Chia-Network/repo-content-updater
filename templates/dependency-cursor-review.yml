@@ -9,10 +9,13 @@
 # Source documentation: https://cursor.com/docs/cli/github-actions
 #
 # Dependabot pull_request runs again on rebase, recreate, and rebuild. The
-# trusted helper runs first. Later steps skip when github-actions[bot] has
-# already commented the marker for this upgrade. The marker is the target
-# version, not the head SHA. A new pull request or a new target version still
-# reviews. Renovate and workflow_dispatch always run. A skip leaves this check green.
+# trusted helper runs first. dependabot/fetch-metadata reads the verified
+# commit over the API, before the PR checkout. Later steps skip when
+# github-actions[bot] has already commented the marker for that upgrade.
+# The marker is the dependency name, new version, and directory from that
+# metadata, not the head SHA. A new pull request or a new target version
+# still reviews. If metadata is missing the review runs. Renovate and
+# workflow_dispatch always run. A skip leaves this check green.
 name: Dependency Cursor Review
 
 on:
@@ -50,9 +53,17 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      - name: Fetch Dependabot metadata
+        id: dependabot_metadata
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+        continue-on-error: true
+        uses: dependabot/fetch-metadata@v3
+
       - name: Resolve target PR context
         id: target_pr
         uses: actions/github-script@v9
+        env:
+          UPDATED_DEPENDENCIES_JSON: ${{`{{ steps.dependabot_metadata.outputs.updated-dependencies-json }}`}}
         with:
           script: |
             const run = require(`${process.env.GITHUB_WORKSPACE}/.trusted-dcr-helper/.github/scripts/dependency-cursor-review-target-pr.js`);

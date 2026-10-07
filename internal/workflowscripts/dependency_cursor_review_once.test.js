@@ -10,7 +10,7 @@ const context = require('./dependency-cursor-review-dependabot-context.js');
 const { run } = require('./dependency-cursor-review-target-pr.js');
 const postComment = require('./dependency-cursor-review-post-comment.js');
 
-const { parseDependencyUpdate, reviewMarkerForUpgrade } = context;
+const { parseDependencyUpdate, reviewMarkerFromMetadata } = context;
 
 function fakeCore() {
   return {
@@ -46,11 +46,16 @@ function singleBody(sha) {
   ].join('\n');
 }
 
-function groupBody(sha, bumps) {
-  const sections = bumps.map(([name, from, to]) =>
-    [`Updates \`${name}\` from ${from} to ${to}`, '<details><summary>Commits</summary>', sha, '</details>'].join('\n'),
-  );
-  return `Bumps the npm_and_yarn group with ${bumps.length} updates.\n\n${sections.join('\n\n')}`;
+function metadata(dependencies) {
+  return JSON.stringify(dependencies);
+}
+
+function markerFor(dependencies) {
+  return reviewMarkerFromMetadata(metadata(dependencies));
+}
+
+function lodash(version) {
+  return [{ dependencyName: 'lodash', newVersion: version, directory: '/' }];
 }
 
 function payloadOf(marker) {
@@ -102,17 +107,28 @@ function fakeGithub({ pr, commentsFor = () => [], listError }) {
 }
 
 async function resolve(eventName, pr, options = {}) {
+  const previous = process.env.UPDATED_DEPENDENCIES_JSON;
+  if (Object.prototype.hasOwnProperty.call(options, 'metadata')) {
+    process.env.UPDATED_DEPENDENCIES_JSON = options.metadata;
+  } else {
+    delete process.env.UPDATED_DEPENDENCIES_JSON;
+  }
   const core = fakeCore();
   const github = fakeGithub({ pr, ...options });
   const payload =
     eventName === 'pull_request'
       ? { pull_request: pr }
       : { inputs: options.inputs || { pr_number: String(pr.number) } };
-  await run({
-    github,
-    context: { eventName, repo: { owner: 'acme', repo: 'widgets' }, payload },
-    core,
-  });
+  try {
+    await run({
+      github,
+      context: { eventName, repo: { owner: 'acme', repo: 'widgets' }, payload },
+      core,
+    });
+  } finally {
+    if (previous === undefined) delete process.env.UPDATED_DEPENDENCIES_JSON;
+    else process.env.UPDATED_DEPENDENCIES_JSON = previous;
+  }
   return { core, github };
 }
 
@@ -134,127 +150,144 @@ async function withWorkspace(fn) {
   }
 }
 
-test('marker ignores rebase SHAs and from-version, and changes with the target', () => {
-  const title = 'Bump lodash from 4.17.20 to 4.17.21';
-  const same = reviewMarkerForUpgrade('Bump lodash from 4.17.19 to 4.17.21', singleBody('bbbbbbbbbbb'));
-  const marker = reviewMarkerForUpgrade(title, singleBody('aaaaaaaaaaa'));
-  assert.equal(marker, same);
-  assert.equal(marker.includes('\n'), false);
-  const payload = payloadOf(marker);
-  assert.equal(payload.includes('aaaaaaaaaaa'), false);
-  assert.equal(payload.includes('4.17.20'), false);
-  assert.equal(payload.includes('4.17.21'), true);
-  assert.notEqual(marker, reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.22', singleBody('abc1234')));
+test('structured metadata keeps the version and ignores a group or directory title suffix', () => {
+  const older = markerFor([
+    { dependencyName: 'business', newVersion: '1.5.0', directory: '/', dependencyGroup: 'go_modules' },
+  ]);
+  const newer = markerFor([
+    { dependencyName: 'business', newVersion: '1.6.0', directory: '/', dependencyGroup: 'go_modules' },
+  ]);
+  assert.equal(payloadOf(older), 'business\t1.5.0\t/');
+  assert.equal(payloadOf(newer), 'business\t1.6.0\t/');
+  assert.notEqual(older, newer);
+  assert.equal(payloadOf(older).includes('across'), false);
+  assert.equal(payloadOf(older).includes('in /directory'), false);
 });
 
-test('group marker ignores commit SHAs and follows every Updates line', () => {
-  const bumps = [
-    ['brace-expansion', '2.0.1', '2.0.2'],
-    ['minimatch', '9.0.3', '9.0.5'],
+test('a requirement update uses the structured new version, not a truncated operator', () => {
+  const older = markerFor([{ dependencyName: 'business', newVersion: '~> 1.5.0', directory: '/' }]);
+  const newer = markerFor([{ dependencyName: 'business', newVersion: '~> 1.6.0', directory: '/' }]);
+  assert.equal(payloadOf(older), 'business\t~> 1.5.0\t/');
+  assert.equal(payloadOf(newer), 'business\t~> 1.6.0\t/');
+  assert.notEqual(older, newer);
+});
+
+test('grouped metadata includes every dependency and changes when one version changes', () => {
+  const group = [
+    { dependencyName: 'minimatch', newVersion: '9.0.5', directory: '/' },
+    { dependencyName: 'brace-expansion', newVersion: '2.0.2', directory: '/' },
   ];
-  const title = 'Bump the npm_and_yarn group with 2 updates';
-  const marker = reviewMarkerForUpgrade(title, groupBody('1111111', bumps));
-  assert.equal(marker, reviewMarkerForUpgrade(title, groupBody('2222222', bumps)));
+  const marker = markerFor(group);
+  assert.equal(marker, markerFor([...group].reverse()));
   const payload = payloadOf(marker);
-  assert.equal(payload.includes('1111111'), false);
-  assert.match(payload, /minimatch/);
-  assert.match(payload, /2\.0\.2/);
-  const changed = reviewMarkerForUpgrade(
-    title,
-    groupBody('1111111', [
-      ['brace-expansion', '2.0.1', '2.0.2'],
-      ['minimatch', '9.0.3', '9.0.6'],
-    ]),
-  );
+  assert.match(payload, /brace-expansion\t2\.0\.2\t\//);
+  assert.match(payload, /minimatch\t9\.0\.5\t\//);
+  const changed = markerFor([
+    { dependencyName: 'minimatch', newVersion: '9.0.6', directory: '/' },
+    { dependencyName: 'brace-expansion', newVersion: '2.0.2', directory: '/' },
+  ]);
   assert.notEqual(marker, changed);
 });
 
-test('operator target versions stay intact and disagree across targets', () => {
-  const older = reviewMarkerForUpgrade('Update business requirement from 2468a0 to ~> 1.5.0', '');
-  const newer = reviewMarkerForUpgrade('Update business requirement from 2468a0 to ~> 1.6.0', '');
-  assert.equal(payloadOf(older), 'business\t~> 1.5.0');
-  assert.equal(payloadOf(newer), 'business\t~> 1.6.0');
-  assert.notEqual(older, newer);
-  const parsed = parseDependencyUpdate('Update business requirement from 2468a0 to ~> 1.5.0', '');
-  assert.equal(parsed.packageName, 'business');
-  assert.equal(parsed.fromVersion, '2468a0');
-  assert.equal(parsed.toVersion, '~> 1.5.0');
-});
-
-test('a title whose from version is an operator still matches', () => {
-  const marker = reviewMarkerForUpgrade('Update business requirement from ~> 1.4.0 to ~> 1.5.0', '');
-  assert.equal(payloadOf(marker), 'business\t~> 1.5.0');
-  assert.equal(marker, reviewMarkerForUpgrade('Update business requirement from ~> 1.3.0 to ~> 1.5.0', ''));
-  const parsed = parseDependencyUpdate('Update business requirement from ~> 1.4.0 to ~> 1.5.0', '');
-  assert.equal(parsed.fromVersion, '~> 1.4.0');
-  assert.equal(parsed.toVersion, '~> 1.5.0');
-});
-
-test('a security-fix sentence does not drop the Updates target version', () => {
-  const title = 'Bump the npm_and_yarn group with 1 update';
-  const line = (to) => `Updates \`minimist\` from 1.2.5 to ${to} **This update includes a security fix.**`;
-  assert.equal(payloadOf(reviewMarkerForUpgrade(title, line('1.2.6'))), 'minimist\t1.2.6');
-  assert.notEqual(reviewMarkerForUpgrade(title, line('1.2.6')), reviewMarkerForUpgrade(title, line('1.2.8')));
-});
-
-test('an operator Updates line beside a normal one changes the marker', () => {
-  const title = 'Bump the bundler group with 2 updates';
-  const body = (to) =>
-    [`Updates \`business\` from ~> 1.4.0 to ${to}`, 'Updates `minimist` from 1.2.5 to 1.2.6'].join('\n');
-  const marker = reviewMarkerForUpgrade(title, body('~> 1.5.0'));
-  assert.match(payloadOf(marker), /business\t~> 1\.5\.0/);
-  assert.match(payloadOf(marker), /minimist\t1\.2\.6/);
-  assert.notEqual(marker, reviewMarkerForUpgrade(title, body('~> 1.8.0')));
-});
-
-test('an Updates line that does not fully parse makes the identity unknown', () => {
-  const body = ['Updates `minimist` from 1.2.5 to 1.2.6', 'Updates `business` from ~> 1.4.0'].join('\n');
-  assert.equal(reviewMarkerForUpgrade('Bump the npm_and_yarn group with 2 updates', body), '');
-});
-
-test('unbalanced details make the identity unknown instead of a partial marker', () => {
-  const title = 'Bump the npm_and_yarn group with 2 updates';
-  const body = (lodashTo) =>
-    [
-      'Updates `brace-expansion` from 1.1.11 to 2.0.2',
-      '<details><summary>Release notes</summary>',
-      `Updates \`lodash\` from 4.17.20 to ${lodashTo}`,
-    ].join('\n');
-  assert.equal(reviewMarkerForUpgrade(title, body('4.17.21')), '');
-  assert.equal(reviewMarkerForUpgrade(title, body('4.17.22')), '');
-});
-
-test('a parsed title stays authoritative over header Updates lines and a details breakout', () => {
-  const body = [
-    'Updates `lodash` from 4.17.20 to 9.9.9',
-    '<details><summary>Release notes</summary>',
-    'notes',
-    '</details>',
-    'Updates `semver` from 1.0.0 to 9.9.9',
-    '<details>',
-    'rest of the notes',
-    '</details>',
-  ].join('\n');
-  assert.equal(payloadOf(reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', body)), 'lodash\t4.17.21');
-});
-
-test('release-note Updates lines do not override a parsed title version', () => {
-  const notes = [
-    '<details>',
-    '<summary>Release notes</summary>',
-    'Updates `lodash` from 4.17.20 to 9.9.9',
-    'Updates `semver` from 1.0.0 to 2.0.0',
-    '</details>',
-  ].join('\n');
-  const body = `Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21.\n${notes}`;
-  const marker = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', body);
+test('multi-directory metadata keeps directories distinct', () => {
+  const deps = [
+    { dependencyName: 'business', newVersion: '1.5.0', directory: '/tools' },
+    { dependencyName: 'business', newVersion: '1.5.0', directory: '/services' },
+  ];
+  const marker = markerFor(deps);
   const payload = payloadOf(marker);
-  assert.equal(payload.includes('9.9.9'), false);
-  assert.equal(payload.includes('semver'), false);
-  assert.match(payload, /lodash\t4\.17\.21/);
-  const next = reviewMarkerForUpgrade('Bump lodash from 4.17.21 to 4.17.22', body);
-  assert.notEqual(marker, next);
-  assert.match(payloadOf(next), /lodash\t4\.17\.22/);
+  assert.match(payload, /business\t1\.5\.0\t\/services/);
+  assert.match(payload, /business\t1\.5\.0\t\/tools/);
+  const changed = markerFor([
+    { dependencyName: 'business', newVersion: '1.6.0', directory: '/services' },
+    { dependencyName: 'business', newVersion: '1.5.0', directory: '/tools' },
+  ]);
+  assert.notEqual(marker, changed);
+});
+
+test('a security update uses newVersion from metadata', () => {
+  const marker = markerFor([
+    { dependencyName: 'lodash', newVersion: '4.17.21', directory: '/', updateType: 'version-update:semver-patch' },
+  ]);
+  assert.equal(payloadOf(marker), 'lodash\t4.17.21\t/');
+  assert.notEqual(
+    marker,
+    markerFor([
+      { dependencyName: 'lodash', newVersion: '4.17.22', directory: '/', updateType: 'version-update:semver-patch' },
+    ]),
+  );
+});
+
+test('reproduced Dependabot titles do not supply the marker', async () => {
+  const cases = [
+    {
+      title: 'Bump business from 1.4.0 to 1.5.0 in the go_modules group across 1 directory',
+      deps: [{ dependencyName: 'business', newVersion: '1.5.0', directory: '/', dependencyGroup: 'go_modules' }],
+      payload: 'business\t1.5.0\t/',
+    },
+    {
+      title: 'Bump business from 1.4.0 to 1.5.0 in /directory in the all-the-things group',
+      deps: [
+        { dependencyName: 'business', newVersion: '1.5.0', directory: '/directory', dependencyGroup: 'all-the-things' },
+      ],
+      payload: 'business\t1.5.0\t/directory',
+    },
+    {
+      title: '[Security] Bump lodash from 4.17.20 to 4.17.21',
+      deps: [{ dependencyName: 'lodash', newVersion: '4.17.21', directory: '/' }],
+      payload: 'lodash\t4.17.21\t/',
+    },
+    {
+      title: 'chore(deps): bump lodash from 4.17.20 to 4.17.21',
+      deps: [{ dependencyName: 'lodash', newVersion: '4.17.21', directory: '/' }],
+      payload: 'lodash\t4.17.21\t/',
+    },
+    {
+      title: 'build(deps): bump lodash from 4.17.20 to 4.17.21',
+      deps: [{ dependencyName: 'lodash', newVersion: '4.17.21', directory: '/' }],
+      payload: 'lodash\t4.17.21\t/',
+    },
+    {
+      title: 'Upgrade: Bump lodash from 4.17.20 to 4.17.21',
+      deps: [{ dependencyName: 'lodash', newVersion: '4.17.21', directory: '/' }],
+      payload: 'lodash\t4.17.21\t/',
+    },
+    {
+      title: 'Upgrade: Update business requirement from ~> 1.4.0 to ~> 1.5.0',
+      deps: [{ dependencyName: 'business', newVersion: '1.5.0', directory: '/' }],
+      payload: 'business\t1.5.0\t/',
+    },
+  ];
+  for (const item of cases) {
+    const pr = {
+      number: 42,
+      title: item.title,
+      body: 'Updates `business` from 1.4.0 to 1.5.0',
+      user: { login: 'dependabot[bot]' },
+      head: { sha: 'head' },
+    };
+    const reviewed = await resolve('pull_request', pr, {
+      metadata: metadata(item.deps),
+      commentsFor: () => [],
+    });
+    assert.equal(payloadOf(reviewed.core.outputs.review_marker), item.payload, item.title);
+    const skipped = await resolve('pull_request', pr, { metadata: '', commentsFor: () => [] });
+    assert.equal(skipped.core.outputs.review_marker, '', item.title);
+    assert.equal(skipped.core.outputs.already_reviewed, 'false', item.title);
+  }
+});
+
+test('missing metadata or a partial dependency list does not build a marker', () => {
+  assert.equal(reviewMarkerFromMetadata(''), '');
+  assert.equal(reviewMarkerFromMetadata('not json'), '');
+  assert.equal(reviewMarkerFromMetadata('[]'), '');
+  assert.equal(
+    markerFor([
+      { dependencyName: 'minimist', newVersion: '1.2.6', directory: '/' },
+      { dependencyName: 'business', newVersion: '', directory: '/' },
+    ]),
+    '',
+  );
 });
 
 test('parseDependencyUpdate still extracts upstream notes and commits', () => {
@@ -289,7 +322,7 @@ test('context JSON stays limited to the prompt fields', async () => {
 
 test('rebase of the same Dependabot upgrade does not review again', async () => {
   const title = 'Bump lodash from 4.17.20 to 4.17.21';
-  const marker = reviewMarkerForUpgrade(title, singleBody('aaaaaaaaaaa'));
+  const marker = markerFor(lodash('4.17.21'));
   const pr = {
     number: 42,
     title,
@@ -297,7 +330,10 @@ test('rebase of the same Dependabot upgrade does not review again', async () => 
     user: { login: 'dependabot[bot]' },
     head: { sha: 'newheadsha' },
   };
-  const { core, github } = await resolve('pull_request', pr, { commentsFor: () => [botComment(marker)] });
+  const { core, github } = await resolve('pull_request', pr, {
+    metadata: metadata(lodash('4.17.21')),
+    commentsFor: () => [botComment(marker)],
+  });
   assert.equal(core.outputs.already_reviewed, 'true');
   assert.equal(core.outputs.review_marker, marker);
   assert.equal(core.outputs.head_sha, 'newheadsha');
@@ -305,7 +341,7 @@ test('rebase of the same Dependabot upgrade does not review again', async () => 
 });
 
 test('a new pull request is reviewed even for a version reviewed elsewhere', async () => {
-  const previous = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
+  const previous = markerFor(lodash('4.17.21'));
   const pr = {
     number: 99,
     title: 'Bump lodash from 4.17.20 to 4.17.22',
@@ -314,13 +350,14 @@ test('a new pull request is reviewed even for a version reviewed elsewhere', asy
     head: { sha: 'head' },
   };
   const { core } = await resolve('pull_request', pr, {
+    metadata: metadata(lodash('4.17.22')),
     commentsFor: (number) => (number === 42 ? [botComment(previous)] : []),
   });
   assert.equal(core.outputs.already_reviewed, 'false');
 });
 
 test('same pull request with a new target version is reviewed again', async () => {
-  const oldMarker = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
+  const oldMarker = markerFor(lodash('4.17.21'));
   const pr = {
     number: 42,
     title: 'Bump lodash from 4.17.20 to 4.17.22',
@@ -328,14 +365,17 @@ test('same pull request with a new target version is reviewed again', async () =
     user: { login: 'dependabot[bot]' },
     head: { sha: 'head2' },
   };
-  const { core } = await resolve('pull_request', pr, { commentsFor: () => [botComment(oldMarker)] });
+  const { core } = await resolve('pull_request', pr, {
+    metadata: metadata(lodash('4.17.22')),
+    commentsFor: () => [botComment(oldMarker)],
+  });
   assert.equal(core.outputs.already_reviewed, 'false');
 });
 
 test('a marker quoted after the first line does not suppress the review', async () => {
   const title = 'Bump lodash from 4.17.20 to 4.17.22';
-  const marker = reviewMarkerForUpgrade(title, singleBody('abc1234'));
-  const older = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
+  const marker = markerFor(lodash('4.17.22'));
+  const older = markerFor(lodash('4.17.21'));
   const pr = {
     number: 42,
     title,
@@ -344,6 +384,7 @@ test('a marker quoted after the first line does not suppress the review', async 
     head: { sha: 'head' },
   };
   const { core } = await resolve('pull_request', pr, {
+    metadata: metadata(lodash('4.17.22')),
     commentsFor: () => [
       {
         id: 8,
@@ -358,7 +399,7 @@ test('a marker quoted after the first line does not suppress the review', async 
 
 test('a forged marker or a legacy marker does not suppress the review', async () => {
   const title = 'Bump lodash from 4.17.20 to 4.17.21';
-  const marker = reviewMarkerForUpgrade(title, singleBody('abc1234'));
+  const marker = markerFor(lodash('4.17.21'));
   const pr = {
     number: 42,
     title,
@@ -367,10 +408,12 @@ test('a forged marker or a legacy marker does not suppress the review', async ()
     head: { sha: 'head' },
   };
   const forged = await resolve('pull_request', pr, {
+    metadata: metadata(lodash('4.17.21')),
     commentsFor: () => [{ id: 7, user: { login: 'mallory' }, body: marker, created_at: '2026-01-01T00:00:00Z' }],
   });
   assert.equal(forged.core.outputs.already_reviewed, 'false');
   const legacy = await resolve('pull_request', pr, {
+    metadata: metadata(lodash('4.17.21')),
     commentsFor: () => [
       {
         id: 3,
@@ -384,7 +427,7 @@ test('a forged marker or a legacy marker does not suppress the review', async ()
 });
 
 test('Renovate and workflow_dispatch still review when a marker exists', async () => {
-  const marker = reviewMarkerForUpgrade('Bump lodash from 1.0.0 to 4.17.21', singleBody('abc1234'));
+  const marker = markerFor(lodash('4.17.21'));
   const renovate = {
     number: 7,
     title: 'Update dependency lodash to v4.17.21',
@@ -409,11 +452,11 @@ test('Renovate and workflow_dispatch still review when a marker exists', async (
     head: { sha: 'head' },
   };
   const dispatched = await resolve('workflow_dispatch', pr, {
-    commentsFor: () => [botComment(reviewMarkerForUpgrade(title, pr.body))],
+    commentsFor: () => [botComment(marker)],
     inputs: { pr_number: '42' },
   });
   assert.equal(dispatched.core.outputs.already_reviewed, 'false');
-  assert.equal(dispatched.core.outputs.review_marker, reviewMarkerForUpgrade(title, pr.body));
+  assert.equal(dispatched.core.outputs.review_marker, '');
   assert.equal(
     dispatched.github.calls.some((call) => call[0] === 'listComments'),
     false,
@@ -428,14 +471,17 @@ test('comment listing failure runs the review instead of skipping it', async () 
     user: { login: 'dependabot[bot]' },
     head: { sha: 'head' },
   };
-  const { core } = await resolve('pull_request', pr, { listError: new Error('rate limit') });
+  const { core } = await resolve('pull_request', pr, {
+    metadata: metadata(lodash('4.17.21')),
+    listError: new Error('rate limit'),
+  });
   assert.equal(core.outputs.already_reviewed, 'false');
   assert.equal(core.failed, '');
   assert.match(core.warnings.join('\n'), /rate limit/);
 });
 
 test('only a complete analysis stamps the upgrade marker', () => {
-  const marker = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
+  const marker = markerFor(lodash('4.17.21'));
   assert.equal(postComment.selectPostedMarker(marker, '{"result":"Verdict: benign","complete":true}'), marker);
   assert.equal(
     postComment.selectPostedMarker(marker, '{"result":"CURSOR_API_KEY is not set; analysis was skipped."}'),
@@ -445,7 +491,7 @@ test('only a complete analysis stamps the upgrade marker', () => {
 });
 
 test('completed analysis updates an Actions bot marker and treats a human quote as commentary', async () => {
-  const marker = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
+  const marker = markerFor(lodash('4.17.21'));
   await withWorkspace(async (directory) => {
     process.env.REVIEW_MARKER = marker;
     process.env.PR_NUMBER = '42';

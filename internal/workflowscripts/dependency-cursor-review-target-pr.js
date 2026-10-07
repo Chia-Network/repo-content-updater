@@ -12,7 +12,7 @@
  */
 const {
   isActionsBotUpgradeReview,
-  reviewMarkerForUpgrade,
+  reviewMarkerFromMetadata,
 } = require('./dependency-cursor-review-dependabot-context.js');
 
 const DEPENDABOT_BOT = 'dependabot[bot]';
@@ -77,7 +77,8 @@ async function run({ github, context, core }) {
     core.setFailed(`Target PR #${pr.number} is not opened by an allowed bot. Author: ${pr.user?.login}`);
     return;
   }
-  const marker = pr.user?.login === DEPENDABOT_BOT ? reviewMarkerForUpgrade(pr.title || '', pr.body || '') : '';
+  const marker =
+    pr.user?.login === DEPENDABOT_BOT ? reviewMarkerFromMetadata(process.env.UPDATED_DEPENDENCIES_JSON || '') : '';
   core.setOutput('number', String(pr.number));
   core.setOutput('title', pr.title || '');
   core.setOutput('body', pr.body || '');
