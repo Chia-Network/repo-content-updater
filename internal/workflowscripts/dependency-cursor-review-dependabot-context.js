@@ -2,9 +2,7 @@
 
 const fs = require('fs');
 
-// Marker helpers live next to the PR parser so the trusted skip check and the
-// comment poster share one upgrade identity. The target-PR step passes that
-// identity to the poster as a single-line base64 output.
+// The review marker is produced once, here, and passed through as that single line.
 
 const REVIEW_MARKER_PREFIX = '<!-- cursor-dependabot-review';
 const LEGACY_REVIEW_MARKER = '<!-- cursor-dependabot-review -->';
@@ -44,25 +42,6 @@ function extractDetailsSection(text, summaryLabel) {
     .replace(summaryRe, '')
     .replace(/<\/details>\s*$/i, '')
     .trim();
-}
-
-function stripDetailsBlocks(text) {
-  const tagRe = /<details\b[^>]*>|<\/details>/gi;
-  let result = '';
-  let last = 0;
-  let depth = 0;
-  let match;
-  while ((match = tagRe.exec(text)) !== null) {
-    if (depth === 0) result += text.slice(last, match.index);
-    if (match[0].toLowerCase().startsWith('<details')) {
-      depth += 1;
-    } else {
-      depth = Math.max(0, depth - 1);
-    }
-    if (depth === 0) last = tagRe.lastIndex;
-  }
-  if (depth === 0) result += text.slice(last);
-  return result;
 }
 
 function parseDependencyUpdate(title, body) {
@@ -141,11 +120,10 @@ function cleanVersionToken(value) {
 }
 
 function extractExplicitUpdates(body) {
-  const outsideNotes = stripDetailsBlocks(body || '');
   const pairs = [];
-  const re = /Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+)/gi;
+  const re = /^Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+)\s*$/gim;
   let match;
-  while ((match = re.exec(outsideNotes)) !== null) {
+  while ((match = re.exec(body || '')) !== null) {
     const packageName = match[1].trim();
     const toVersion = cleanVersionToken(match[3]);
     if (packageName && toVersion) pairs.push({ packageName, toVersion });
@@ -153,66 +131,36 @@ function extractExplicitUpdates(body) {
   return pairs;
 }
 
-function extractTableBumps(body) {
-  const outsideNotes = stripDetailsBlocks(body || '');
-  if (!/\|\s*Package\s*\|\s*From\s*\|\s*To\s*\|/i.test(outsideNotes)) return [];
-  const pairs = [];
-  const re = /^\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|/gm;
-  let match;
-  while ((match = re.exec(outsideNotes)) !== null) {
-    const packageName = match[1].trim();
-    const toVersion = cleanVersionToken(match[3]);
-    if (!packageName || !toVersion) continue;
-    if (/^package$/i.test(packageName)) continue;
-    if (/^:?-+:?$/.test(packageName)) continue;
-    pairs.push({ packageName, toVersion });
-  }
-  return pairs;
-}
-
-/**
- * Stable id for one Dependabot upgrade. Rebases change head SHAs and the
- * commit list inside the PR body; those must not change this id. A new target
- * version must. Empty string means "unknown" — callers should review again.
- */
-function upgradeIdentity(title, body) {
+function upgradePairs(title, body) {
   const parsed = parseDependencyUpdate(title || '', body || '');
   const explicit = extractExplicitUpdates(body || '');
-  let pairs = [];
-  // Group updates list every package in the body. A title that names only one
-  // package must not hide the rest of that list. A normal single-dependency PR
-  // has no "Updates `pkg` from … to …" lines, so the title is the identity.
-  if (explicit.length > 1) {
-    pairs = explicit;
-  } else if (parsed.packageName && parsed.toVersion) {
-    pairs = [{ packageName: parsed.packageName, toVersion: cleanVersionToken(parsed.toVersion) }];
-  } else if (explicit.length === 1) {
-    pairs = explicit;
-  } else {
-    pairs = extractTableBumps(body || '');
+  if (explicit.length > 1) return explicit;
+  if (parsed.packageName && parsed.toVersion) {
+    return [{ packageName: parsed.packageName, toVersion: cleanVersionToken(parsed.toVersion) }];
   }
-  if (pairs.length === 0) return '';
-  const unique = new Set(pairs.map((pair) => `${pair.packageName}\n${pair.toVersion}`));
-  return Array.from(unique).sort().join('\n---\n');
+  return explicit;
 }
 
-function reviewMarkerForIdentity(identity) {
-  if (!identity) return LEGACY_REVIEW_MARKER;
-  const encoded = Buffer.from(identity, 'utf8').toString('base64');
-  return `<!-- cursor-dependabot-review ${encoded} -->`;
+/** One-line comment marker for this upgrade, or '' when the upgrade is unknown. */
+function reviewMarkerForUpgrade(title, body) {
+  const pairs = upgradePairs(title, body);
+  if (pairs.length === 0) return '';
+  const canonical = Array.from(new Set(pairs.map((pair) => `${pair.packageName}\t${pair.toVersion}`)))
+    .sort()
+    .join('\n');
+  return `<!-- cursor-dependabot-review ${Buffer.from(canonical, 'utf8').toString('base64')} -->`;
 }
 
 function commentHasReviewMarker(body) {
   return typeof body === 'string' && body.includes(REVIEW_MARKER_PREFIX);
 }
 
-function commentMatchesIdentity(body, identity) {
-  if (!identity || typeof body !== 'string') return false;
-  return body.includes(reviewMarkerForIdentity(identity));
+function isActionsBotMarkerComment(comment) {
+  return comment?.user?.login === ACTIONS_BOT_LOGIN && commentHasReviewMarker(comment?.body);
 }
 
-function isActionsBotUpgradeReview(comment, identity) {
-  return comment?.user?.login === ACTIONS_BOT_LOGIN && commentMatchesIdentity(comment?.body, identity);
+function isActionsBotUpgradeReview(comment, marker) {
+  return Boolean(marker) && isActionsBotMarkerComment(comment) && comment.body.includes(marker);
 }
 
 async function runDependabotContext({ core }) {
@@ -249,10 +197,7 @@ async function runDependabotContext({ core }) {
 
 module.exports = runDependabotContext;
 module.exports.parseDependencyUpdate = parseDependencyUpdate;
-module.exports.upgradeIdentity = upgradeIdentity;
-module.exports.reviewMarkerForIdentity = reviewMarkerForIdentity;
-module.exports.commentHasReviewMarker = commentHasReviewMarker;
-module.exports.commentMatchesIdentity = commentMatchesIdentity;
+module.exports.reviewMarkerForUpgrade = reviewMarkerForUpgrade;
+module.exports.isActionsBotMarkerComment = isActionsBotMarkerComment;
 module.exports.isActionsBotUpgradeReview = isActionsBotUpgradeReview;
-module.exports.ACTIONS_BOT_LOGIN = ACTIONS_BOT_LOGIN;
 module.exports.LEGACY_REVIEW_MARKER = LEGACY_REVIEW_MARKER;

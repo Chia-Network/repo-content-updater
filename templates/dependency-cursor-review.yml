@@ -8,13 +8,13 @@
 #
 # Source documentation: https://cursor.com/docs/cli/github-actions
 #
-# Dependabot pull_request runs again on rebase, recreate, and rebuild. After
-# github-actions[bot] has commented a review marker for the same dependency
-# upgrade, later pushes skip the review steps. A new pull request has no
-# marker, so it is reviewed. A different target version does not match the
-# previous marker, so it is reviewed. Renovate and workflow_dispatch always run.
-# The marker check executes from the trusted default-branch helper, before the
-# untrusted PR checkout. It does not use the head SHA.
+# Dependabot pull_request runs again on rebase, recreate, and rebuild.
+# resolve-target (trusted helper, before the PR checkout) skips a later push
+# when github-actions[bot] already commented the marker for this upgrade.
+# The marker is the target version, not the head SHA. A new pull request or a
+# new target version still reviews. Renovate and workflow_dispatch always run.
+# dependency-review is the required check: green when review is skipped, red
+# when resolve or review failed or was cancelled.
 name: Dependency Cursor Review
 
 on:
@@ -36,10 +36,15 @@ permissions:
   pull-requests: write
 
 jobs:
-  dependency-review:
+  resolve-target:
     if: github.repository_owner == 'Chia-Network' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'renovate[bot]')))
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
+    outputs:
+      already_reviewed: ${{`{{ steps.target_pr.outputs.already_reviewed }}`}}
+      head_sha: ${{`{{ steps.target_pr.outputs.head_sha }}`}}
+      number: ${{`{{ steps.target_pr.outputs.number }}`}}
+      review_marker: ${{`{{ steps.target_pr.outputs.review_marker }}`}}
     steps:
       - name: Checkout trusted target-PR helper
         uses: actions/checkout@v7
@@ -60,20 +65,36 @@ jobs:
             const run = require(`${process.env.GITHUB_WORKSPACE}/.trusted-dcr-helper/.github/scripts/dependency-cursor-review-target-pr.js`);
             await run.run({ github, context, core });
 
-      - name: Skip completed Dependabot review
-        if: success() && steps.target_pr.outputs.already_reviewed == 'true'
-        run: echo "Dependabot upgrade already has a Cursor review; not running another one."
+  review:
+    needs: resolve-target
+    if: needs.resolve-target.result == 'success' && needs.resolve-target.outputs.already_reviewed != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Read pull request text
+        id: pr_text
+        uses: actions/github-script@v9
+        env:
+          PR_NUMBER: ${{`{{ needs.resolve-target.outputs.number }}`}}
+        with:
+          script: |
+            const pullNumber = Number(process.env.PR_NUMBER);
+            const { data } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullNumber,
+            });
+            core.setOutput('title', data.title || '');
+            core.setOutput('body', data.body || '');
 
       - name: Checkout repository
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         uses: actions/checkout@v7
         with:
-          ref: ${{`{{ steps.target_pr.outputs.head_sha }}`}}
+          ref: ${{`{{ needs.resolve-target.outputs.head_sha }}`}}
           persist-credentials: false
 
       # PR head is untrusted: overwrite composite action.yml from default branch before uses: ./…
       - name: Install trusted git path checkout action definition
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{`{{ github.token }}`}}
@@ -93,7 +114,6 @@ jobs:
           fi
 
       - name: Ensure malware verdict formatter bundle
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         uses: ./.github/actions/trusted-git-path-checkout
         with:
           token: ${{`{{ github.token }}`}}
@@ -101,7 +121,6 @@ jobs:
           paths_manifest: .github/scripts/dependency-cursor-review-trusted-scripts.paths
 
       - name: Install Cursor CLI
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         run: |
           installer="$(mktemp)"
@@ -124,23 +143,20 @@ jobs:
           fi
 
       - name: Extract Dependabot comment context
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         id: dependabot_context
         uses: actions/github-script@v9
         env:
-          PR_TITLE: ${{`{{ steps.target_pr.outputs.title }}`}}
-          PR_BODY: ${{`{{ steps.target_pr.outputs.body }}`}}
-          PR_NUMBER: ${{`{{ steps.target_pr.outputs.number }}`}}
+          PR_TITLE: ${{`{{ steps.pr_text.outputs.title }}`}}
+          PR_BODY: ${{`{{ steps.pr_text.outputs.body }}`}}
+          PR_NUMBER: ${{`{{ needs.resolve-target.outputs.number }}`}}
         with:
           script: |
             const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-dependabot-context.js`);
             await run({ github, context, core });
       - name: Prepare upstream checkout directory
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         run: mkdir -p ".upstream-dependency"
 
       - name: Checkout upstream repository
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         uses: actions/checkout@v7
         with:
           repository: ${{`{{ steps.dependabot_context.outputs.upstream_repo }}`}}
@@ -149,7 +165,6 @@ jobs:
           persist-credentials: false
 
       - name: Remove upstream agent-instruction files
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         run: |
           rm -rf .upstream-dependency/.cursor || true
@@ -159,7 +174,6 @@ jobs:
           rm -f .upstream-dependency/CLAUDE.md || true
 
       - name: Run upstream malware scan
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         id: malware_scan
         shell: bash
         env:
@@ -183,7 +197,6 @@ jobs:
           sudo apt-get install -y ripgrep jq
           bash .github/scripts/upstream_malware_scan.sh
       - name: Gather local usage hints
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         env:
           PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
@@ -199,19 +212,18 @@ jobs:
           fi
 
       - name: Run Cursor analysis
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         timeout-minutes: 10
         env:
           CURSOR_API_KEY: ${{`{{ secrets.CURSOR_API_KEY }}`}}
-          PR_TITLE: ${{`{{ steps.target_pr.outputs.title }}`}}
-          PR_BODY: ${{`{{ steps.target_pr.outputs.body }}`}}
+          PR_TITLE: ${{`{{ steps.pr_text.outputs.title }}`}}
+          PR_BODY: ${{`{{ steps.pr_text.outputs.body }}`}}
           PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
           FROM_VERSION: ${{`{{ steps.dependabot_context.outputs.from_version }}`}}
           TO_VERSION: ${{`{{ steps.dependabot_context.outputs.to_version }}`}}
         shell: bash
         run: |
           if [ -z "$CURSOR_API_KEY" ]; then
-            echo '{"result":"CURSOR_API_KEY is not set; analysis was skipped."}' > cursor_output.json
+            echo '{"result":"CURSOR_API_KEY is not set; analysis was skipped.","complete":false}' > cursor_output.json
             exit 0
           fi
 
@@ -231,10 +243,10 @@ jobs:
 
           python3 -I .github/scripts/dependency_cursor_review_combine_outputs.py
       - name: Upload malware scan artifacts
-        if: always() && steps.target_pr.outputs.already_reviewed != 'true'
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: dependabot-malware-scan-${{`{{ steps.target_pr.outputs.number }}`}}
+          name: dependabot-malware-scan-${{`{{ needs.resolve-target.outputs.number }}`}}
           if-no-files-found: warn
           path: |
             malware_scan_report.json
@@ -242,11 +254,10 @@ jobs:
             upstream_changed_files.txt
 
       - name: Post or update PR comment
-        if: success() && steps.target_pr.outputs.already_reviewed != 'true'
         uses: actions/github-script@v9
         env:
-          PR_NUMBER: ${{`{{ steps.target_pr.outputs.number }}`}}
-          UPGRADE_IDENTITY: ${{`{{ steps.target_pr.outputs.upgrade_identity }}`}}
+          PR_NUMBER: ${{`{{ needs.resolve-target.outputs.number }}`}}
+          REVIEW_MARKER: ${{`{{ needs.resolve-target.outputs.review_marker }}`}}
           MALWARE_SCAN_STATUS: ${{`{{ steps.malware_scan.outputs.status }}`}}
           MALWARE_SCAN_CHANGED_COUNT: ${{`{{ steps.malware_scan.outputs.changed_files_count }}`}}
           MALWARE_SCAN_SUMMARY: ${{`{{ steps.malware_scan.outputs.summary }}`}}
@@ -254,3 +265,25 @@ jobs:
           script: |
             const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-post-comment.js`);
             await run({ github, context, core });
+
+  dependency-review:
+    needs: [resolve-target, review]
+    if: always() && needs.resolve-target.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report dependency review status
+        shell: bash
+        env:
+          RESOLVE_RESULT: ${{`{{ needs.resolve-target.result }}`}}
+          REVIEW_RESULT: ${{`{{ needs.review.result }}`}}
+        run: |
+          set -euo pipefail
+          if [ "$RESOLVE_RESULT" = "failure" ] || [ "$RESOLVE_RESULT" = "cancelled" ]; then
+            echo "Target resolution ${RESOLVE_RESULT}."
+            exit 1
+          fi
+          if [ "$REVIEW_RESULT" = "failure" ] || [ "$REVIEW_RESULT" = "cancelled" ]; then
+            echo "Dependency review ${REVIEW_RESULT}."
+            exit 1
+          fi
+          echo "Dependency review ${REVIEW_RESULT}."

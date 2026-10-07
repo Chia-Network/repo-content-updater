@@ -10,7 +10,7 @@ const context = require('./dependency-cursor-review-dependabot-context.js');
 const { run } = require('./dependency-cursor-review-target-pr.js');
 const postComment = require('./dependency-cursor-review-post-comment.js');
 
-const { commentMatchesIdentity, parseDependencyUpdate, reviewMarkerForIdentity, upgradeIdentity } = context;
+const { parseDependencyUpdate, reviewMarkerForUpgrade } = context;
 
 function fakeCore() {
   return {
@@ -18,7 +18,6 @@ function fakeCore() {
     failed: '',
     notices: [],
     warnings: [],
-    infos: [],
     setOutput(key, value) {
       this.outputs[key] = value;
     },
@@ -31,21 +30,17 @@ function fakeCore() {
     warning(message) {
       this.warnings.push(message);
     },
-    info(message) {
-      this.infos.push(message);
-    },
+    info() {},
   };
 }
 
 function singleBody(sha) {
   return [
     'Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21.',
-    '<details>',
-    '<summary>Release notes</summary>',
+    '<details><summary>Release notes</summary>',
     'Ships a small patch.',
     '</details>',
-    '<details>',
-    '<summary>Commits</summary>',
+    '<details><summary>Commits</summary>',
     `<li>${sha} fix something</li>`,
     '</details>',
   ].join('\n');
@@ -53,25 +48,29 @@ function singleBody(sha) {
 
 function groupBody(sha, bumps) {
   const sections = bumps.map(([name, from, to]) =>
-    [`Updates \`${name}\` from ${from} to ${to}`, '<details>', '<summary>Commits</summary>', sha, '</details>'].join(
-      '\n',
-    ),
+    [`Updates \`${name}\` from ${from} to ${to}`, '<details><summary>Commits</summary>', sha, '</details>'].join('\n'),
   );
   return `Bumps the npm_and_yarn group with ${bumps.length} updates.\n\n${sections.join('\n\n')}`;
 }
 
-function botComment(identity) {
+function payloadOf(marker) {
+  const encoded = String(marker).match(/<!-- cursor-dependabot-review (\S+) -->/);
+  assert.ok(encoded, marker);
+  return Buffer.from(encoded[1], 'base64').toString('utf8');
+}
+
+function botComment(marker) {
   return {
     id: 1,
     user: { login: 'github-actions[bot]' },
-    body: `${reviewMarkerForIdentity(identity)}\n## review`,
+    body: `${marker}\n## review`,
     created_at: '2026-01-01T00:00:00Z',
   };
 }
 
-function fakeGithub({ pr, commentsFor, listError }) {
+function fakeGithub({ pr, commentsFor = () => [], listError }) {
   const calls = [];
-  const github = {
+  return {
     calls,
     rest: {
       pulls: {
@@ -100,119 +99,102 @@ function fakeGithub({ pr, commentsFor, listError }) {
       return fn(params);
     },
   };
-  return github;
 }
 
-async function resolve(eventName, pr, { commentsFor, listError, inputs } = {}) {
+async function resolve(eventName, pr, options = {}) {
   const core = fakeCore();
-  const github = fakeGithub({
-    pr,
-    commentsFor: commentsFor || (() => []),
-    listError,
-  });
-  const contextPayload =
+  const github = fakeGithub({ pr, ...options });
+  const payload =
     eventName === 'pull_request'
-      ? { eventName, repo: { owner: 'acme', repo: 'widgets' }, payload: { pull_request: pr } }
-      : {
-          eventName,
-          repo: { owner: 'acme', repo: 'widgets' },
-          payload: { inputs: inputs || { pr_number: String(pr.number) } },
-        };
-  await run({ github, context: contextPayload, core });
+      ? { pull_request: pr }
+      : { inputs: options.inputs || { pr_number: String(pr.number) } };
+  await run({
+    github,
+    context: { eventName, repo: { owner: 'acme', repo: 'widgets' }, payload },
+    core,
+  });
   return { core, github };
 }
 
-test('single-dependency identity ignores rebase SHAs and from-version', () => {
-  const titleA = 'Bump lodash from 4.17.20 to 4.17.21';
-  const titleB = 'Bump lodash from 4.17.19 to 4.17.21';
-  const idA = upgradeIdentity(titleA, singleBody('aaaaaaaaaaa'));
-  const idB = upgradeIdentity(titleB, singleBody('bbbbbbbbbbb'));
-  assert.equal(idA, idB);
-  assert.equal(idA.includes('aaaaaaaaaaa'), false);
-  assert.equal(idA.includes('4.17.20'), false);
-  assert.equal(idA.includes('4.17.21'), true);
+async function withWorkspace(fn) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dcr-'));
+  const previous = process.cwd();
+  const keys = ['PR_TITLE', 'PR_BODY', 'PR_NUMBER', 'REVIEW_MARKER'];
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  process.chdir(directory);
+  try {
+    await fn(directory);
+  } finally {
+    process.chdir(previous);
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test('marker ignores rebase SHAs and from-version, and changes with the target', () => {
+  const title = 'Bump lodash from 4.17.20 to 4.17.21';
+  const same = reviewMarkerForUpgrade('Bump lodash from 4.17.19 to 4.17.21', singleBody('bbbbbbbbbbb'));
+  const marker = reviewMarkerForUpgrade(title, singleBody('aaaaaaaaaaa'));
+  assert.equal(marker, same);
+  assert.equal(marker.includes('\n'), false);
+  const payload = payloadOf(marker);
+  assert.equal(payload.includes('aaaaaaaaaaa'), false);
+  assert.equal(payload.includes('4.17.20'), false);
+  assert.equal(payload.includes('4.17.21'), true);
+  assert.notEqual(marker, reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.22', singleBody('abc1234')));
 });
 
-test('a new target version is a different upgrade', () => {
-  const current = upgradeIdentity('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
-  const next = upgradeIdentity('Bump lodash from 4.17.20 to 4.17.22', singleBody('abc1234'));
-  assert.notEqual(current, next);
-});
-
-test('group identity ignores commit SHAs inside release details', () => {
+test('group marker ignores commit SHAs and follows every Updates line', () => {
   const bumps = [
     ['brace-expansion', '2.0.1', '2.0.2'],
     ['minimatch', '9.0.3', '9.0.5'],
   ];
   const title = 'Bump the npm_and_yarn group with 2 updates';
-  const first = upgradeIdentity(title, groupBody('1111111', bumps));
-  const rebase = upgradeIdentity(title, groupBody('2222222', bumps));
-  assert.equal(first, rebase);
-  assert.equal(first.includes('1111111'), false);
-  const changed = upgradeIdentity(
+  const marker = reviewMarkerForUpgrade(title, groupBody('1111111', bumps));
+  assert.equal(marker, reviewMarkerForUpgrade(title, groupBody('2222222', bumps)));
+  const payload = payloadOf(marker);
+  assert.equal(payload.includes('1111111'), false);
+  assert.match(payload, /minimatch/);
+  assert.match(payload, /2\.0\.2/);
+  const changed = reviewMarkerForUpgrade(
     title,
     groupBody('1111111', [
       ['brace-expansion', '2.0.1', '2.0.2'],
       ['minimatch', '9.0.3', '9.0.6'],
     ]),
   );
-  assert.notEqual(first, changed);
+  assert.notEqual(marker, changed);
 });
 
-test('multiple explicit updates beat a title that names only one package', () => {
+test('several Updates lines beat a title that names one package', () => {
   const body = [
     'Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21.',
-    '',
     'Updates `lodash` from 4.17.20 to 4.17.21',
     'Updates `semver` from 7.5.0 to 7.6.0',
   ].join('\n');
-  const identity = upgradeIdentity('Bump lodash from 4.17.20 to 4.17.21', body);
-  assert.match(identity, /lodash/);
-  assert.match(identity, /semver/);
-  assert.match(identity, /7\.6\.0/);
-});
-
-test('table bumps are used when the title has no single target version', () => {
-  const body = [
-    'Bumps the npm group with 2 updates.',
-    '',
-    '| Package | From | To |',
-    '| --- | --- | --- |',
-    '| left-pad | 1.0.0 | 1.1.0 |',
-    '| semver | 7.5.0 | 7.6.0 |',
-  ].join('\n');
-  const identity = upgradeIdentity('Bump the npm group with 2 updates', body);
-  assert.match(identity, /left-pad/);
-  assert.match(identity, /1\.1\.0/);
-  assert.match(identity, /semver/);
-  assert.equal(identity.includes('1.0.0'), false);
+  const payload = payloadOf(reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', body));
+  assert.match(payload, /semver\t7\.6\.0/);
 });
 
 test('parseDependencyUpdate still extracts upstream notes and commits', () => {
   const parsed = parseDependencyUpdate('Bump lodash from 4.17.20 to 4.17.21', singleBody('deadbee'));
   assert.equal(parsed.upstreamRepo, 'lodash/lodash');
   assert.equal(parsed.packageName, 'lodash');
-  assert.equal(parsed.fromVersion, '4.17.20');
   assert.equal(parsed.toVersion, '4.17.21');
   assert.match(parsed.releaseNotes, /small patch/);
   assert.match(parsed.commits, /deadbee/);
 });
 
 test('context JSON stays limited to the prompt fields', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dcr-context-'));
-  const previous = process.cwd();
-  const previousEnv = {
-    PR_TITLE: process.env.PR_TITLE,
-    PR_BODY: process.env.PR_BODY,
-    PR_NUMBER: process.env.PR_NUMBER,
-  };
-  process.chdir(directory);
-  process.env.PR_TITLE = 'Bump lodash from 4.17.20 to 4.17.21';
-  process.env.PR_BODY = singleBody('abc1234');
-  process.env.PR_NUMBER = '42';
-  try {
+  await withWorkspace(async (directory) => {
+    process.env.PR_TITLE = 'Bump lodash from 4.17.20 to 4.17.21';
+    process.env.PR_BODY = singleBody('abc1234');
+    process.env.PR_NUMBER = '42';
     const core = fakeCore();
-    await context({ github: {}, context: {}, core });
+    await context({ core });
     const written = JSON.parse(fs.readFileSync(path.join(directory, 'dependabot_comment_context.json'), 'utf8'));
     assert.deepEqual(Object.keys(written), [
       'prNumber',
@@ -223,22 +205,13 @@ test('context JSON stays limited to the prompt fields', async () => {
       'releaseNotes',
       'commits',
     ]);
-    assert.equal(core.outputs.package_name, 'lodash');
-    assert.equal(core.outputs.to_version, '4.17.21');
     assert.equal(core.failed, '');
-  } finally {
-    process.chdir(previous);
-    for (const [key, value] of Object.entries(previousEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  });
 });
 
 test('rebase of the same Dependabot upgrade does not review again', async () => {
   const title = 'Bump lodash from 4.17.20 to 4.17.21';
-  const identity = upgradeIdentity(title, singleBody('aaaaaaaaaaa'));
+  const marker = reviewMarkerForUpgrade(title, singleBody('aaaaaaaaaaa'));
   const pr = {
     number: 42,
     title,
@@ -246,55 +219,44 @@ test('rebase of the same Dependabot upgrade does not review again', async () => 
     user: { login: 'dependabot[bot]' },
     head: { sha: 'newheadsha' },
   };
-  const { core, github } = await resolve('pull_request', pr, {
-    commentsFor: () => [botComment(identity)],
-  });
+  const { core, github } = await resolve('pull_request', pr, { commentsFor: () => [botComment(marker)] });
   assert.equal(core.outputs.already_reviewed, 'true');
+  assert.equal(core.outputs.review_marker, marker);
   assert.equal(core.outputs.head_sha, 'newheadsha');
-  assert.equal(core.failed, '');
-  assert.equal(
-    github.calls.some((call) => call[0] === 'listComments'),
-    true,
-  );
-  const listed = github.calls.find((call) => call[0] === 'listComments');
-  assert.equal(listed[1].issue_number, 42);
+  assert.equal(github.calls.find((call) => call[0] === 'listComments')[1].issue_number, 42);
 });
 
 test('a new pull request is reviewed even for a version reviewed elsewhere', async () => {
-  const title = 'Bump lodash from 4.17.20 to 4.17.22';
-  const previousIdentity = upgradeIdentity('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
+  const previous = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
   const pr = {
     number: 99,
-    title,
+    title: 'Bump lodash from 4.17.20 to 4.17.22',
     body: singleBody('abc1234'),
     user: { login: 'dependabot[bot]' },
     head: { sha: 'head' },
   };
   const { core } = await resolve('pull_request', pr, {
-    commentsFor: (number) => (number === 42 ? [botComment(previousIdentity)] : []),
+    commentsFor: (number) => (number === 42 ? [botComment(previous)] : []),
   });
   assert.equal(core.outputs.already_reviewed, 'false');
 });
 
 test('same pull request with a new target version is reviewed again', async () => {
-  const oldIdentity = upgradeIdentity('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
-  const title = 'Bump lodash from 4.17.20 to 4.17.22';
+  const oldMarker = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
   const pr = {
     number: 42,
-    title,
+    title: 'Bump lodash from 4.17.20 to 4.17.22',
     body: singleBody('def5678'),
     user: { login: 'dependabot[bot]' },
     head: { sha: 'head2' },
   };
-  const { core } = await resolve('pull_request', pr, {
-    commentsFor: () => [botComment(oldIdentity)],
-  });
+  const { core } = await resolve('pull_request', pr, { commentsFor: () => [botComment(oldMarker)] });
   assert.equal(core.outputs.already_reviewed, 'false');
 });
 
-test('a forged marker from another user does not suppress the review', async () => {
+test('a forged marker or a legacy marker does not suppress the review', async () => {
   const title = 'Bump lodash from 4.17.20 to 4.17.21';
-  const identity = upgradeIdentity(title, singleBody('abc1234'));
+  const marker = reviewMarkerForUpgrade(title, singleBody('abc1234'));
   const pr = {
     number: 42,
     title,
@@ -302,29 +264,11 @@ test('a forged marker from another user does not suppress the review', async () 
     user: { login: 'dependabot[bot]' },
     head: { sha: 'head' },
   };
-  const { core } = await resolve('pull_request', pr, {
-    commentsFor: () => [
-      {
-        id: 7,
-        user: { login: 'mallory' },
-        body: reviewMarkerForIdentity(identity),
-        created_at: '2026-01-01T00:00:00Z',
-      },
-    ],
+  const forged = await resolve('pull_request', pr, {
+    commentsFor: () => [{ id: 7, user: { login: 'mallory' }, body: marker, created_at: '2026-01-01T00:00:00Z' }],
   });
-  assert.equal(core.outputs.already_reviewed, 'false');
-});
-
-test('legacy marker without a version does not suppress a later push', async () => {
-  const title = 'Bump lodash from 4.17.20 to 4.17.21';
-  const pr = {
-    number: 42,
-    title,
-    body: singleBody('abc1234'),
-    user: { login: 'dependabot[bot]' },
-    head: { sha: 'head' },
-  };
-  const { core } = await resolve('pull_request', pr, {
+  assert.equal(forged.core.outputs.already_reviewed, 'false');
+  const legacy = await resolve('pull_request', pr, {
     commentsFor: () => [
       {
         id: 3,
@@ -334,32 +278,27 @@ test('legacy marker without a version does not suppress a later push', async () 
       },
     ],
   });
-  assert.equal(core.outputs.already_reviewed, 'false');
+  assert.equal(legacy.core.outputs.already_reviewed, 'false');
 });
 
-test('Renovate pulls still review on every synchronize', async () => {
-  const pr = {
+test('Renovate and workflow_dispatch still review when a marker exists', async () => {
+  const marker = reviewMarkerForUpgrade('Bump lodash from 1.0.0 to 4.17.21', singleBody('abc1234'));
+  const renovate = {
     number: 7,
     title: 'Update dependency lodash to v4.17.21',
     body: 'https://github.com/lodash/lodash',
     user: { login: 'renovate[bot]' },
     head: { sha: 'reno' },
   };
-  const identity = upgradeIdentity('Bump lodash from 1.0.0 to 4.17.21', singleBody('abc1234'));
-  const { core, github } = await resolve('pull_request', pr, {
-    commentsFor: () => [botComment(identity)],
-  });
-  assert.equal(core.outputs.already_reviewed, 'false');
-  assert.equal(core.outputs.upgrade_identity, '');
+  const reno = await resolve('pull_request', renovate, { commentsFor: () => [botComment(marker)] });
+  assert.equal(reno.core.outputs.already_reviewed, 'false');
+  assert.equal(reno.core.outputs.review_marker, '');
   assert.equal(
-    github.calls.some((call) => call[0] === 'listComments'),
+    reno.github.calls.some((call) => call[0] === 'listComments'),
     false,
   );
-});
 
-test('workflow_dispatch still reviews a Dependabot PR that already has a marker', async () => {
   const title = 'Bump lodash from 4.17.20 to 4.17.21';
-  const identity = upgradeIdentity(title, singleBody('abc1234'));
   const pr = {
     number: 42,
     title,
@@ -367,143 +306,80 @@ test('workflow_dispatch still reviews a Dependabot PR that already has a marker'
     user: { login: 'dependabot[bot]' },
     head: { sha: 'head' },
   };
-  const { core, github } = await resolve('workflow_dispatch', pr, {
-    commentsFor: () => [botComment(identity)],
+  const dispatched = await resolve('workflow_dispatch', pr, {
+    commentsFor: () => [botComment(reviewMarkerForUpgrade(title, pr.body))],
     inputs: { pr_number: '42' },
   });
-  assert.equal(core.outputs.already_reviewed, 'false');
-  assert.equal(core.failed, '');
+  assert.equal(dispatched.core.outputs.already_reviewed, 'false');
+  assert.equal(dispatched.core.outputs.review_marker, reviewMarkerForUpgrade(title, pr.body));
   assert.equal(
-    github.calls.some((call) => call[0] === 'listComments'),
+    dispatched.github.calls.some((call) => call[0] === 'listComments'),
     false,
   );
-  assert.equal(postComment.decodeUpgradeIdentity(core.outputs.upgrade_identity), identity);
 });
 
 test('comment listing failure runs the review instead of skipping it', async () => {
-  const title = 'Bump lodash from 4.17.20 to 4.17.21';
   const pr = {
     number: 42,
-    title,
+    title: 'Bump lodash from 4.17.20 to 4.17.21',
     body: singleBody('abc1234'),
     user: { login: 'dependabot[bot]' },
     head: { sha: 'head' },
   };
-  const { core } = await resolve('pull_request', pr, {
-    listError: new Error('rate limit'),
-  });
+  const { core } = await resolve('pull_request', pr, { listError: new Error('rate limit') });
   assert.equal(core.outputs.already_reviewed, 'false');
   assert.equal(core.failed, '');
   assert.match(core.warnings.join('\n'), /rate limit/);
 });
 
-test('marker round trip matches only the reviewed upgrade', () => {
-  const identity = upgradeIdentity('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
-  const encoded = Buffer.from(identity, 'utf8').toString('base64');
-  assert.equal(encoded.includes('\n'), false);
-  const decoded = postComment.decodeUpgradeIdentity(encoded);
-  const marker = postComment.selectPostedMarker(decoded, '{"result":"Verdict: benign"}');
-  assert.equal(commentMatchesIdentity(marker, identity), true);
-  assert.equal(commentMatchesIdentity(marker, upgradeIdentity('Bump lodash from 4.17.20 to 9.9.9', '')), false);
-  const skipped = postComment.selectPostedMarker(
-    decoded,
-    '{"result":"CURSOR_API_KEY is not set; analysis was skipped."}',
+test('only a complete analysis stamps the upgrade marker', () => {
+  const marker = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
+  assert.equal(postComment.selectPostedMarker(marker, '{"result":"Verdict: benign","complete":true}'), marker);
+  assert.equal(
+    postComment.selectPostedMarker(marker, '{"result":"CURSOR_API_KEY is not set; analysis was skipped."}'),
+    context.LEGACY_REVIEW_MARKER,
   );
-  assert.equal(skipped, context.LEGACY_REVIEW_MARKER);
-  assert.equal(commentMatchesIdentity(skipped, identity), false);
+  assert.equal(postComment.selectPostedMarker('', '{"complete":true}'), context.LEGACY_REVIEW_MARKER);
 });
 
-test('completed analysis updates an existing marker comment in place', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dcr-post-'));
-  const previous = process.cwd();
-  const previousIdentity = process.env.UPGRADE_IDENTITY;
-  const previousNumber = process.env.PR_NUMBER;
-  const identity = upgradeIdentity('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
-  process.chdir(directory);
-  process.env.UPGRADE_IDENTITY = Buffer.from(identity, 'utf8').toString('base64');
-  process.env.PR_NUMBER = '42';
-  fs.writeFileSync(path.join(directory, 'cursor_output.json'), '{"result":"Verdict: benign"}\n');
-  const github = fakeGithub({
-    pr: {},
-    commentsFor: () => [
-      {
-        id: 11,
-        user: { login: 'github-actions[bot]' },
-        body: '<!-- cursor-dependabot-review -->\n## previous',
-        created_at: '2026-01-01T00:00:00Z',
-      },
-    ],
-  });
-  try {
-    await postComment({
-      github,
-      context: { repo: { owner: 'acme', repo: 'widgets' } },
-      core: fakeCore(),
+test('completed analysis updates an Actions bot marker and treats a human quote as commentary', async () => {
+  const marker = reviewMarkerForUpgrade('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
+  await withWorkspace(async (directory) => {
+    process.env.REVIEW_MARKER = marker;
+    process.env.PR_NUMBER = '42';
+    fs.writeFileSync(path.join(directory, 'cursor_output.json'), '{"result":"Verdict: benign","complete":true}\n');
+    const quiet = fakeGithub({
+      commentsFor: () => [
+        {
+          id: 11,
+          user: { login: 'github-actions[bot]' },
+          body: '<!-- cursor-dependabot-review -->\n## previous',
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
     });
-    const update = github.calls.find((call) => call[0] === 'updateComment');
-    assert.ok(update);
+    await postComment({ github: quiet, context: { repo: { owner: 'acme', repo: 'widgets' } }, core: fakeCore() });
+    const update = quiet.calls.find((call) => call[0] === 'updateComment');
     assert.equal(update[1].comment_id, 11);
-    assert.equal(update[1].body.startsWith(reviewMarkerForIdentity(identity)), true);
-    assert.equal(
-      github.calls.some((call) => call[0] === 'createComment'),
-      false,
-    );
-  } finally {
-    process.chdir(previous);
-    if (previousIdentity === undefined) delete process.env.UPGRADE_IDENTITY;
-    else process.env.UPGRADE_IDENTITY = previousIdentity;
-    if (previousNumber === undefined) delete process.env.PR_NUMBER;
-    else process.env.PR_NUMBER = previousNumber;
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
+    assert.equal(update[1].body.startsWith(marker), true);
 
-test('a quoted marker in a later human comment is not overwritten', async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dcr-post-human-'));
-  const previous = process.cwd();
-  const previousIdentity = process.env.UPGRADE_IDENTITY;
-  const previousNumber = process.env.PR_NUMBER;
-  const identity = upgradeIdentity('Bump lodash from 4.17.20 to 4.17.21', singleBody('abc1234'));
-  process.chdir(directory);
-  process.env.UPGRADE_IDENTITY = Buffer.from(identity, 'utf8').toString('base64');
-  process.env.PR_NUMBER = '42';
-  fs.writeFileSync(path.join(directory, 'cursor_output.json'), '{"result":"Verdict: benign"}\n');
-  const github = fakeGithub({
-    pr: {},
-    commentsFor: () => [
-      {
-        id: 11,
-        user: { login: 'github-actions[bot]' },
-        body: '<!-- cursor-dependabot-review -->\n## previous',
-        created_at: '2026-01-01T00:00:00Z',
-      },
-      {
-        id: 12,
-        user: { login: 'mallory' },
-        body: reviewMarkerForIdentity(identity),
-        created_at: '2026-01-02T00:00:00Z',
-      },
-    ],
-  });
-  try {
-    await postComment({
-      github,
-      context: { repo: { owner: 'acme', repo: 'widgets' } },
-      core: fakeCore(),
+    const quoted = fakeGithub({
+      commentsFor: () => [
+        {
+          id: 11,
+          user: { login: 'github-actions[bot]' },
+          body: '<!-- cursor-dependabot-review -->\n## previous',
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        { id: 12, user: { login: 'mallory' }, body: marker, created_at: '2026-01-02T00:00:00Z' },
+      ],
     });
-    const update = github.calls.find((call) => call[0] === 'updateComment');
-    assert.ok(update);
-    assert.equal(update[1].comment_id, 11);
+    await postComment({ github: quoted, context: { repo: { owner: 'acme', repo: 'widgets' } }, core: fakeCore() });
     assert.equal(
-      github.calls.some((call) => call[0] === 'createComment'),
+      quoted.calls.some((call) => call[0] === 'updateComment'),
       false,
     );
-  } finally {
-    process.chdir(previous);
-    if (previousIdentity === undefined) delete process.env.UPGRADE_IDENTITY;
-    else process.env.UPGRADE_IDENTITY = previousIdentity;
-    if (previousNumber === undefined) delete process.env.PR_NUMBER;
-    else process.env.PR_NUMBER = previousNumber;
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+    const created = quoted.calls.find((call) => call[0] === 'createComment');
+    assert.equal(created[1].body.startsWith(marker), true);
+  });
 });

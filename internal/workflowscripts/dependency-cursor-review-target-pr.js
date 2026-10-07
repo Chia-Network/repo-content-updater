@@ -10,7 +10,10 @@
  * marker, so it is reviewed. A new target version on this PR does not match
  * the old marker, so it is reviewed. Renovate and workflow_dispatch are unchanged.
  */
-const { isActionsBotUpgradeReview, upgradeIdentity } = require('./dependency-cursor-review-dependabot-context.js');
+const {
+  isActionsBotUpgradeReview,
+  reviewMarkerForUpgrade,
+} = require('./dependency-cursor-review-dependabot-context.js');
 
 const DEPENDABOT_BOT = 'dependabot[bot]';
 
@@ -24,10 +27,10 @@ async function listIssueComments(github, context, prNumber) {
   return Array.isArray(comments) ? comments : [];
 }
 
-async function dependabotReviewAlreadyPosted({ github, context, core, pr, identity }) {
+async function dependabotReviewAlreadyPosted({ github, context, core, pr, marker }) {
   if (context.eventName !== 'pull_request') return false;
   if (pr.user?.login !== DEPENDABOT_BOT) return false;
-  if (!identity) {
+  if (!marker) {
     core.notice('Dependabot PR has no stable dependency-version identity; running review.');
     return false;
   }
@@ -38,7 +41,7 @@ async function dependabotReviewAlreadyPosted({ github, context, core, pr, identi
     core.warning(`Could not list PR comments to detect an existing review (${err.message}); running review.`);
     return false;
   }
-  const matched = comments.some((comment) => isActionsBotUpgradeReview(comment, identity));
+  const matched = comments.some((comment) => isActionsBotUpgradeReview(comment, marker));
   if (matched) {
     core.notice(`Dependabot PR #${pr.number} already has a Cursor review for this dependency upgrade; skipping.`);
   }
@@ -47,7 +50,7 @@ async function dependabotReviewAlreadyPosted({ github, context, core, pr, identi
 
 async function run({ github, context, core }) {
   core.setOutput('already_reviewed', 'false');
-  core.setOutput('upgrade_identity', '');
+  core.setOutput('review_marker', '');
   let pr;
   if (context.eventName === 'pull_request') {
     pr = context.payload.pull_request;
@@ -74,18 +77,18 @@ async function run({ github, context, core }) {
     core.setFailed(`Target PR #${pr.number} is not opened by an allowed bot. Author: ${pr.user?.login}`);
     return;
   }
-  const identity = pr.user?.login === DEPENDABOT_BOT ? upgradeIdentity(pr.title || '', pr.body || '') : '';
+  const marker = pr.user?.login === DEPENDABOT_BOT ? reviewMarkerForUpgrade(pr.title || '', pr.body || '') : '';
   core.setOutput('number', String(pr.number));
   core.setOutput('title', pr.title || '');
   core.setOutput('body', pr.body || '');
   core.setOutput('head_sha', pr.head?.sha || '');
-  core.setOutput('upgrade_identity', identity ? Buffer.from(identity, 'utf8').toString('base64') : '');
+  core.setOutput('review_marker', marker);
   const alreadyReviewed = await dependabotReviewAlreadyPosted({
     github,
     context,
     core,
     pr,
-    identity,
+    marker,
   });
   core.setOutput('already_reviewed', alreadyReviewed ? 'true' : 'false');
 }

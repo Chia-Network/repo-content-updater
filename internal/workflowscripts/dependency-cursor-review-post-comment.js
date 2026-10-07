@@ -2,11 +2,7 @@
 
 const fs = require('fs');
 
-const {
-  ACTIONS_BOT_LOGIN,
-  commentHasReviewMarker,
-  reviewMarkerForIdentity,
-} = require('./dependency-cursor-review-dependabot-context.js');
+const { isActionsBotMarkerComment, LEGACY_REVIEW_MARKER } = require('./dependency-cursor-review-dependabot-context.js');
 
 function readText(path, fallback = '') {
   try {
@@ -28,25 +24,17 @@ function analysisTextFromRaw(raw) {
 }
 
 function analysisIsComplete(raw) {
-  const text = analysisTextFromRaw(raw);
-  if (!text.trim()) return false;
-  if (text.includes('CURSOR_API_KEY is not set')) return false;
-  if (text.includes('No Cursor output generated.')) return false;
-  return true;
+  try {
+    return JSON.parse(raw).complete === true;
+  } catch (_) {
+    return false;
+  }
 }
 
-function decodeUpgradeIdentity(encoded) {
-  if (!encoded) return '';
-  return Buffer.from(String(encoded), 'base64').toString('utf8');
-}
-
-/**
- * Stamp a versioned marker only after a real analysis. A missing API key still
- * posts a comment, but that comment must not suppress the next push.
- */
-function selectPostedMarker(identity, raw) {
-  if (!identity || !analysisIsComplete(raw)) return reviewMarkerForIdentity('');
-  return reviewMarkerForIdentity(identity);
+/** Stamp the upgrade marker only after a real analysis. Otherwise the next push retries. */
+function selectPostedMarker(marker, raw) {
+  if (!marker || !analysisIsComplete(raw)) return LEGACY_REVIEW_MARKER;
+  return marker;
 }
 
 async function runPostComment({ github, context, core }) {
@@ -57,11 +45,11 @@ async function runPostComment({ github, context, core }) {
   const malwareScanChangedCount = process.env.MALWARE_SCAN_CHANGED_COUNT || '';
   const malwareScanSummaryOutput = process.env.MALWARE_SCAN_SUMMARY || '';
   const issueNumber = Number(process.env.PR_NUMBER || '0');
-  const identity = decodeUpgradeIdentity(process.env.UPGRADE_IDENTITY || '');
+  const reviewMarker = process.env.REVIEW_MARKER || '';
 
-  const raw = readText('cursor_output.json', '{"result":"No Cursor output generated."}');
+  const raw = readText('cursor_output.json', '{"result":"No Cursor output generated.","complete":false}');
   const analysisText = analysisTextFromRaw(raw);
-  const marker = selectPostedMarker(identity, raw);
+  const marker = selectPostedMarker(reviewMarker, raw);
   const malwareSummaryFallback =
     (typeof malwareScanSummaryOutput === 'string' && malwareScanSummaryOutput.trim()) ||
     [
@@ -92,20 +80,20 @@ async function runPostComment({ github, context, core }) {
     per_page: 100,
   });
   const markerComments = comments
-    .filter((comment) => comment.user?.login === ACTIONS_BOT_LOGIN && commentHasReviewMarker(comment.body))
+    .filter(isActionsBotMarkerComment)
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   const latestMarker = markerComments.length > 0 ? markerComments[markerComments.length - 1] : null;
 
-  const hasNonManagedCommentaryAfterLatest =
+  const hasCommentaryAfterLatest =
     latestMarker &&
     comments.some(
       (comment) =>
         comment.id !== latestMarker.id &&
-        !commentHasReviewMarker(comment.body) &&
+        !isActionsBotMarkerComment(comment) &&
         new Date(comment.created_at).getTime() > new Date(latestMarker.created_at).getTime(),
     );
 
-  if (latestMarker && !hasNonManagedCommentaryAfterLatest) {
+  if (latestMarker && !hasCommentaryAfterLatest) {
     await github.rest.issues.updateComment({
       owner,
       repo,
@@ -122,13 +110,12 @@ async function runPostComment({ github, context, core }) {
   }
   if (typeof core?.info === 'function') {
     core.info(
-      identity && marker !== reviewMarkerForIdentity('')
+      marker !== LEGACY_REVIEW_MARKER
         ? 'Posted Dependabot review marker for this dependency upgrade.'
-        : 'Posted dependency review comment without an upgrade identity marker.',
+        : 'Posted dependency review comment without an upgrade marker.',
     );
   }
 }
 
 module.exports = runPostComment;
 module.exports.selectPostedMarker = selectPostedMarker;
-module.exports.decodeUpgradeIdentity = decodeUpgradeIdentity;

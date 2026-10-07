@@ -68,6 +68,7 @@ def main() -> None:
     )
     combined = {
         "result": combined_text,
+        "complete": True,
         "malware_review": malware_payload,
         "compatibility_review": compatibility_payload,
     }
