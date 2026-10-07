@@ -1,16 +1,17 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
+const { execFileSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const test = require('node:test');
 
 const context = require('./dependency-cursor-review-dependabot-context.js');
 const { run, MAX_PR_COMMITS } = require('./dependency-cursor-review-target-pr.js');
 const postComment = require('./dependency-cursor-review-post-comment.js');
 
-const { parseDependencyUpdate, reviewMarkerFromCommitMessages } = context;
+const { parseDependencyUpdate, patchIdFromDiff, reviewMarkerFromPatchId, MAX_DIFF_CHARS } = context;
 
 function fakeCore() {
   return {
@@ -46,62 +47,48 @@ function singleBody(sha) {
   ].join('\n');
 }
 
-function yamlScalar(value) {
-  return /^[A-Za-z0-9./][A-Za-z0-9._+\-/:]*$/.test(value) ? value : JSON.stringify(value);
-}
-
-function commitMessage(entries) {
-  const lines = ['updated-dependencies:'];
-  for (const entry of entries) {
-    const keys = [
-      'dependency-name',
-      'dependency-version',
-      'dependency-type',
-      'update-type',
-      'dependency-group',
-      'directory',
-    ];
-    let first = true;
-    for (const key of keys) {
-      if (entry[key] == null || entry[key] === '') continue;
-      lines.push(`${first ? '- ' : '  '}${key}: ${yamlScalar(entry[key])}`);
-      first = false;
-    }
-  }
-  return ['Bump', '', '---', ...lines, '...', ''].join('\n');
-}
-
-function markerFor(entries) {
-  return reviewMarkerFromCommitMessages([commitMessage(entries)]);
-}
-
-function lodash(version) {
-  return [
-    {
-      'dependency-name': 'lodash',
-      'dependency-version': version,
-      'dependency-type': 'direct:production',
-      'update-type': 'version-update:semver-patch',
+function git(repo, args) {
+  return execFileSync('git', args, {
+    cwd: repo,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_EDITOR: 'true',
+      GIT_SEQUENCE_EDITOR: 'true',
+      GIT_PAGER: 'cat',
     },
-  ];
+  });
 }
 
-function dependabotCommit(message, { login = 'dependabot[bot]', verified = true } = {}) {
+function initRepo() {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'dcr-git-'));
+  git(repo, ['init', '-q', '-b', 'main']);
+  git(repo, ['config', 'user.email', 't@example.com']);
+  git(repo, ['config', 'user.name', 't']);
+  return repo;
+}
+
+function commitAll(repo, message) {
+  git(repo, ['add', '-A']);
+  git(repo, ['commit', '-qm', message]);
+}
+
+function prDiff(repo) {
+  return git(repo, ['diff', 'main...HEAD']);
+}
+
+function writeLines(repo, name, lines) {
+  fs.writeFileSync(path.join(repo, name), `${lines.join('\n')}\n`);
+}
+
+function dependabotCommit({ author = 'dependabot[bot]', committer = 'web-flow', verified = true } = {}) {
   return {
     sha: 'abc',
-    author: login ? { login } : null,
-    commit: { message, verification: { verified } },
+    author: author ? { login: author } : null,
+    committer: committer ? { login: committer } : null,
+    commit: { message: 'bump', verification: { verified } },
   };
-}
-
-function verifiedCommits(...entryLists) {
-  return entryLists.map((entries) => dependabotCommit(commitMessage(entries)));
-}
-
-function payloadOf(marker) {
-  const encoded = String(marker).match(/<!-- cursor-dependabot-review (\S+) -->/);
-  assert.ok(encoded, marker);
-  return Buffer.from(encoded[1], 'base64').toString('utf8');
 }
 
 function botComment(marker) {
@@ -113,7 +100,7 @@ function botComment(marker) {
   };
 }
 
-function fakeGithub({ pr, commentsFor = () => [], listError, commits = [], commitListError }) {
+function fakeGithub({ pr, commentsFor = () => [], listError, commits = [], commitListError, diff = '', diffError }) {
   const calls = [];
   const api = {
     calls,
@@ -121,6 +108,10 @@ function fakeGithub({ pr, commentsFor = () => [], listError, commits = [], commi
       pulls: {
         async get(params) {
           calls.push(['pulls.get', params]);
+          if (params.mediaType?.format === 'diff') {
+            if (diffError) throw diffError;
+            return { data: diff };
+          }
           return { data: pr };
         },
         async listCommits(params) {
@@ -190,102 +181,271 @@ async function withWorkspace(fn) {
   }
 }
 
-test('a commit trailer keeps the version and ignores group or directory title suffixes', async () => {
-  const entries = [
-    {
-      'dependency-name': 'business',
-      'dependency-version': '1.5.0',
-      'dependency-type': 'direct:production',
-      'dependency-group': 'go_modules',
-    },
-  ];
-  const pr = {
+function dependabotPr(title) {
+  return {
     number: 42,
-    title: 'Bump business from 1.4.0 to 1.5.0 in the go_modules group across 1 directory',
-    body: 'Updates `business` from 1.4.0 to 1.5.0\n\nBump business from 1.4.0 to 1.5.0 in /directory in the all-the-things group',
+    title,
+    body: singleBody('abc1234'),
     user: { login: 'dependabot[bot]' },
     head: { sha: 'head' },
   };
-  const { core } = await resolve('pull_request', pr, { commits: verifiedCommits(entries), commentsFor: () => [] });
-  assert.equal(payloadOf(core.outputs.review_marker), 'business\t1.5.0');
-  assert.equal(payloadOf(core.outputs.review_marker).includes('across'), false);
-  assert.equal(payloadOf(core.outputs.review_marker).includes('in /directory'), false);
-  assert.notEqual(core.outputs.review_marker, markerFor([{ ...entries[0], 'dependency-version': '1.6.0' }]));
+}
+
+function markerFor(diff) {
+  return reviewMarkerFromPatchId(patchIdFromDiff(diff));
+}
+
+function realDiff() {
+  if (realDiff.cached) return realDiff.cached;
+  const repo = initRepo();
+  try {
+    fs.writeFileSync(path.join(repo, 'dep.txt'), 'base\n');
+    commitAll(repo, 'base');
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    fs.writeFileSync(path.join(repo, 'dep.txt'), '1.5.0\n');
+    commitAll(repo, 'bump');
+    realDiff.cached = prDiff(repo);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+  return realDiff.cached;
+}
+
+function writeAgents(directory, malware, compatibility) {
+  if (malware !== undefined) fs.writeFileSync(path.join(directory, 'cursor_output_malware.json'), malware ?? '');
+  if (compatibility !== undefined) {
+    fs.writeFileSync(path.join(directory, 'cursor_output_compatibility.json'), compatibility ?? '');
+  }
+}
+
+test('patch-id is stable across rebase and commit message, and changes with content', () => {
+  const repo = initRepo();
+  try {
+    writeLines(
+      repo,
+      'lock',
+      Array.from({ length: 20 }, (_, index) => `line ${index + 1}`),
+    );
+    commitAll(repo, 'base');
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    const bumped = Array.from({ length: 20 }, (_, index) => (index === 9 ? 'line 10-bumped' : `line ${index + 1}`));
+    writeLines(repo, 'lock', bumped);
+    commitAll(repo, 'bump lock');
+    const original = patchIdFromDiff(prDiff(repo));
+    assert.match(original, /^[0-9a-f]{40}$/);
+
+    git(repo, ['commit', '-q', '--amend', '-m', 'recreated bump with another message']);
+    assert.equal(patchIdFromDiff(prDiff(repo)), original);
+
+    git(repo, ['checkout', '-q', 'main']);
+    fs.writeFileSync(path.join(repo, 'other.txt'), 'unrelated\n');
+    commitAll(repo, 'move base');
+    git(repo, ['checkout', '-q', 'pr']);
+    git(repo, ['rebase', '-q', 'main']);
+    assert.equal(patchIdFromDiff(prDiff(repo)), original);
+
+    const newer = bumped.map((line, index) => (index === 9 ? 'line 10-newer' : line));
+    writeLines(repo, 'lock', newer);
+    commitAll(repo, 'newer version');
+    const upgraded = patchIdFromDiff(prDiff(repo));
+    assert.notEqual(upgraded, original);
+
+    fs.writeFileSync(path.join(repo, 'notes.txt'), 'human\n');
+    commitAll(repo, 'human follow-up');
+    assert.notEqual(patchIdFromDiff(prDiff(repo)), upgraded);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
 });
 
-test('a requirement trailer keeps the operator version whole', () => {
-  const older = markerFor([
-    { 'dependency-name': 'business', 'dependency-version': '~> 1.5.0', 'dependency-type': 'direct:production' },
-  ]);
-  const newer = markerFor([
-    { 'dependency-name': 'business', 'dependency-version': '~> 1.6.0', 'dependency-type': 'direct:production' },
-  ]);
-  assert.equal(payloadOf(older), 'business\t~> 1.5.0');
-  assert.equal(payloadOf(newer), 'business\t~> 1.6.0');
-  assert.notEqual(older, newer);
+test('a lockfile context shift changes the patch id', () => {
+  const repo = initRepo();
+  try {
+    const base = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
+    writeLines(repo, 'lock', base);
+    commitAll(repo, 'base');
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    writeLines(
+      repo,
+      'lock',
+      base.map((line, index) => (index === 9 ? 'line 10-bumped' : line)),
+    );
+    commitAll(repo, 'bump');
+    const before = patchIdFromDiff(prDiff(repo));
+
+    git(repo, ['checkout', '-q', 'main']);
+    writeLines(
+      repo,
+      'lock',
+      base.map((line, index) => (index === 7 ? 'line 8-context' : line)),
+    );
+    commitAll(repo, 'context');
+    git(repo, ['checkout', '-q', '-b', 'shifted']);
+    writeLines(
+      repo,
+      'lock',
+      base.map((line, index) => {
+        if (index === 7) return 'line 8-context';
+        if (index === 9) return 'line 10-bumped';
+        return line;
+      }),
+    );
+    commitAll(repo, 'bump on shifted base');
+    assert.notEqual(patchIdFromDiff(prDiff(repo)), before);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
 });
 
-test('a grouped trailer includes every dependency and changes when one version changes', () => {
-  const group = [
-    { 'dependency-name': 'minimatch', 'dependency-version': '9.0.5', 'dependency-group': 'npm_and_yarn' },
-    { 'dependency-name': 'brace-expansion', 'dependency-version': '2.0.2', 'dependency-group': 'npm_and_yarn' },
+test('one combined diff has one patch id and a commit series does not', () => {
+  const repo = initRepo();
+  try {
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+    fs.writeFileSync(path.join(repo, 'b.txt'), 'b\n');
+    commitAll(repo, 'base');
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'A\n');
+    commitAll(repo, 'a');
+    fs.writeFileSync(path.join(repo, 'b.txt'), 'B\n');
+    commitAll(repo, 'b');
+    const combined = prDiff(repo);
+    assert.match(patchIdFromDiff(combined), /^[0-9a-f]{40}$/);
+    const series = git(repo, ['log', '-p', '--reverse', 'main..HEAD']);
+    assert.equal(patchIdFromDiff(series), '');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('marker build fails open on an empty, huge, or non-diff input', () => {
+  assert.equal(patchIdFromDiff(''), '');
+  assert.equal(patchIdFromDiff('not a diff\n'), '');
+  assert.equal(patchIdFromDiff('x'.repeat(MAX_DIFF_CHARS + 1)), '');
+  assert.equal(reviewMarkerFromPatchId(''), '');
+  assert.equal(reviewMarkerFromPatchId('zzzz'), '');
+  const id = 'a'.repeat(40);
+  assert.equal(reviewMarkerFromPatchId(id), `<!-- cursor-dependabot-review patch-id:${id} -->`);
+});
+
+test('the same diff skips and a different diff or an old marker does not', async () => {
+  const repo = initRepo();
+  try {
+    fs.writeFileSync(path.join(repo, 'dep.txt'), 'base\n');
+    commitAll(repo, 'base');
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    fs.writeFileSync(path.join(repo, 'dep.txt'), '1.5.0\n');
+    commitAll(repo, 'bump');
+    const diff = prDiff(repo);
+    const marker = markerFor(diff);
+    fs.writeFileSync(path.join(repo, 'dep.txt'), '1.6.0\n');
+    commitAll(repo, 'newer');
+    const newer = markerFor(prDiff(repo));
+    assert.notEqual(marker, newer);
+
+    const pr = dependabotPr('Bump business from 1.4.0 to 1.5.0 in the go_modules group across 1 directory');
+    const same = await resolve('pull_request', pr, {
+      commits: [dependabotCommit()],
+      diff,
+      commentsFor: () => [botComment(marker)],
+    });
+    assert.equal(same.core.outputs.review_marker, marker);
+    assert.equal(same.core.outputs.already_reviewed, 'true');
+    assert.match(same.core.outputs.review_marker, /^<!-- cursor-dependabot-review patch-id:[0-9a-f]{40} -->$/);
+
+    const changed = await resolve('pull_request', pr, {
+      commits: [dependabotCommit()],
+      diff: prDiff(repo),
+      commentsFor: () => [botComment(marker)],
+    });
+    assert.equal(changed.core.outputs.already_reviewed, 'false');
+
+    const quoted = await resolve('pull_request', pr, {
+      commits: [dependabotCommit()],
+      diff,
+      commentsFor: () => [
+        {
+          id: 8,
+          user: { login: 'github-actions[bot]' },
+          body: `<!-- cursor-dependabot-review patch-id:${'b'.repeat(40)} -->\nquote ${marker}\n`,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    assert.equal(quoted.core.outputs.already_reviewed, 'false');
+
+    const legacy = await resolve('pull_request', pr, {
+      commits: [dependabotCommit()],
+      diff,
+      commentsFor: () => [
+        {
+          id: 3,
+          user: { login: 'github-actions[bot]' },
+          body: '<!-- cursor-dependabot-review -->\n## old',
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    assert.equal(legacy.core.outputs.already_reviewed, 'false');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a non-web-flow committer, unverified commit, or other author fails open', async () => {
+  const pr = dependabotPr('Bump lodash from 4.17.20 to 4.17.21');
+  const diff = realDiff();
+  const cases = [
+    [dependabotCommit(), dependabotCommit({ committer: 'v-sachin-sandhu' })],
+    [dependabotCommit({ verified: false })],
+    [dependabotCommit({ author: 'maintainer' })],
+    [dependabotCommit({ author: '' })],
   ];
-  const marker = markerFor(group);
-  assert.equal(marker, markerFor([...group].reverse()));
-  const payload = payloadOf(marker);
-  assert.match(payload, /^brace-expansion\t2\.0\.2\nminimatch\t9\.0\.5$/);
-  const changed = markerFor([
-    { 'dependency-name': 'minimatch', 'dependency-version': '9.0.6', 'dependency-group': 'npm_and_yarn' },
-    { 'dependency-name': 'brace-expansion', 'dependency-version': '2.0.2', 'dependency-group': 'npm_and_yarn' },
-  ]);
-  assert.notEqual(marker, changed);
+  for (const commits of cases) {
+    const { core } = await resolve('pull_request', pr, { commits, diff, commentsFor: () => [] });
+    assert.equal(core.outputs.review_marker, '');
+    assert.equal(core.outputs.already_reviewed, 'false');
+  }
 });
 
-test('a directory field is kept and a missing directory is not guessed', () => {
-  const withDirectory = markerFor([
-    { 'dependency-name': 'business', 'dependency-version': '1.5.0', directory: '/services' },
-    { 'dependency-name': 'business', 'dependency-version': '1.5.0', directory: '/tools' },
-  ]);
-  const payload = payloadOf(withDirectory);
-  assert.match(payload, /business\t1\.5\.0\t\/services/);
-  assert.match(payload, /business\t1\.5\.0\t\/tools/);
-  const shared = markerFor([{ 'dependency-name': 'business', 'dependency-version': '1.5.0' }]);
-  assert.equal(payloadOf(shared), 'business\t1.5.0');
-  assert.equal(shared, markerFor([{ 'dependency-name': 'business', 'dependency-version': '1.5.0' }]));
+test('pagination sees a bad commit past the first page', async () => {
+  const commits = Array.from({ length: 30 }, () => dependabotCommit());
+  commits.push(dependabotCommit({ committer: 'maintainer' }));
+  const pr = dependabotPr('Bump the group');
+  const { core, github } = await resolve('pull_request', pr, {
+    commits,
+    diff: realDiff(),
+    commentsFor: () => [],
+  });
+  assert.equal(
+    github.calls.some((call) => call[0] === 'paginate' && call[1] === github.rest.pulls.listCommits),
+    true,
+  );
+  assert.equal(core.outputs.review_marker, '');
+  assert.equal(core.outputs.already_reviewed, 'false');
 });
 
-test('the union of every commit trailer is the identity', () => {
-  const marker = reviewMarkerFromCommitMessages([
-    commitMessage(lodash('4.17.21')),
-    commitMessage([{ 'dependency-name': 'minimatch', 'dependency-version': '9.0.5' }]),
-    commitMessage(lodash('4.17.21')),
-  ]);
-  assert.equal(payloadOf(marker), 'lodash\t4.17.21\nminimatch\t9.0.5');
-  assert.equal(
-    reviewMarkerFromCommitMessages([commitMessage(lodash('4.17.21')), commitMessage(lodash('4.17.22'))]),
-    reviewMarkerFromCommitMessages([commitMessage(lodash('4.17.22')), commitMessage(lodash('4.17.21'))]),
-  );
-});
+test('an empty commit list, an API error, an empty diff, or too many commits fails open', async () => {
+  const pr = dependabotPr('Bump lodash from 4.17.20 to 4.17.21');
+  const good = { commits: [dependabotCommit()], commentsFor: () => [] };
 
-test('malformed or missing commit metadata does not build a marker', () => {
-  assert.equal(reviewMarkerFromCommitMessages([]), '');
-  assert.equal(reviewMarkerFromCommitMessages(['Bump lodash from 4.17.20 to 4.17.21\n']), '');
-  assert.equal(reviewMarkerFromCommitMessages(['---\nupdated-dependencies:\n...']), '');
-  assert.equal(reviewMarkerFromCommitMessages(['---\nupdated-dependencies:\n- dependency-name: lodash\n...']), '');
-  assert.equal(
-    reviewMarkerFromCommitMessages([
-      '---\nupdated-dependencies:\n- dependency-name: lodash\n  dependency-version: ~> 1.5.0\n...',
-    ]),
-    '',
-  );
-  assert.equal(reviewMarkerFromCommitMessages([commitMessage(lodash('4.17.21')), 'no trailer here\n']), '');
-  assert.equal(
-    markerFor([
-      { 'dependency-name': 'minimist', 'dependency-version': '1.2.6' },
-      { 'dependency-name': 'business', 'dependency-version': '' },
-    ]),
-    '',
-  );
+  const empty = await resolve('pull_request', pr, { ...good, commits: [] });
+  assert.equal(empty.core.outputs.review_marker, '');
+
+  const failed = await resolve('pull_request', pr, { ...good, commitListError: new Error('rate limit') });
+  assert.equal(failed.core.outputs.review_marker, '');
+  assert.match(failed.core.warnings.join('\n'), /rate limit/);
+
+  const tooMany = Array.from({ length: MAX_PR_COMMITS + 1 }, () => dependabotCommit());
+  const bounded = await resolve('pull_request', pr, { ...good, commits: tooMany });
+  assert.equal(bounded.core.outputs.review_marker, '');
+
+  const noDiff = await resolve('pull_request', pr, { ...good, diff: '' });
+  assert.equal(noDiff.core.outputs.review_marker, '');
+
+  const refused = await resolve('pull_request', pr, { ...good, diffError: new Error('diff too large') });
+  assert.equal(refused.core.outputs.review_marker, '');
+  assert.equal(refused.core.outputs.already_reviewed, 'false');
+  assert.match(refused.core.warnings.join('\n'), /diff too large/);
 });
 
 test('parseDependencyUpdate still extracts upstream notes and commits', () => {
@@ -318,257 +478,143 @@ test('context JSON stays limited to the prompt fields', async () => {
   });
 });
 
-test('rebase of the same Dependabot upgrade does not review again', async () => {
-  const title = 'Bump lodash from 4.17.20 to 4.17.21';
-  const marker = markerFor(lodash('4.17.21'));
-  const pr = {
-    number: 42,
-    title,
-    body: singleBody('bbbbbbbbbbb'),
-    user: { login: 'dependabot[bot]' },
-    head: { sha: 'newheadsha' },
-  };
-  const { core, github } = await resolve('pull_request', pr, {
-    commits: verifiedCommits(lodash('4.17.21')),
-    commentsFor: () => [botComment(marker)],
-  });
-  assert.equal(core.outputs.already_reviewed, 'true');
-  assert.equal(core.outputs.review_marker, marker);
-  assert.equal(core.outputs.head_sha, 'newheadsha');
-  assert.equal(github.calls.find((call) => call[0] === 'listComments')[1].issue_number, 42);
+test('a new pull request is reviewed even for a diff reviewed elsewhere', async () => {
+  const repo = initRepo();
+  try {
+    fs.writeFileSync(path.join(repo, 'dep.txt'), 'base\n');
+    commitAll(repo, 'base');
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    fs.writeFileSync(path.join(repo, 'dep.txt'), '1.5.0\n');
+    commitAll(repo, 'bump');
+    const marker = markerFor(prDiff(repo));
+    const pr = { ...dependabotPr('Bump lodash'), number: 99 };
+    const { core } = await resolve('pull_request', pr, {
+      commits: [dependabotCommit()],
+      diff: prDiff(repo),
+      commentsFor: (number) => (number === 42 ? [botComment(marker)] : []),
+    });
+    assert.equal(core.outputs.already_reviewed, 'false');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
 });
 
-test('a new pull request is reviewed even for a version reviewed elsewhere', async () => {
-  const previous = markerFor(lodash('4.17.21'));
-  const pr = {
-    number: 99,
-    title: 'Bump lodash from 4.17.20 to 4.17.22',
-    body: singleBody('abc1234'),
-    user: { login: 'dependabot[bot]' },
-    head: { sha: 'head' },
-  };
-  const { core } = await resolve('pull_request', pr, {
-    commits: verifiedCommits(lodash('4.17.22')),
-    commentsFor: (number) => (number === 42 ? [botComment(previous)] : []),
-  });
-  assert.equal(core.outputs.already_reviewed, 'false');
-});
-
-test('same pull request with a new target version is reviewed again', async () => {
-  const oldMarker = markerFor(lodash('4.17.21'));
-  const pr = {
-    number: 42,
-    title: 'Bump lodash from 4.17.20 to 4.17.22',
-    body: singleBody('def5678'),
-    user: { login: 'dependabot[bot]' },
-    head: { sha: 'head2' },
-  };
-  const { core } = await resolve('pull_request', pr, {
-    commits: verifiedCommits(lodash('4.17.22')),
-    commentsFor: () => [botComment(oldMarker)],
-  });
-  assert.equal(core.outputs.already_reviewed, 'false');
-});
-
-test('a marker quoted after the first line does not suppress the review', async () => {
-  const title = 'Bump lodash from 4.17.20 to 4.17.22';
-  const marker = markerFor(lodash('4.17.22'));
-  const older = markerFor(lodash('4.17.21'));
-  const pr = {
-    number: 42,
-    title,
-    body: singleBody('abc1234'),
-    user: { login: 'dependabot[bot]' },
-    head: { sha: 'head' },
-  };
-  const { core } = await resolve('pull_request', pr, {
-    commits: verifiedCommits(lodash('4.17.22')),
-    commentsFor: () => [
-      {
-        id: 8,
-        user: { login: 'github-actions[bot]' },
-        body: `${older}\n## analysis\nRelease notes quote ${marker}\n`,
-        created_at: '2026-01-01T00:00:00Z',
-      },
-    ],
-  });
-  assert.equal(core.outputs.already_reviewed, 'false');
-});
-
-test('a forged marker or a legacy marker does not suppress the review', async () => {
-  const title = 'Bump lodash from 4.17.20 to 4.17.21';
-  const marker = markerFor(lodash('4.17.21'));
-  const pr = {
-    number: 42,
-    title,
-    body: singleBody('abc1234'),
-    user: { login: 'dependabot[bot]' },
-    head: { sha: 'head' },
-  };
-  const forged = await resolve('pull_request', pr, {
-    commits: verifiedCommits(lodash('4.17.21')),
-    commentsFor: () => [{ id: 7, user: { login: 'mallory' }, body: marker, created_at: '2026-01-01T00:00:00Z' }],
-  });
-  assert.equal(forged.core.outputs.already_reviewed, 'false');
-  const legacy = await resolve('pull_request', pr, {
-    commits: verifiedCommits(lodash('4.17.21')),
-    commentsFor: () => [
-      {
-        id: 3,
-        user: { login: 'github-actions[bot]' },
-        body: '<!-- cursor-dependabot-review -->\n## old',
-        created_at: '2026-01-01T00:00:00Z',
-      },
-    ],
-  });
-  assert.equal(legacy.core.outputs.already_reviewed, 'false');
+test('a forged marker does not suppress the review', async () => {
+  const repo = initRepo();
+  try {
+    fs.writeFileSync(path.join(repo, 'dep.txt'), 'base\n');
+    commitAll(repo, 'base');
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    fs.writeFileSync(path.join(repo, 'dep.txt'), '1.5.0\n');
+    commitAll(repo, 'bump');
+    const marker = markerFor(prDiff(repo));
+    const forged = await resolve('pull_request', dependabotPr('Bump lodash'), {
+      commits: [dependabotCommit()],
+      diff: prDiff(repo),
+      commentsFor: () => [{ id: 7, user: { login: 'mallory' }, body: marker, created_at: '2026-01-01T00:00:00Z' }],
+    });
+    assert.equal(forged.core.outputs.already_reviewed, 'false');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test('Renovate and workflow_dispatch still review when a marker exists', async () => {
-  const marker = markerFor(lodash('4.17.21'));
-  const renovate = {
-    number: 7,
-    title: 'Update dependency lodash to v4.17.21',
-    body: 'https://github.com/lodash/lodash',
-    user: { login: 'renovate[bot]' },
-    head: { sha: 'reno' },
-  };
-  const reno = await resolve('pull_request', renovate, { commentsFor: () => [botComment(marker)] });
-  assert.equal(reno.core.outputs.already_reviewed, 'false');
-  assert.equal(reno.core.outputs.review_marker, '');
-  assert.equal(
-    reno.github.calls.some((call) => call[0] === 'listComments'),
-    false,
-  );
-
-  const title = 'Bump lodash from 4.17.20 to 4.17.21';
-  const pr = {
-    number: 42,
-    title,
-    body: singleBody('abc1234'),
-    user: { login: 'dependabot[bot]' },
-    head: { sha: 'head' },
-  };
-  const dispatched = await resolve('workflow_dispatch', pr, {
-    commits: verifiedCommits(lodash('4.17.21')),
-    commentsFor: () => [botComment(marker)],
-    inputs: { pr_number: '42' },
-  });
-  assert.equal(dispatched.core.outputs.already_reviewed, 'false');
-  assert.equal(dispatched.core.outputs.review_marker, marker);
-  assert.equal(
-    dispatched.github.calls.some((call) => call[0] === 'listComments'),
-    false,
-  );
-});
-
-test('a second non-Dependabot commit or an unverified commit fails open', async () => {
-  const pr = {
-    number: 42,
-    title: 'Bump lodash from 4.17.20 to 4.17.21',
-    body: singleBody('abc1234'),
-    user: { login: 'dependabot[bot]' },
-    head: { sha: 'head' },
-  };
-  const good = dependabotCommit(commitMessage(lodash('4.17.21')));
-  const human = dependabotCommit(commitMessage([{ 'dependency-name': 'left-pad', 'dependency-version': '1.0.0' }]), {
-    login: 'maintainer',
-  });
-  const unverified = dependabotCommit(commitMessage(lodash('4.17.21')), { verified: false });
-  for (const commits of [
-    [good, human],
-    [good, unverified],
-    [dependabotCommit(commitMessage(lodash('4.17.21')), { login: '' })],
-  ]) {
-    const { core } = await resolve('pull_request', pr, { commits, commentsFor: () => [] });
-    assert.equal(core.outputs.review_marker, '');
-    assert.equal(core.outputs.already_reviewed, 'false');
-  }
-});
-
-test('more than 30 commits are read through paginate', async () => {
-  const commits = [];
-  for (let index = 0; index < 31; index += 1) {
-    commits.push(
-      dependabotCommit(
-        commitMessage([{ 'dependency-name': `pkg-${String(index).padStart(2, '0')}`, 'dependency-version': '1.0.0' }]),
-      ),
+  const repo = initRepo();
+  try {
+    fs.writeFileSync(path.join(repo, 'dep.txt'), 'base\n');
+    commitAll(repo, 'base');
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    fs.writeFileSync(path.join(repo, 'dep.txt'), '1.5.0\n');
+    commitAll(repo, 'bump');
+    const diff = prDiff(repo);
+    const marker = markerFor(diff);
+    const renovate = {
+      number: 7,
+      title: 'Update dependency lodash to v4.17.21',
+      body: 'https://github.com/lodash/lodash',
+      user: { login: 'renovate[bot]' },
+      head: { sha: 'reno' },
+    };
+    const reno = await resolve('pull_request', renovate, { commentsFor: () => [botComment(marker)] });
+    assert.equal(reno.core.outputs.already_reviewed, 'false');
+    assert.equal(reno.core.outputs.review_marker, '');
+    assert.equal(
+      reno.github.calls.some((call) => call[0] === 'listComments'),
+      false,
     );
+
+    const dispatched = await resolve('workflow_dispatch', dependabotPr('Bump lodash'), {
+      commits: [dependabotCommit()],
+      diff,
+      commentsFor: () => [botComment(marker)],
+      inputs: { pr_number: '42' },
+    });
+    assert.equal(dispatched.core.outputs.already_reviewed, 'false');
+    assert.equal(dispatched.core.outputs.review_marker, marker);
+    assert.equal(
+      dispatched.github.calls.some((call) => call[0] === 'listComments'),
+      false,
+    );
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
   }
-  const pr = {
-    number: 42,
-    title: 'Bump the group',
-    body: 'https://github.com/example/pkg',
-    user: { login: 'dependabot[bot]' },
-    head: { sha: 'head' },
-  };
-  const { core, github } = await resolve('pull_request', pr, { commits, commentsFor: () => [] });
-  assert.equal(
-    github.calls.some((call) => call[0] === 'paginate' && call[1] === github.rest.pulls.listCommits),
-    true,
-  );
-  assert.match(payloadOf(core.outputs.review_marker), /pkg-30\t1\.0\.0/);
-  assert.equal(core.outputs.already_reviewed, 'false');
-});
-
-test('an empty commit list, an API error, or too many commits fails open', async () => {
-  const pr = {
-    number: 42,
-    title: 'Bump lodash from 4.17.20 to 4.17.21',
-    body: singleBody('abc1234'),
-    user: { login: 'dependabot[bot]' },
-    head: { sha: 'head' },
-  };
-  const empty = await resolve('pull_request', pr, { commits: [], commentsFor: () => [] });
-  assert.equal(empty.core.outputs.review_marker, '');
-  assert.equal(empty.core.outputs.already_reviewed, 'false');
-
-  const failed = await resolve('pull_request', pr, {
-    commitListError: new Error('rate limit'),
-    commentsFor: () => [],
-  });
-  assert.equal(failed.core.outputs.review_marker, '');
-  assert.equal(failed.core.outputs.already_reviewed, 'false');
-  assert.match(failed.core.warnings.join('\n'), /rate limit/);
-
-  const tooMany = Array.from({ length: MAX_PR_COMMITS + 1 }, () => dependabotCommit(commitMessage(lodash('4.17.21'))));
-  const bounded = await resolve('pull_request', pr, { commits: tooMany, commentsFor: () => [] });
-  assert.equal(bounded.core.outputs.review_marker, '');
-  assert.equal(bounded.core.outputs.already_reviewed, 'false');
 });
 
 test('comment listing failure runs the review instead of skipping it', async () => {
-  const pr = {
-    number: 42,
-    title: 'Bump lodash from 4.17.20 to 4.17.21',
-    body: singleBody('abc1234'),
-    user: { login: 'dependabot[bot]' },
-    head: { sha: 'head' },
-  };
-  const { core } = await resolve('pull_request', pr, {
-    commits: verifiedCommits(lodash('4.17.21')),
-    listError: new Error('rate limit'),
-  });
-  assert.equal(core.outputs.already_reviewed, 'false');
-  assert.equal(core.failed, '');
-  assert.match(core.warnings.join('\n'), /rate limit/);
+  const repo = initRepo();
+  try {
+    fs.writeFileSync(path.join(repo, 'dep.txt'), 'base\n');
+    commitAll(repo, 'base');
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    fs.writeFileSync(path.join(repo, 'dep.txt'), '1.5.0\n');
+    commitAll(repo, 'bump');
+    const { core } = await resolve('pull_request', dependabotPr('Bump lodash'), {
+      commits: [dependabotCommit()],
+      diff: prDiff(repo),
+      listError: new Error('rate limit'),
+    });
+    assert.equal(core.outputs.already_reviewed, 'false');
+    assert.equal(core.failed, '');
+    assert.match(core.warnings.join('\n'), /rate limit/);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
 });
 
-test('only a complete analysis stamps the upgrade marker', () => {
-  const marker = markerFor(lodash('4.17.21'));
-  assert.equal(postComment.selectPostedMarker(marker, '{"result":"Verdict: benign","complete":true}'), marker);
-  assert.equal(
-    postComment.selectPostedMarker(marker, '{"result":"CURSOR_API_KEY is not set; analysis was skipped."}'),
-    context.LEGACY_REVIEW_MARKER,
-  );
-  assert.equal(postComment.selectPostedMarker('', '{"complete":true}'), context.LEGACY_REVIEW_MARKER);
+test('trusted complete ignores the combiner flag and requires both agent files', async () => {
+  const marker = `<!-- cursor-dependabot-review patch-id:${'a'.repeat(40)} -->`;
+  const good = '{"result":"Verdict: benign"}';
+  const cases = [
+    [undefined, undefined],
+    ['', ''],
+    ['Error: agent exited', 'Error: agent exited'],
+    ['{"type":"result","is_error":true,"result":"agent failed"}', good],
+    ['{"result":"Error: agent exited with code 1"}', good],
+    [good, undefined],
+    ['{"type":"result","duration_ms":1}', '{"type":"result","duration_ms":1}'],
+  ];
+  for (const [malware, compatibility] of cases) {
+    await withWorkspace(async (directory) => {
+      writeAgents(directory, malware, compatibility);
+      fs.writeFileSync(path.join(directory, 'cursor_output.json'), '{"result":"forged","complete":true}\n');
+      assert.equal(postComment.selectPostedMarker(marker), context.LEGACY_REVIEW_MARKER);
+    });
+  }
+  await withWorkspace(async () => {
+    writeAgents(process.cwd(), good, '{"result":"compat ok"}');
+    fs.writeFileSync('cursor_output.json', '{"complete":false}\n');
+    assert.equal(postComment.selectPostedMarker(marker), marker);
+    assert.equal(postComment.selectPostedMarker(''), context.LEGACY_REVIEW_MARKER);
+  });
 });
 
 test('completed analysis updates an Actions bot marker and treats a human quote as commentary', async () => {
-  const marker = markerFor(lodash('4.17.21'));
+  const marker = `<!-- cursor-dependabot-review patch-id:${'c'.repeat(40)} -->`;
   await withWorkspace(async (directory) => {
     process.env.REVIEW_MARKER = marker;
     process.env.PR_NUMBER = '42';
+    writeAgents(directory, '{"result":"Verdict: benign"}', '{"result":"compat ok"}');
     fs.writeFileSync(path.join(directory, 'cursor_output.json'), '{"result":"Verdict: benign","complete":true}\n');
     const quiet = fakeGithub({
       commentsFor: () => [
@@ -609,7 +655,7 @@ test('completed analysis updates an Actions bot marker and treats a human quote 
         {
           id: 21,
           user: { login: 'github-actions[bot]' },
-          body: `Coverage report\n<!-- cursor-dependabot-review quoted in the body`,
+          body: 'Coverage report\n<!-- cursor-dependabot-review quoted in the body',
           created_at: '2026-01-03T00:00:00Z',
         },
       ],
@@ -623,4 +669,31 @@ test('completed analysis updates an Actions bot marker and treats a human quote 
     assert.equal(added[1].issue_number, 42);
     assert.equal(added[1].body.startsWith(marker), true);
   });
+});
+
+test('trusted scripts survive a workspace wipe', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'dcr-ws-'));
+  const runner = fs.mkdtempSync(path.join(os.tmpdir(), 'dcr-runner-'));
+  try {
+    const scripts = path.join(workspace, '.github', 'scripts');
+    fs.mkdirSync(scripts, { recursive: true });
+    for (const name of [
+      'dependency-cursor-review-target-pr.js',
+      'dependency-cursor-review-dependabot-context.js',
+      'dependency-cursor-review-post-comment.js',
+    ]) {
+      fs.copyFileSync(path.join(__dirname, name), path.join(scripts, name));
+    }
+    const dest = path.join(runner, 'trusted-dcr-helper');
+    fs.cpSync(scripts, dest, { recursive: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+    assert.equal(fs.existsSync(workspace), false);
+    const loadedPost = require(path.join(dest, 'dependency-cursor-review-post-comment.js'));
+    const loadedTarget = require(path.join(dest, 'dependency-cursor-review-target-pr.js'));
+    assert.equal(typeof loadedPost.selectPostedMarker, 'function');
+    assert.equal(typeof loadedTarget.run, 'function');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(runner, { recursive: true, force: true });
+  }
 });

@@ -9,15 +9,14 @@
 # Source documentation: https://cursor.com/docs/cli/github-actions
 #
 # Dependabot pull_request runs again on rebase, recreate, and rebuild. The
-# trusted helper runs first and lists every PR commit over the API, before
-# the PR checkout. The marker is the dependency name and version from each
-# verified Dependabot commit trailer, plus directory only when that trailer
-# includes it. Later steps skip when github-actions[bot] has already commented
-# that marker. A new pull request or a new target version still reviews. If
-# any commit is not a verified Dependabot commit, or the trailer is missing,
-# the review runs. The comment step loads the trusted helper, not the PR
-# copy. Renovate and workflow_dispatch always run. A skip leaves this check
-# green.
+# trusted helper is copied to RUNNER_TEMP before the PR checkout, which
+# deletes the workspace copy. The marker is the stable patch id of the PR
+# diff from the API, not a commit message. Later steps skip when
+# github-actions[bot] has already commented that marker. A content change
+# still reviews. If the commits are not verified Dependabot commits created
+# by web-flow, or the diff has no patch id, the review runs. The resolve and
+# comment steps load the RUNNER_TEMP copies. Renovate and workflow_dispatch
+# always run. A skip leaves this check green.
 name: Dependency Cursor Review
 
 on:
@@ -56,12 +55,24 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      - name: Copy trusted helper out of the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="${RUNNER_TEMP}/trusted-dcr-helper"
+          rm -rf "${dest}"
+          mkdir -p "${dest}"
+          cp -a .trusted-dcr-helper/.github/scripts/. "${dest}/"
+          test -s "${dest}/dependency-cursor-review-target-pr.js"
+          test -s "${dest}/dependency-cursor-review-dependabot-context.js"
+          test -s "${dest}/dependency-cursor-review-post-comment.js"
+
       - name: Resolve target PR context
         id: target_pr
         uses: actions/github-script@v9
         with:
           script: |
-            const run = require(`${process.env.GITHUB_WORKSPACE}/.trusted-dcr-helper/.github/scripts/dependency-cursor-review-target-pr.js`);
+            const run = require(`${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-target-pr.js`);
             await run.run({ github, context, core });
 
       - name: Checkout repository
@@ -252,5 +263,5 @@ jobs:
           MALWARE_SCAN_SUMMARY: ${{`{{ steps.malware_scan.outputs.summary }}`}}
         with:
           script: |
-            const run = require(`${process.env.GITHUB_WORKSPACE}/.trusted-dcr-helper/.github/scripts/dependency-cursor-review-post-comment.js`);
+            const run = require(`${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`);
             await run({ github, context, core });

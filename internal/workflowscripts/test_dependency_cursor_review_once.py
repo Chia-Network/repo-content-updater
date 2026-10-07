@@ -30,21 +30,27 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
             workflow.index("Resolve target PR context"),
         )
         self.assertLess(workflow.index("Resolve target PR context"), workflow.index("Checkout repository"))
+        self.assertLess(
+            workflow.index("Copy trusted helper out of the workspace"),
+            workflow.index("Resolve target PR context"),
+        )
         self.assertNotIn("dependabot/fetch-metadata", workflow)
         self.assertNotIn("UPDATED_DEPENDENCIES_JSON", workflow)
-        helper = workflow.split("Checkout trusted target-PR helper", 1)[1].split("Resolve target PR context", 1)[0]
-        self.assertIn(".github/scripts/dependency-cursor-review-post-comment.js", helper)
-        self.assertIn(
-            ".trusted-dcr-helper/.github/scripts/dependency-cursor-review-post-comment.js",
-            workflow,
-        )
+        self.assertNotIn("GITHUB_WORKSPACE}/.trusted-dcr-helper", workflow)
         self.assertNotIn(
             "GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-post-comment.js",
             workflow,
         )
-        self.assertLess(
-            workflow.index(".github/scripts/dependency-cursor-review-post-comment.js"),
-            workflow.index("Checkout repository"),
+        helper = workflow.split("Checkout trusted target-PR helper", 1)[1].split("Resolve target PR context", 1)[0]
+        self.assertIn(".github/scripts/dependency-cursor-review-post-comment.js", helper)
+        self.assertIn("${RUNNER_TEMP}/trusted-dcr-helper", helper)
+        self.assertIn(
+            "RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-target-pr.js",
+            workflow,
+        )
+        self.assertIn(
+            "RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js",
+            workflow,
         )
         self.assertIn("steps.target_pr.outputs.review_marker", workflow)
         self.assertIn("steps.target_pr.outputs.title", workflow)

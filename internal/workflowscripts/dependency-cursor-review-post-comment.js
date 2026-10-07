@@ -23,17 +23,37 @@ function analysisTextFromRaw(raw) {
   return typeof analysis === 'string' ? analysis : JSON.stringify(analysis, null, 2) || String(analysis);
 }
 
-function analysisIsComplete(raw) {
+function successfulAnalysisText(filePath) {
+  let raw;
   try {
-    return JSON.parse(raw).complete === true;
+    raw = fs.readFileSync(filePath, 'utf8');
   } catch (_) {
-    return false;
+    return '';
   }
+  if (!String(raw).trim()) return '';
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch (_) {
+    return '';
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.error || payload.is_error === true) {
+    return '';
+  }
+  for (const key of ['result', 'output', 'text', 'message']) {
+    const value = payload[key];
+    if (typeof value !== 'string' || !value.trim() || value.startsWith('Missing output file:')) continue;
+    if (value.startsWith('Error: agent exited')) return '';
+    return value.trim();
+  }
+  return '';
 }
 
-/** Stamp the upgrade marker only after a real analysis. Otherwise the next push retries. */
-function selectPostedMarker(marker, raw) {
-  if (!marker || !analysisIsComplete(raw)) return LEGACY_REVIEW_MARKER;
+/** Stamp the upgrade marker only after both agent files are real analyses. */
+function selectPostedMarker(marker) {
+  const malware = successfulAnalysisText('cursor_output_malware.json');
+  const compatibility = successfulAnalysisText('cursor_output_compatibility.json');
+  if (!marker || !malware || !compatibility) return LEGACY_REVIEW_MARKER;
   return marker;
 }
 
@@ -49,7 +69,7 @@ async function runPostComment({ github, context, core }) {
 
   const raw = readText('cursor_output.json', '{"result":"No Cursor output generated.","complete":false}');
   const analysisText = analysisTextFromRaw(raw);
-  const marker = selectPostedMarker(reviewMarker, raw);
+  const marker = selectPostedMarker(reviewMarker);
   const malwareSummaryFallback =
     (typeof malwareScanSummaryOutput === 'string' && malwareScanSummaryOutput.trim()) ||
     [
@@ -119,3 +139,4 @@ async function runPostComment({ github, context, core }) {
 
 module.exports = runPostComment;
 module.exports.selectPostedMarker = selectPostedMarker;
+module.exports.successfulAnalysisText = successfulAnalysisText;

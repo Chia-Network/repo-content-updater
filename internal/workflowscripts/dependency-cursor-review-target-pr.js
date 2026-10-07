@@ -6,17 +6,19 @@
  * Dependabot pull_request events also fire on rebase, recreate, and rebuild.
  * Those later pushes skip the review when github-actions[bot] has already
  * commented the marker for this same upgrade. "Same" is the GitHub PR number
- * plus the dependency versions in the verified Dependabot commit trailers
- * (not the head SHA, and not a guessed directory). A new PR has no marker, so
- * it is reviewed. A new target version on this PR does not match the old
- * marker, so it is reviewed. Renovate and workflow_dispatch always run.
+ * plus the stable patch id of the PR diff, not the head SHA or a commit
+ * message. A new PR has no marker, so it is reviewed. Any content change
+ * produces a new patch id, so it is reviewed. Renovate and workflow_dispatch
+ * always run.
  */
 const {
   isActionsBotUpgradeReview,
-  reviewMarkerFromCommitMessages,
+  patchIdFromDiff,
+  reviewMarkerFromPatchId,
 } = require('./dependency-cursor-review-dependabot-context.js');
 
 const DEPENDABOT_BOT = 'dependabot[bot]';
+const WEB_FLOW_BOT = 'web-flow';
 // Above one unpaginated page, and above a normal Dependabot PR. Longer lists fail open.
 const MAX_PR_COMMITS = 100;
 
@@ -43,8 +45,21 @@ async function listPullRequestCommits(github, context, prNumber) {
 function commitsAreVerifiedDependabot(commits) {
   if (!Array.isArray(commits) || commits.length === 0 || commits.length > MAX_PR_COMMITS) return false;
   return commits.every(
-    (item) => item?.author?.login === DEPENDABOT_BOT && item?.commit?.verification?.verified === true,
+    (item) =>
+      item?.author?.login === DEPENDABOT_BOT &&
+      item?.committer?.login === WEB_FLOW_BOT &&
+      item?.commit?.verification?.verified === true,
   );
+}
+
+async function pullRequestDiff(github, context, prNumber) {
+  const response = await github.rest.pulls.get({
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    pull_number: prNumber,
+    mediaType: { format: 'diff' },
+  });
+  return typeof response?.data === 'string' ? response.data : '';
 }
 
 async function dependabotReviewMarker({ github, context, core, pr }) {
@@ -57,12 +72,19 @@ async function dependabotReviewMarker({ github, context, core, pr }) {
     return '';
   }
   if (!commitsAreVerifiedDependabot(commits)) {
-    core.notice('Dependabot PR commits are not all verified Dependabot commits; running review.');
+    core.notice('Dependabot PR commits are not all verified web-flow Dependabot commits; running review.');
     return '';
   }
-  const marker = reviewMarkerFromCommitMessages(commits.map((item) => item?.commit?.message || ''));
+  let diff;
+  try {
+    diff = await pullRequestDiff(github, context, pr.number);
+  } catch (err) {
+    core.warning(`Could not read the PR diff to identify the upgrade (${err.message}); running review.`);
+    return '';
+  }
+  const marker = reviewMarkerFromPatchId(patchIdFromDiff(diff));
   if (!marker) {
-    core.notice('Dependabot PR commit metadata did not identify the upgrade; running review.');
+    core.notice('Dependabot PR diff did not produce a stable patch id; running review.');
   }
   return marker;
 }
