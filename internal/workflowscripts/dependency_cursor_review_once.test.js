@@ -7,10 +7,10 @@ const path = require('node:path');
 const test = require('node:test');
 
 const context = require('./dependency-cursor-review-dependabot-context.js');
-const { run } = require('./dependency-cursor-review-target-pr.js');
+const { run, MAX_PR_COMMITS } = require('./dependency-cursor-review-target-pr.js');
 const postComment = require('./dependency-cursor-review-post-comment.js');
 
-const { parseDependencyUpdate, reviewMarkerFromMetadata } = context;
+const { parseDependencyUpdate, reviewMarkerFromCommitMessages } = context;
 
 function fakeCore() {
   return {
@@ -46,16 +46,56 @@ function singleBody(sha) {
   ].join('\n');
 }
 
-function metadata(dependencies) {
-  return JSON.stringify(dependencies);
+function yamlScalar(value) {
+  return /^[A-Za-z0-9./][A-Za-z0-9._+\-/:]*$/.test(value) ? value : JSON.stringify(value);
 }
 
-function markerFor(dependencies) {
-  return reviewMarkerFromMetadata(metadata(dependencies));
+function commitMessage(entries) {
+  const lines = ['updated-dependencies:'];
+  for (const entry of entries) {
+    const keys = [
+      'dependency-name',
+      'dependency-version',
+      'dependency-type',
+      'update-type',
+      'dependency-group',
+      'directory',
+    ];
+    let first = true;
+    for (const key of keys) {
+      if (entry[key] == null || entry[key] === '') continue;
+      lines.push(`${first ? '- ' : '  '}${key}: ${yamlScalar(entry[key])}`);
+      first = false;
+    }
+  }
+  return ['Bump', '', '---', ...lines, '...', ''].join('\n');
+}
+
+function markerFor(entries) {
+  return reviewMarkerFromCommitMessages([commitMessage(entries)]);
 }
 
 function lodash(version) {
-  return [{ dependencyName: 'lodash', newVersion: version, directory: '/' }];
+  return [
+    {
+      'dependency-name': 'lodash',
+      'dependency-version': version,
+      'dependency-type': 'direct:production',
+      'update-type': 'version-update:semver-patch',
+    },
+  ];
+}
+
+function dependabotCommit(message, { login = 'dependabot[bot]', verified = true } = {}) {
+  return {
+    sha: 'abc',
+    author: login ? { login } : null,
+    commit: { message, verification: { verified } },
+  };
+}
+
+function verifiedCommits(...entryLists) {
+  return entryLists.map((entries) => dependabotCommit(commitMessage(entries)));
 }
 
 function payloadOf(marker) {
@@ -73,15 +113,20 @@ function botComment(marker) {
   };
 }
 
-function fakeGithub({ pr, commentsFor = () => [], listError }) {
+function fakeGithub({ pr, commentsFor = () => [], listError, commits = [], commitListError }) {
   const calls = [];
-  return {
+  const api = {
     calls,
     rest: {
       pulls: {
         async get(params) {
           calls.push(['pulls.get', params]);
           return { data: pr };
+        },
+        async listCommits(params) {
+          calls.push(['listCommits', params]);
+          if (commitListError) throw commitListError;
+          return { data: commits.slice(0, 30) };
         },
       },
       issues: {
@@ -101,34 +146,29 @@ function fakeGithub({ pr, commentsFor = () => [], listError }) {
       },
     },
     async paginate(fn, params) {
+      calls.push(['paginate', fn, params]);
+      if (fn === api.rest.pulls.listCommits) {
+        if (commitListError) throw commitListError;
+        return commits;
+      }
       return fn(params);
     },
   };
+  return api;
 }
 
 async function resolve(eventName, pr, options = {}) {
-  const previous = process.env.UPDATED_DEPENDENCIES_JSON;
-  if (Object.prototype.hasOwnProperty.call(options, 'metadata')) {
-    process.env.UPDATED_DEPENDENCIES_JSON = options.metadata;
-  } else {
-    delete process.env.UPDATED_DEPENDENCIES_JSON;
-  }
   const core = fakeCore();
   const github = fakeGithub({ pr, ...options });
   const payload =
     eventName === 'pull_request'
       ? { pull_request: pr }
       : { inputs: options.inputs || { pr_number: String(pr.number) } };
-  try {
-    await run({
-      github,
-      context: { eventName, repo: { owner: 'acme', repo: 'widgets' }, payload },
-      core,
-    });
-  } finally {
-    if (previous === undefined) delete process.env.UPDATED_DEPENDENCIES_JSON;
-    else process.env.UPDATED_DEPENDENCIES_JSON = previous;
-  }
+  await run({
+    github,
+    context: { eventName, repo: { owner: 'acme', repo: 'widgets' }, payload },
+    core,
+  });
   return { core, github };
 }
 
@@ -150,141 +190,99 @@ async function withWorkspace(fn) {
   }
 }
 
-test('structured metadata keeps the version and ignores a group or directory title suffix', () => {
+test('a commit trailer keeps the version and ignores group or directory title suffixes', async () => {
+  const entries = [
+    {
+      'dependency-name': 'business',
+      'dependency-version': '1.5.0',
+      'dependency-type': 'direct:production',
+      'dependency-group': 'go_modules',
+    },
+  ];
+  const pr = {
+    number: 42,
+    title: 'Bump business from 1.4.0 to 1.5.0 in the go_modules group across 1 directory',
+    body: 'Updates `business` from 1.4.0 to 1.5.0\n\nBump business from 1.4.0 to 1.5.0 in /directory in the all-the-things group',
+    user: { login: 'dependabot[bot]' },
+    head: { sha: 'head' },
+  };
+  const { core } = await resolve('pull_request', pr, { commits: verifiedCommits(entries), commentsFor: () => [] });
+  assert.equal(payloadOf(core.outputs.review_marker), 'business\t1.5.0');
+  assert.equal(payloadOf(core.outputs.review_marker).includes('across'), false);
+  assert.equal(payloadOf(core.outputs.review_marker).includes('in /directory'), false);
+  assert.notEqual(core.outputs.review_marker, markerFor([{ ...entries[0], 'dependency-version': '1.6.0' }]));
+});
+
+test('a requirement trailer keeps the operator version whole', () => {
   const older = markerFor([
-    { dependencyName: 'business', newVersion: '1.5.0', directory: '/', dependencyGroup: 'go_modules' },
+    { 'dependency-name': 'business', 'dependency-version': '~> 1.5.0', 'dependency-type': 'direct:production' },
   ]);
   const newer = markerFor([
-    { dependencyName: 'business', newVersion: '1.6.0', directory: '/', dependencyGroup: 'go_modules' },
+    { 'dependency-name': 'business', 'dependency-version': '~> 1.6.0', 'dependency-type': 'direct:production' },
   ]);
-  assert.equal(payloadOf(older), 'business\t1.5.0\t/');
-  assert.equal(payloadOf(newer), 'business\t1.6.0\t/');
-  assert.notEqual(older, newer);
-  assert.equal(payloadOf(older).includes('across'), false);
-  assert.equal(payloadOf(older).includes('in /directory'), false);
-});
-
-test('a requirement update uses the structured new version, not a truncated operator', () => {
-  const older = markerFor([{ dependencyName: 'business', newVersion: '~> 1.5.0', directory: '/' }]);
-  const newer = markerFor([{ dependencyName: 'business', newVersion: '~> 1.6.0', directory: '/' }]);
-  assert.equal(payloadOf(older), 'business\t~> 1.5.0\t/');
-  assert.equal(payloadOf(newer), 'business\t~> 1.6.0\t/');
+  assert.equal(payloadOf(older), 'business\t~> 1.5.0');
+  assert.equal(payloadOf(newer), 'business\t~> 1.6.0');
   assert.notEqual(older, newer);
 });
 
-test('grouped metadata includes every dependency and changes when one version changes', () => {
+test('a grouped trailer includes every dependency and changes when one version changes', () => {
   const group = [
-    { dependencyName: 'minimatch', newVersion: '9.0.5', directory: '/' },
-    { dependencyName: 'brace-expansion', newVersion: '2.0.2', directory: '/' },
+    { 'dependency-name': 'minimatch', 'dependency-version': '9.0.5', 'dependency-group': 'npm_and_yarn' },
+    { 'dependency-name': 'brace-expansion', 'dependency-version': '2.0.2', 'dependency-group': 'npm_and_yarn' },
   ];
   const marker = markerFor(group);
   assert.equal(marker, markerFor([...group].reverse()));
   const payload = payloadOf(marker);
-  assert.match(payload, /brace-expansion\t2\.0\.2\t\//);
-  assert.match(payload, /minimatch\t9\.0\.5\t\//);
+  assert.match(payload, /^brace-expansion\t2\.0\.2\nminimatch\t9\.0\.5$/);
   const changed = markerFor([
-    { dependencyName: 'minimatch', newVersion: '9.0.6', directory: '/' },
-    { dependencyName: 'brace-expansion', newVersion: '2.0.2', directory: '/' },
+    { 'dependency-name': 'minimatch', 'dependency-version': '9.0.6', 'dependency-group': 'npm_and_yarn' },
+    { 'dependency-name': 'brace-expansion', 'dependency-version': '2.0.2', 'dependency-group': 'npm_and_yarn' },
   ]);
   assert.notEqual(marker, changed);
 });
 
-test('multi-directory metadata keeps directories distinct', () => {
-  const deps = [
-    { dependencyName: 'business', newVersion: '1.5.0', directory: '/tools' },
-    { dependencyName: 'business', newVersion: '1.5.0', directory: '/services' },
-  ];
-  const marker = markerFor(deps);
-  const payload = payloadOf(marker);
+test('a directory field is kept and a missing directory is not guessed', () => {
+  const withDirectory = markerFor([
+    { 'dependency-name': 'business', 'dependency-version': '1.5.0', directory: '/services' },
+    { 'dependency-name': 'business', 'dependency-version': '1.5.0', directory: '/tools' },
+  ]);
+  const payload = payloadOf(withDirectory);
   assert.match(payload, /business\t1\.5\.0\t\/services/);
   assert.match(payload, /business\t1\.5\.0\t\/tools/);
-  const changed = markerFor([
-    { dependencyName: 'business', newVersion: '1.6.0', directory: '/services' },
-    { dependencyName: 'business', newVersion: '1.5.0', directory: '/tools' },
-  ]);
-  assert.notEqual(marker, changed);
+  const shared = markerFor([{ 'dependency-name': 'business', 'dependency-version': '1.5.0' }]);
+  assert.equal(payloadOf(shared), 'business\t1.5.0');
+  assert.equal(shared, markerFor([{ 'dependency-name': 'business', 'dependency-version': '1.5.0' }]));
 });
 
-test('a security update uses newVersion from metadata', () => {
-  const marker = markerFor([
-    { dependencyName: 'lodash', newVersion: '4.17.21', directory: '/', updateType: 'version-update:semver-patch' },
+test('the union of every commit trailer is the identity', () => {
+  const marker = reviewMarkerFromCommitMessages([
+    commitMessage(lodash('4.17.21')),
+    commitMessage([{ 'dependency-name': 'minimatch', 'dependency-version': '9.0.5' }]),
+    commitMessage(lodash('4.17.21')),
   ]);
-  assert.equal(payloadOf(marker), 'lodash\t4.17.21\t/');
-  assert.notEqual(
-    marker,
-    markerFor([
-      { dependencyName: 'lodash', newVersion: '4.17.22', directory: '/', updateType: 'version-update:semver-patch' },
-    ]),
+  assert.equal(payloadOf(marker), 'lodash\t4.17.21\nminimatch\t9.0.5');
+  assert.equal(
+    reviewMarkerFromCommitMessages([commitMessage(lodash('4.17.21')), commitMessage(lodash('4.17.22'))]),
+    reviewMarkerFromCommitMessages([commitMessage(lodash('4.17.22')), commitMessage(lodash('4.17.21'))]),
   );
 });
 
-test('reproduced Dependabot titles do not supply the marker', async () => {
-  const cases = [
-    {
-      title: 'Bump business from 1.4.0 to 1.5.0 in the go_modules group across 1 directory',
-      deps: [{ dependencyName: 'business', newVersion: '1.5.0', directory: '/', dependencyGroup: 'go_modules' }],
-      payload: 'business\t1.5.0\t/',
-    },
-    {
-      title: 'Bump business from 1.4.0 to 1.5.0 in /directory in the all-the-things group',
-      deps: [
-        { dependencyName: 'business', newVersion: '1.5.0', directory: '/directory', dependencyGroup: 'all-the-things' },
-      ],
-      payload: 'business\t1.5.0\t/directory',
-    },
-    {
-      title: '[Security] Bump lodash from 4.17.20 to 4.17.21',
-      deps: [{ dependencyName: 'lodash', newVersion: '4.17.21', directory: '/' }],
-      payload: 'lodash\t4.17.21\t/',
-    },
-    {
-      title: 'chore(deps): bump lodash from 4.17.20 to 4.17.21',
-      deps: [{ dependencyName: 'lodash', newVersion: '4.17.21', directory: '/' }],
-      payload: 'lodash\t4.17.21\t/',
-    },
-    {
-      title: 'build(deps): bump lodash from 4.17.20 to 4.17.21',
-      deps: [{ dependencyName: 'lodash', newVersion: '4.17.21', directory: '/' }],
-      payload: 'lodash\t4.17.21\t/',
-    },
-    {
-      title: 'Upgrade: Bump lodash from 4.17.20 to 4.17.21',
-      deps: [{ dependencyName: 'lodash', newVersion: '4.17.21', directory: '/' }],
-      payload: 'lodash\t4.17.21\t/',
-    },
-    {
-      title: 'Upgrade: Update business requirement from ~> 1.4.0 to ~> 1.5.0',
-      deps: [{ dependencyName: 'business', newVersion: '1.5.0', directory: '/' }],
-      payload: 'business\t1.5.0\t/',
-    },
-  ];
-  for (const item of cases) {
-    const pr = {
-      number: 42,
-      title: item.title,
-      body: 'Updates `business` from 1.4.0 to 1.5.0',
-      user: { login: 'dependabot[bot]' },
-      head: { sha: 'head' },
-    };
-    const reviewed = await resolve('pull_request', pr, {
-      metadata: metadata(item.deps),
-      commentsFor: () => [],
-    });
-    assert.equal(payloadOf(reviewed.core.outputs.review_marker), item.payload, item.title);
-    const skipped = await resolve('pull_request', pr, { metadata: '', commentsFor: () => [] });
-    assert.equal(skipped.core.outputs.review_marker, '', item.title);
-    assert.equal(skipped.core.outputs.already_reviewed, 'false', item.title);
-  }
-});
-
-test('missing metadata or a partial dependency list does not build a marker', () => {
-  assert.equal(reviewMarkerFromMetadata(''), '');
-  assert.equal(reviewMarkerFromMetadata('not json'), '');
-  assert.equal(reviewMarkerFromMetadata('[]'), '');
+test('malformed or missing commit metadata does not build a marker', () => {
+  assert.equal(reviewMarkerFromCommitMessages([]), '');
+  assert.equal(reviewMarkerFromCommitMessages(['Bump lodash from 4.17.20 to 4.17.21\n']), '');
+  assert.equal(reviewMarkerFromCommitMessages(['---\nupdated-dependencies:\n...']), '');
+  assert.equal(reviewMarkerFromCommitMessages(['---\nupdated-dependencies:\n- dependency-name: lodash\n...']), '');
+  assert.equal(
+    reviewMarkerFromCommitMessages([
+      '---\nupdated-dependencies:\n- dependency-name: lodash\n  dependency-version: ~> 1.5.0\n...',
+    ]),
+    '',
+  );
+  assert.equal(reviewMarkerFromCommitMessages([commitMessage(lodash('4.17.21')), 'no trailer here\n']), '');
   assert.equal(
     markerFor([
-      { dependencyName: 'minimist', newVersion: '1.2.6', directory: '/' },
-      { dependencyName: 'business', newVersion: '', directory: '/' },
+      { 'dependency-name': 'minimist', 'dependency-version': '1.2.6' },
+      { 'dependency-name': 'business', 'dependency-version': '' },
     ]),
     '',
   );
@@ -331,7 +329,7 @@ test('rebase of the same Dependabot upgrade does not review again', async () => 
     head: { sha: 'newheadsha' },
   };
   const { core, github } = await resolve('pull_request', pr, {
-    metadata: metadata(lodash('4.17.21')),
+    commits: verifiedCommits(lodash('4.17.21')),
     commentsFor: () => [botComment(marker)],
   });
   assert.equal(core.outputs.already_reviewed, 'true');
@@ -350,7 +348,7 @@ test('a new pull request is reviewed even for a version reviewed elsewhere', asy
     head: { sha: 'head' },
   };
   const { core } = await resolve('pull_request', pr, {
-    metadata: metadata(lodash('4.17.22')),
+    commits: verifiedCommits(lodash('4.17.22')),
     commentsFor: (number) => (number === 42 ? [botComment(previous)] : []),
   });
   assert.equal(core.outputs.already_reviewed, 'false');
@@ -366,7 +364,7 @@ test('same pull request with a new target version is reviewed again', async () =
     head: { sha: 'head2' },
   };
   const { core } = await resolve('pull_request', pr, {
-    metadata: metadata(lodash('4.17.22')),
+    commits: verifiedCommits(lodash('4.17.22')),
     commentsFor: () => [botComment(oldMarker)],
   });
   assert.equal(core.outputs.already_reviewed, 'false');
@@ -384,7 +382,7 @@ test('a marker quoted after the first line does not suppress the review', async 
     head: { sha: 'head' },
   };
   const { core } = await resolve('pull_request', pr, {
-    metadata: metadata(lodash('4.17.22')),
+    commits: verifiedCommits(lodash('4.17.22')),
     commentsFor: () => [
       {
         id: 8,
@@ -408,12 +406,12 @@ test('a forged marker or a legacy marker does not suppress the review', async ()
     head: { sha: 'head' },
   };
   const forged = await resolve('pull_request', pr, {
-    metadata: metadata(lodash('4.17.21')),
+    commits: verifiedCommits(lodash('4.17.21')),
     commentsFor: () => [{ id: 7, user: { login: 'mallory' }, body: marker, created_at: '2026-01-01T00:00:00Z' }],
   });
   assert.equal(forged.core.outputs.already_reviewed, 'false');
   const legacy = await resolve('pull_request', pr, {
-    metadata: metadata(lodash('4.17.21')),
+    commits: verifiedCommits(lodash('4.17.21')),
     commentsFor: () => [
       {
         id: 3,
@@ -452,15 +450,91 @@ test('Renovate and workflow_dispatch still review when a marker exists', async (
     head: { sha: 'head' },
   };
   const dispatched = await resolve('workflow_dispatch', pr, {
+    commits: verifiedCommits(lodash('4.17.21')),
     commentsFor: () => [botComment(marker)],
     inputs: { pr_number: '42' },
   });
   assert.equal(dispatched.core.outputs.already_reviewed, 'false');
-  assert.equal(dispatched.core.outputs.review_marker, '');
+  assert.equal(dispatched.core.outputs.review_marker, marker);
   assert.equal(
     dispatched.github.calls.some((call) => call[0] === 'listComments'),
     false,
   );
+});
+
+test('a second non-Dependabot commit or an unverified commit fails open', async () => {
+  const pr = {
+    number: 42,
+    title: 'Bump lodash from 4.17.20 to 4.17.21',
+    body: singleBody('abc1234'),
+    user: { login: 'dependabot[bot]' },
+    head: { sha: 'head' },
+  };
+  const good = dependabotCommit(commitMessage(lodash('4.17.21')));
+  const human = dependabotCommit(commitMessage([{ 'dependency-name': 'left-pad', 'dependency-version': '1.0.0' }]), {
+    login: 'maintainer',
+  });
+  const unverified = dependabotCommit(commitMessage(lodash('4.17.21')), { verified: false });
+  for (const commits of [
+    [good, human],
+    [good, unverified],
+    [dependabotCommit(commitMessage(lodash('4.17.21')), { login: '' })],
+  ]) {
+    const { core } = await resolve('pull_request', pr, { commits, commentsFor: () => [] });
+    assert.equal(core.outputs.review_marker, '');
+    assert.equal(core.outputs.already_reviewed, 'false');
+  }
+});
+
+test('more than 30 commits are read through paginate', async () => {
+  const commits = [];
+  for (let index = 0; index < 31; index += 1) {
+    commits.push(
+      dependabotCommit(
+        commitMessage([{ 'dependency-name': `pkg-${String(index).padStart(2, '0')}`, 'dependency-version': '1.0.0' }]),
+      ),
+    );
+  }
+  const pr = {
+    number: 42,
+    title: 'Bump the group',
+    body: 'https://github.com/example/pkg',
+    user: { login: 'dependabot[bot]' },
+    head: { sha: 'head' },
+  };
+  const { core, github } = await resolve('pull_request', pr, { commits, commentsFor: () => [] });
+  assert.equal(
+    github.calls.some((call) => call[0] === 'paginate' && call[1] === github.rest.pulls.listCommits),
+    true,
+  );
+  assert.match(payloadOf(core.outputs.review_marker), /pkg-30\t1\.0\.0/);
+  assert.equal(core.outputs.already_reviewed, 'false');
+});
+
+test('an empty commit list, an API error, or too many commits fails open', async () => {
+  const pr = {
+    number: 42,
+    title: 'Bump lodash from 4.17.20 to 4.17.21',
+    body: singleBody('abc1234'),
+    user: { login: 'dependabot[bot]' },
+    head: { sha: 'head' },
+  };
+  const empty = await resolve('pull_request', pr, { commits: [], commentsFor: () => [] });
+  assert.equal(empty.core.outputs.review_marker, '');
+  assert.equal(empty.core.outputs.already_reviewed, 'false');
+
+  const failed = await resolve('pull_request', pr, {
+    commitListError: new Error('rate limit'),
+    commentsFor: () => [],
+  });
+  assert.equal(failed.core.outputs.review_marker, '');
+  assert.equal(failed.core.outputs.already_reviewed, 'false');
+  assert.match(failed.core.warnings.join('\n'), /rate limit/);
+
+  const tooMany = Array.from({ length: MAX_PR_COMMITS + 1 }, () => dependabotCommit(commitMessage(lodash('4.17.21'))));
+  const bounded = await resolve('pull_request', pr, { commits: tooMany, commentsFor: () => [] });
+  assert.equal(bounded.core.outputs.review_marker, '');
+  assert.equal(bounded.core.outputs.already_reviewed, 'false');
 });
 
 test('comment listing failure runs the review instead of skipping it', async () => {
@@ -472,7 +546,7 @@ test('comment listing failure runs the review instead of skipping it', async () 
     head: { sha: 'head' },
   };
   const { core } = await resolve('pull_request', pr, {
-    metadata: metadata(lodash('4.17.21')),
+    commits: verifiedCommits(lodash('4.17.21')),
     listError: new Error('rate limit'),
   });
   assert.equal(core.outputs.already_reviewed, 'false');

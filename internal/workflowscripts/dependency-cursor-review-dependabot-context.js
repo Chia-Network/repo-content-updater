@@ -112,28 +112,109 @@ function parseDependencyUpdate(title, body) {
   };
 }
 
-/**
- * Marker for dependabot/fetch-metadata's updated-dependencies-json.
- * Empty when the list is missing or any dependency lacks a name or new version.
- */
-function reviewMarkerFromMetadata(raw) {
-  if (!raw || !String(raw).trim()) return '';
-  let dependencies;
-  try {
-    dependencies = JSON.parse(raw);
-  } catch (_) {
-    return '';
+// actions/github-script does not ship a YAML library. This accepts only the flat
+// Dependabot trailer and returns null on anything else.
+const DEPENDENCY_KEYS = new Set([
+  'dependency-name',
+  'dependency-version',
+  'dependency-type',
+  'update-type',
+  'dependency-group',
+  'directory',
+]);
+
+function parseScalar(raw) {
+  if (raw == null) return null;
+  const value = String(raw);
+  if (value !== value.trim() || value.includes('\n')) return null;
+  if (value === '') return '';
+  const quote = value[0];
+  if (quote === '"' || quote === "'") {
+    if (value.length < 2 || value[value.length - 1] !== quote) return null;
+    const inner = value.slice(1, -1);
+    if (inner.includes('\\') || inner.includes(quote)) return null;
+    return inner;
   }
-  if (!Array.isArray(dependencies) || dependencies.length === 0) return '';
+  if (!/^[A-Za-z0-9./][A-Za-z0-9._+\-/:]*$/.test(value)) return null;
+  return value;
+}
+
+function metadataBlocks(message) {
+  if (typeof message !== 'string' || message.includes('\0')) return null;
+  const lines = message.split(/\r?\n/);
+  const blocks = [];
+  let start = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === '---') {
+      if (start !== -1) return null;
+      start = index;
+    } else if (line === '...') {
+      if (start === -1) return null;
+      blocks.push(lines.slice(start + 1, index));
+      start = -1;
+    }
+  }
+  if (start !== -1) return null;
+  return blocks;
+}
+
+function parseUpdatedDependencies(lines) {
+  if (!Array.isArray(lines) || lines.length === 0 || lines[0] !== 'updated-dependencies:') return null;
+  const entries = [];
+  let current = null;
+  const finish = (entry) => {
+    const name = entry['dependency-name'];
+    const version = entry['dependency-version'];
+    if (!name || !version) return null;
+    const directory = entry.directory || '';
+    return directory ? `${name}\t${version}\t${directory}` : `${name}\t${version}`;
+  };
+  for (const line of lines.slice(1)) {
+    if (line !== line.trimEnd() || line === '') return null;
+    const item = line.match(/^- ([a-z][a-z0-9-]*):(?: (.*))?$/);
+    const field = line.match(/^  ([a-z][a-z0-9-]*):(?: (.*))?$/);
+    const match = item || field;
+    if (!match || !DEPENDENCY_KEYS.has(match[1])) return null;
+    if (field && !current) return null;
+    if (item && current) {
+      const pair = finish(current);
+      if (!pair) return null;
+      entries.push(pair);
+      current = null;
+    }
+    if (!current) current = {};
+    if (Object.prototype.hasOwnProperty.call(current, match[1])) return null;
+    const scalar = parseScalar(match[2] == null ? '' : match[2]);
+    if (scalar == null) return null;
+    current[match[1]] = scalar;
+  }
+  if (!current) return null;
+  const pair = finish(current);
+  if (!pair) return null;
+  entries.push(pair);
+  return entries;
+}
+
+/**
+ * Identity for verified Dependabot commit messages.
+ * Every message must contain one trailer. The marker is the sorted union of
+ * name, version, and directory (only when the trailer has directory). Exact
+ * duplicate rows collapse. A missing or malformed trailer returns ''.
+ * Directory is not inferred from the branch name.
+ */
+function reviewMarkerFromCommitMessages(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return '';
   const pairs = [];
-  for (const dependency of dependencies) {
-    const name = typeof dependency?.dependencyName === 'string' ? dependency.dependencyName.trim() : '';
-    const version = typeof dependency?.newVersion === 'string' ? dependency.newVersion.trim() : '';
-    if (!name || !version) return '';
-    const directory = typeof dependency?.directory === 'string' ? dependency.directory.trim() : '';
-    pairs.push(directory ? `${name}\t${version}\t${directory}` : `${name}\t${version}`);
+  for (const message of messages) {
+    const blocks = metadataBlocks(message);
+    if (!blocks || blocks.length !== 1) return '';
+    const entries = parseUpdatedDependencies(blocks[0]);
+    if (!entries || entries.length === 0) return '';
+    pairs.push(...entries);
   }
   const canonical = Array.from(new Set(pairs)).sort().join('\n');
+  if (!canonical) return '';
   return `<!-- cursor-dependabot-review ${Buffer.from(canonical, 'utf8').toString('base64')} -->`;
 }
 
@@ -187,7 +268,7 @@ async function runDependabotContext({ core }) {
 
 module.exports = runDependabotContext;
 module.exports.parseDependencyUpdate = parseDependencyUpdate;
-module.exports.reviewMarkerFromMetadata = reviewMarkerFromMetadata;
+module.exports.reviewMarkerFromCommitMessages = reviewMarkerFromCommitMessages;
 module.exports.isActionsBotMarkerComment = isActionsBotMarkerComment;
 module.exports.isActionsBotUpgradeReview = isActionsBotUpgradeReview;
 module.exports.LEGACY_REVIEW_MARKER = LEGACY_REVIEW_MARKER;

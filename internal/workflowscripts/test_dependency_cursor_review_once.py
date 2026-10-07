@@ -8,6 +8,8 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW = _REPO_ROOT / "templates" / "dependency-cursor-review.yml"
 _TARGET_PR = _REPO_ROOT / "internal" / "workflowscripts" / "dependency-cursor-review-target-pr.js"
+_MAKEFILE = _REPO_ROOT / "Makefile"
+_GO_TEST = _REPO_ROOT / ".github" / "workflows" / "go-test.yml"
 _SKIP_UNREVIEWED = "steps.target_pr.outputs.already_reviewed != 'true'"
 
 
@@ -28,19 +30,26 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
             workflow.index("Resolve target PR context"),
         )
         self.assertLess(workflow.index("Resolve target PR context"), workflow.index("Checkout repository"))
-        metadata = workflow.split("Fetch Dependabot metadata", 1)[1].split("Resolve target PR context", 1)[0]
-        self.assertLess(workflow.index("Fetch Dependabot metadata"), workflow.index("Resolve target PR context"))
-        self.assertIn("uses: dependabot/fetch-metadata@v3", metadata)
-        self.assertIn("continue-on-error: true", metadata)
+        self.assertNotIn("dependabot/fetch-metadata", workflow)
+        self.assertNotIn("UPDATED_DEPENDENCIES_JSON", workflow)
+        helper = workflow.split("Checkout trusted target-PR helper", 1)[1].split("Resolve target PR context", 1)[0]
+        self.assertIn(".github/scripts/dependency-cursor-review-post-comment.js", helper)
         self.assertIn(
-            "github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'",
-            metadata,
+            ".trusted-dcr-helper/.github/scripts/dependency-cursor-review-post-comment.js",
+            workflow,
         )
-        self.assertNotIn("skip-verification", metadata)
-        self.assertNotIn("alert-lookup", metadata)
-        self.assertNotIn("github-token", metadata)
-        self.assertIn("steps.dependabot_metadata.outputs.updated-dependencies-json", workflow)
+        self.assertNotIn(
+            "GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-post-comment.js",
+            workflow,
+        )
+        self.assertLess(
+            workflow.index(".github/scripts/dependency-cursor-review-post-comment.js"),
+            workflow.index("Checkout repository"),
+        )
+        self.assertIn("steps.target_pr.outputs.review_marker", workflow)
         self.assertIn("steps.target_pr.outputs.title", workflow)
+        self.assertIn("node --test internal/workflowscripts/*.test.js", _MAKEFILE.read_text(encoding="utf-8"))
+        self.assertIn("actions/setup-node@", _GO_TEST.read_text(encoding="utf-8"))
         self.assertIn("steps.target_pr.outputs.body", workflow)
         self.assertIn(
             "require('./dependency-cursor-review-dependabot-context.js')",
