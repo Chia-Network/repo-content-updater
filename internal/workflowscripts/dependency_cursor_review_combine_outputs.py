@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Merge Cursor malware + compatibility JSON outputs; format malware verdict via trusted loader."""
 
 from __future__ import annotations

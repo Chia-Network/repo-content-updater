@@ -6,12 +6,18 @@ config, shfmt 3.12 (`-i 2`), and ShellCheck. ShellCheck is run twice: once with
 chia-blockchain's rcfile (`disable=SC2002` only, so sources are not followed)
 and once with super-linter's external-sources defaults.
 
-Skips when ruff, shfmt, or shellcheck are absent unless REQUIRE_DCR_LINT=1.
+Python companions are linted at mode 0644. Callers run them with `python3 -I`,
+and releases that predate FileModeForContent write every file 0644, so a
+shebang is ruff EXE001. Shell shebangs stay 0755.
+
+Skips the tool-backed lint when ruff, shfmt, or shellcheck are absent unless
+REQUIRE_DCR_LINT=1. The shebang check does not need those tools.
 """
 
 from __future__ import annotations
 
 import ast
+import json
 import os
 import shutil
 import stat
@@ -54,14 +60,15 @@ def _shellcheck_binaries() -> list[str]:
     return binaries
 
 
-def _assemble(root: Path) -> list[Path]:
+def _consumer_script_payloads() -> list[tuple[str, bytes]]:
+    """Repo-relative `.github/scripts` paths and the canonical bytes synced there."""
     config_text = _CONFIG.read_text(encoding="utf-8")
     index = managed_file_index(config_text)
     canonical_by_template = {
         template: canonical
         for canonical, template in consumer_sync_canonical_to_template(config_text)
     }
-    written: list[Path] = []
+    payloads: list[tuple[str, bytes]] = []
     for name in parse_dcr_companion_files(config_text):
         entry = index.get(name)
         if entry is None:
@@ -72,16 +79,104 @@ def _assemble(root: Path) -> list[Path]:
         canonical = canonical_by_template.get(template_name)
         if canonical is None:
             continue
+        payloads.append((repo_path, (_SCRIPTS / canonical).read_bytes()))
+    return payloads
+
+
+def _checkout_mode(repo_path: str, data: bytes) -> int:
+    """Mode used when linting a consumer checkout of this companion.
+
+    Python files stay 0644. A shebang on that mode is ruff EXE001, which is
+    what chia-blockchain hits while managed-files still installs a release
+    that writes every file 0644. Shell shebangs stay 0755, matching
+    FileModeForContent.
+    """
+    if repo_path.endswith(".py"):
+        return 0o644
+    if data.startswith(b"#!"):
+        return 0o755
+    return 0o644
+
+
+def _assemble(root: Path) -> list[Path]:
+    written: list[Path] = []
+    for repo_path, data in _consumer_script_payloads():
         dest = root / repo_path
         dest.parent.mkdir(parents=True, exist_ok=True)
-        data = (_SCRIPTS / canonical).read_bytes()
         dest.write_bytes(data)
-        dest.chmod(0o755 if data.startswith(b"#!") else 0o644)
+        dest.chmod(_checkout_mode(repo_path, data))
         written.append(dest)
     return written
 
 
 class ConsumerLintTest(unittest.TestCase):
+    def test_shebang_python_templates_stay_nonexecutable(self) -> None:
+        """A shebang on a 0644 Python companion is ruff EXE001.
+
+        Does not require ruff. Every Python file synced into `.github/scripts/`
+        is checked, not only the two review entry points. Shell shebangs stay.
+        """
+        payloads = _consumer_script_payloads()
+        python_payloads = [
+            (repo_path, data) for repo_path, data in payloads if repo_path.endswith(".py")
+        ]
+        shell_payloads = [
+            (repo_path, data) for repo_path, data in payloads if repo_path.endswith(".sh")
+        ]
+        self.assertGreater(len(python_payloads), 0)
+        self.assertGreater(len(shell_payloads), 0)
+        for repo_path, data in python_payloads:
+            mode = _checkout_mode(repo_path, data)
+            self.assertEqual(mode & 0o111, 0, repo_path)
+            self.assertFalse(
+                data.startswith(b"#!"),
+                f"{repo_path} is a shebang Python template checked out "
+                "non-executable; ruff EXE001 (shebang-not-executable) fails. "
+                "Callers use python3; remove the shebang.",
+            )
+        for repo_path, data in shell_payloads:
+            self.assertTrue(data.startswith(b"#!"), f"{repo_path} shell shebang regressed")
+            self.assertEqual(_checkout_mode(repo_path, data) & 0o111, 0o111, repo_path)
+
+    def test_vendored_ruff_flags_nonexecutable_python_shebang(self) -> None:
+        """chia-blockchain's ruff config must report EXE001 for this case."""
+        _require_tools()
+        self.assertTrue(_RUFF_CONFIG.is_file(), "vendored chia-blockchain ruff.toml missing")
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts = Path(tmp) / ".github" / "scripts"
+            scripts.mkdir(parents=True)
+            init = scripts / "__init__.py"
+            init.write_text("from __future__ import annotations\n", encoding="utf-8")
+            init.chmod(0o644)
+            script = scripts / "shebang_not_executable.py"
+            script.write_text(
+                "#!/usr/bin/env python3\n"
+                '"""Synthetic shebang script."""\n'
+                "\n"
+                "from __future__ import annotations\n",
+                encoding="utf-8",
+            )
+            script.chmod(0o644)
+            self.assertFalse(script.stat().st_mode & stat.S_IXUSR)
+            checked = subprocess.run(
+                [
+                    "ruff",
+                    "--config",
+                    str(_RUFF_CONFIG),
+                    "check",
+                    "--output-format",
+                    "json",
+                    str(script),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            output = checked.stdout + checked.stderr
+            self.assertNotEqual(checked.returncode, 0, output)
+            codes = {item["code"] for item in json.loads(checked.stdout)}
+            self.assertIn("EXE001", codes)
+
     def test_synced_scripts_pass_chia_ruff_shfmt_and_shellcheck(self) -> None:
         _require_tools()
         self.assertTrue(_RUFF_CONFIG.is_file(), "vendored chia-blockchain ruff.toml missing")
@@ -103,14 +198,25 @@ class ConsumerLintTest(unittest.TestCase):
             )
             for path in written:
                 data = path.read_bytes()
-                if data.startswith(b"#!"):
+                executable = bool(path.stat().st_mode & stat.S_IXUSR)
+                if path.suffix == ".py":
+                    self.assertFalse(
+                        data.startswith(b"#!"),
+                        f"{path.name} is a shebang Python template checked out "
+                        "non-executable; ruff EXE001 (shebang-not-executable) fails",
+                    )
+                    self.assertFalse(
+                        executable,
+                        f"{path.name} must stay non-executable",
+                    )
+                elif data.startswith(b"#!"):
                     self.assertTrue(
-                        path.stat().st_mode & stat.S_IXUSR,
+                        executable,
                         f"{path.name} shebang must be executable",
                     )
                 else:
                     self.assertFalse(
-                        path.stat().st_mode & stat.S_IXUSR,
+                        executable,
                         f"{path.name} must stay non-executable",
                     )
                 self.assertTrue(data.endswith(b"\n"), f"{path.name} must end with a newline")
