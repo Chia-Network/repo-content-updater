@@ -89,8 +89,9 @@ def main() -> None:
         "## Compatibility Analysis\n\n"
         f"{compatibility_text}"
     )
-    # complete is display-only. The trusted post script decides the skip
-    # marker from the agent files and ignores this field.
+    # complete is true only when both agent files were real analyses.
+    # The post step stamps the skip marker only if this combined review
+    # was written (complete, both section headings) and analysis succeeded.
     combined = {
         "result": combined_text,
         "complete": bool(_successful_analysis_text("cursor_output_malware.json"))

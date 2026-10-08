@@ -218,6 +218,27 @@ function writeAgents(directory, malware, compatibility) {
   }
 }
 
+function combinedOutput(malwareText, compatibilityText) {
+  return `${JSON.stringify(
+    {
+      result: [
+        '## Supply-Chain Malware Review',
+        '',
+        malwareText,
+        '',
+        '## Compatibility Analysis',
+        '',
+        compatibilityText,
+      ].join('\n'),
+      complete: true,
+      malware_review: { result: malwareText },
+      compatibility_review: { result: compatibilityText },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
 test('patch-id is stable across rebase and commit message, and changes with content', () => {
   const repo = initRepo();
   try {
@@ -582,10 +603,12 @@ test('comment listing failure runs the review instead of skipping it', async () 
   }
 });
 
-test('trusted complete ignores the combiner flag and requires both agent files', async () => {
+test('skip marker requires both agent files and a genuine combined review', async () => {
   const marker = `<!-- cursor-dependabot-review patch-id:${'a'.repeat(40)} -->`;
   const good = '{"result":"Verdict: benign"}';
-  const cases = [
+  const compat = '{"result":"compat ok"}';
+  const genuine = combinedOutput('Verdict: benign', 'compat ok');
+  const badAgents = [
     [undefined, undefined],
     ['', ''],
     ['Error: agent exited', 'Error: agent exited'],
@@ -594,18 +617,58 @@ test('trusted complete ignores the combiner flag and requires both agent files',
     [good, undefined],
     ['{"type":"result","duration_ms":1}', '{"type":"result","duration_ms":1}'],
   ];
-  for (const [malware, compatibility] of cases) {
+  for (const [malware, compatibility] of badAgents) {
     await withWorkspace(async (directory) => {
       writeAgents(directory, malware, compatibility);
-      fs.writeFileSync(path.join(directory, 'cursor_output.json'), '{"result":"forged","complete":true}\n');
+      fs.writeFileSync(path.join(directory, 'cursor_output.json'), genuine);
+      assert.equal(postComment.selectPostedMarker(marker), context.LEGACY_REVIEW_MARKER);
+    });
+  }
+  const rejectedCombined = [
+    null,
+    '',
+    '{"complete":false}\n',
+    '{"result":"forged","complete":true}\n',
+    '{"result":"No Cursor output generated.","complete":false}\n',
+    '{"result":"CURSOR_API_KEY is not set; analysis was skipped.","complete":false}\n',
+    `${JSON.stringify({
+      result: '## Supply-Chain Malware Review\n\nVerdict: benign\n\n## Compatibility Analysis\n\nok',
+      complete: false,
+      malware_review: { result: 'Verdict: benign' },
+      compatibility_review: { result: 'ok' },
+    })}\n`,
+  ];
+  for (const raw of rejectedCombined) {
+    await withWorkspace(async (directory) => {
+      writeAgents(directory, good, compat);
+      if (raw !== null) fs.writeFileSync(path.join(directory, 'cursor_output.json'), raw);
       assert.equal(postComment.selectPostedMarker(marker), context.LEGACY_REVIEW_MARKER);
     });
   }
   await withWorkspace(async () => {
-    writeAgents(process.cwd(), good, '{"result":"compat ok"}');
-    fs.writeFileSync('cursor_output.json', '{"complete":false}\n');
+    writeAgents(process.cwd(), good, compat);
+    fs.writeFileSync('cursor_output.json', genuine);
     assert.equal(postComment.selectPostedMarker(marker), marker);
     assert.equal(postComment.selectPostedMarker(''), context.LEGACY_REVIEW_MARKER);
+  });
+});
+
+test('a missing combined review posts the legacy marker with the fallback body', async () => {
+  const marker = `<!-- cursor-dependabot-review patch-id:${'b'.repeat(40)} -->`;
+  await withWorkspace(async (directory) => {
+    process.env.REVIEW_MARKER = marker;
+    process.env.PR_NUMBER = '42';
+    writeAgents(directory, '{"result":"Verdict: benign"}', '{"result":"compat ok"}');
+    const github = fakeGithub({ commentsFor: () => [] });
+    await postComment({
+      github,
+      context: { repo: { owner: 'acme', repo: 'widgets' } },
+      core: fakeCore(),
+    });
+    const created = github.calls.find((call) => call[0] === 'createComment');
+    assert.equal(created[1].body.startsWith(context.LEGACY_REVIEW_MARKER), true);
+    assert.equal(created[1].body.includes('patch-id:'), false);
+    assert.match(created[1].body, /No Cursor output generated/);
   });
 });
 
@@ -615,7 +678,7 @@ test('completed analysis updates an Actions bot marker and treats a human quote 
     process.env.REVIEW_MARKER = marker;
     process.env.PR_NUMBER = '42';
     writeAgents(directory, '{"result":"Verdict: benign"}', '{"result":"compat ok"}');
-    fs.writeFileSync(path.join(directory, 'cursor_output.json'), '{"result":"Verdict: benign","complete":true}\n');
+    fs.writeFileSync(path.join(directory, 'cursor_output.json'), combinedOutput('Verdict: benign', 'compat ok'));
     const quiet = fakeGithub({
       commentsFor: () => [
         {
