@@ -1,4 +1,5 @@
 .github/scripts/dependency-cursor-review-trusted-scripts.paths
+.github/scripts/__init__.py
 .github/scripts/malware_verdict_formatter.py
 .github/scripts/malware_verdict_patterns.py
 .github/scripts/malware_verdict_patterns_regex.py

@@ -65,6 +65,10 @@ check test tests: fmt lint vet staticcheck errcheck vulncheck; $(info $(M) runni
 	$Q python3 -m unittest discover -s internal/workflowscripts -p 'test_*.py'
 	$Q node --test internal/workflowscripts/*.test.js
 
+.PHONY: lint-scripts
+lint-scripts: ; $(info $(M) linting dependency-cursor-review scripts…) @ ## Ruff, shfmt, and shellcheck on synced scripts
+	$Q REQUIRE_DCR_LINT=1 python3 -m unittest discover -s internal/workflowscripts -p 'test_consumer_lint.py'
+
 .PHONY: fmt
 fmt: ; $(info $(M) running gofmt…) @ ## Run gofmt on all source files
 	$Q $(GO) fmt $(PKGS)

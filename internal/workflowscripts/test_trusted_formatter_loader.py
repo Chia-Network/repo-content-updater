@@ -200,6 +200,20 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             self.assertTrue(result.startswith("**Verdict: benign**"))
             self.assertNotIn("hijacked", result)
 
+    def test_scripts_dir_init_py_does_not_change_formatter_output(self) -> None:
+        """INP001 package marker must not affect path-based loader execution."""
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts = Path(tmp) / "scripts"
+            scripts.mkdir()
+            _copy_formatter_bundle(scripts)
+            (scripts / "__init__.py").write_text(
+                (_SCRIPTS / "github_scripts_init.py").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            format_fn = _load_format_via_cold_start(scripts)
+            result = format_fn("Verdict: benign\n\nDetails.")
+            self.assertTrue(result.startswith("**Verdict: benign**"))
+
 
 if __name__ == "__main__":
     unittest.main()

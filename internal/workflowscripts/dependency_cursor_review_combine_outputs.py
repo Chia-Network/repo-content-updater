@@ -74,9 +74,7 @@ def main() -> None:
     ns = _host_namespace()
     resolve_loader_bundle = ns["resolve_loader_bundle"]
     loader, script_dir = resolve_loader_bundle(_SCRIPT_CANDIDATES)
-    format_malware_review_verdict = loader.find_and_load_format_malware_review_verdict(
-        script_dir
-    )
+    format_malware_review_verdict = loader.find_and_load_format_malware_review_verdict(script_dir)
 
     malware_payload = _load_any("cursor_output_malware.json")
     compatibility_payload = _load_any("cursor_output_compatibility.json")
@@ -84,10 +82,7 @@ def main() -> None:
     compatibility_text = _extract_text(compatibility_payload)
 
     combined_text = (
-        "## Supply-Chain Malware Review\n\n"
-        f"{malware_text}\n\n"
-        "## Compatibility Analysis\n\n"
-        f"{compatibility_text}"
+        f"## Supply-Chain Malware Review\n\n{malware_text}\n\n## Compatibility Analysis\n\n{compatibility_text}"
     )
     # complete is display-only. The trusted post script decides the skip
     # marker from the agent files and ignores this field.
@@ -98,9 +93,7 @@ def main() -> None:
         "malware_review": malware_payload,
         "compatibility_review": compatibility_payload,
     }
-    Path("cursor_output.json").write_text(
-        json.dumps(combined, indent=2), encoding="utf-8"
-    )
+    Path("cursor_output.json").write_text(json.dumps(combined, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":

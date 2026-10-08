@@ -26,6 +26,7 @@ groups:
   - name: dependency-cursor-review
     templates:
       - dependency-cursor-review
+      - github-scripts-init
       - malware-verdict-formatter
       - malware-verdict-patterns
       - malware-verdict-patterns-regex
@@ -67,6 +68,7 @@ files:
     aliases:
       - dependabot-cursor-review
     companion_files:
+      - github-scripts-init
       - malware-verdict-formatter
       - malware-verdict-patterns
       - malware-verdict-patterns-regex
@@ -102,6 +104,10 @@ files:
   - name: trusted-git-path-checkout-action
     template_name: trusted-git-path-checkout-action.yml
     repo_path: .github/actions/trusted-git-path-checkout/action.yml
+
+  - name: github-scripts-init
+    template_name: github-scripts-init.py
+    repo_path: .github/scripts/__init__.py
 
   - name: malware-verdict-formatter
     template_name: malware-verdict-formatter.py
