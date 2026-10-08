@@ -30,6 +30,12 @@ _SYNC_EMIT_ONLY_TEMPLATES: frozenset[str] = frozenset(
     {"dependency-cursor-review-trusted-scripts.paths"}
 )
 
+# `.github/scripts/__init__.py` cannot live in this directory: unittest would
+# treat workflowscripts as a package. Sync maps the template to this canonical file.
+_CANONICAL_FILENAME_BY_TEMPLATE: dict[str, str] = {
+    "github-scripts-init.py": "github_scripts_init.py",
+}
+
 _TRUSTED_MANIFEST_ONLY_REPO_PATHS: tuple[str, ...] = (
     ".github/scripts/dependency-cursor-review-trusted-scripts.paths",
 )
@@ -86,7 +92,9 @@ def consumer_sync_canonical_to_template(
             continue
         if template_name in _SYNC_EMIT_ONLY_TEMPLATES:
             continue
-        canonical = PurePosixPath(repo_path).name
+        canonical = _CANONICAL_FILENAME_BY_TEMPLATE.get(
+            template_name, PurePosixPath(repo_path).name
+        )
         pairs.append((canonical, template_name))
     return tuple(pairs)
 

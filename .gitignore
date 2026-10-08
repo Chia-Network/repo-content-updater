@@ -19,3 +19,4 @@ templates/isolated-module-exec.py
 templates/dependency-cursor-review-*.py
 templates/dependency-cursor-review-*.js
 templates/upstream-malware-scan*.sh
+templates/github-scripts-init.py

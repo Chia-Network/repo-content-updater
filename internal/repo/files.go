@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -18,6 +19,30 @@ import (
 type repoFilesEntry struct {
 	files []string
 	props CustomProperties
+}
+
+// FileModeForContent is 0755 for shebang scripts so consumer linters that
+// require an executable bit (ruff EXE001) pass. Other managed files stay 0644.
+func FileModeForContent(content []byte) os.FileMode {
+	if bytes.HasPrefix(content, []byte("#!")) {
+		return 0o755
+	}
+	return 0o644
+}
+
+// writeManagedContent creates parent directories and writes content.
+// os.WriteFile leaves the mode of an existing file unchanged, so Chmod applies
+// the shebang bit on updates as well as creates.
+func writeManagedContent(repoPath string, content []byte) error {
+	dir := filepath.Dir(repoPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+	mode := FileModeForContent(content)
+	if err := os.WriteFile(repoPath, content, mode); err != nil {
+		return err
+	}
+	return os.Chmod(repoPath, mode)
 }
 
 // ManagedFiles updates all managed files in the org with current versions
@@ -178,15 +203,8 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 			return err
 		}
 
-		// Ensure that the directory exists
 		repoPath := fmt.Sprintf("%s/%s", repoDir(repoName), fileinfo.RepoPath)
-		dir := filepath.Dir(repoPath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create directory: %w", err)
-		}
-
-		err = os.WriteFile(repoPath, content, 0644)
-		if err != nil {
+		if err := writeManagedContent(repoPath, content); err != nil {
 			return err
 		}
 
