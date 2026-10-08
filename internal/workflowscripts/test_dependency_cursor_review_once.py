@@ -62,6 +62,17 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
             _TARGET_PR.read_text(encoding="utf-8"),
         )
 
+    def test_post_step_requires_successful_analysis(self) -> None:
+        workflow = _WORKFLOW.read_text(encoding="utf-8")
+        analysis = workflow.split("- name: Run Cursor analysis\n", 1)[1].split("- name:", 1)[0]
+        post = workflow.split("- name: Post or update PR comment\n", 1)[1]
+        self.assertIn("id: cursor_analysis\n", analysis)
+        self.assertIn(
+            "steps.cursor_analysis.outcome == 'success' && "
+            "steps.target_pr.outputs.already_reviewed != 'true'",
+            post,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
