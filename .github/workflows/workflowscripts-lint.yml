@@ -1,0 +1,48 @@
+name: Workflow script lint
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff==0.16.8
+
+      - name: Install shfmt
+        run: |
+          curl -sSL -o /tmp/shfmt "https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_linux_amd64"
+          chmod +x /tmp/shfmt
+          sudo mv /tmp/shfmt /usr/local/bin/shfmt
+
+      - name: Install ShellCheck 0.10.0 and 0.11.0
+        run: |
+          install_shellcheck() {
+            version="$1"
+            dest="$2"
+            curl -sSL -o /tmp/shellcheck.tar.xz \
+              "https://github.com/koalaman/shellcheck/releases/download/v${version}/shellcheck-v${version}.linux.x86_64.tar.xz"
+            tar -C /tmp -xJf /tmp/shellcheck.tar.xz
+            sudo mv "/tmp/shellcheck-v${version}/shellcheck" "$dest"
+            sudo chmod +x "$dest"
+          }
+          install_shellcheck 0.10.0 /usr/local/bin/shellcheck
+          install_shellcheck 0.11.0 /usr/local/bin/shellcheck-0.11
+
+      - name: Lint dependency-cursor-review templates
+        env:
+          REQUIRE_DCR_LINT: "1"
+        run: python3 -m unittest discover -s internal/workflowscripts -p 'test_consumer_lint.py'

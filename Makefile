@@ -33,18 +33,25 @@ build: $(BIN) ; $(info $(M) building executable…) @ ## Build program binary
 $(BIN):
 	@mkdir -p $@
 $(BIN)/%: | $(BIN) ; $(info $(M) building $(PACKAGE)…)
-	$Q env GOBIN=$(BIN) $(GO) install $(PACKAGE) \
+	$Q env GOBIN=$(BIN) $(if $(TOOLCHAIN),GOTOOLCHAIN=$(TOOLCHAIN)) $(GO) install $(PACKAGE) \
 		|| ret=$$?; \
 	   exit $$ret
+
+# golang:1 is Go 1.27.2, whose export data is version 5. staticcheck v0.8.1
+# (still @latest) and errcheck v1.20.0 only decode through version 4, so they
+# must load packages with the toolchain declared in go.mod.
+ANALYZER_GO = go1.26.8
 
 GOLINT = $(BIN)/golint
 $(BIN)/golint: PACKAGE=golang.org/x/lint/golint@latest
 
 STATICCHECK = $(BIN)/staticcheck
-$(BIN)/staticcheck: PACKAGE=honnef.co/go/tools/cmd/staticcheck@latest
+$(BIN)/staticcheck: PACKAGE=honnef.co/go/tools/cmd/staticcheck@v0.8.1
+$(BIN)/staticcheck: TOOLCHAIN=$(ANALYZER_GO)
 
 ERRCHECK = $(BIN)/errcheck
-$(BIN)/errcheck: PACKAGE=github.com/kisielk/errcheck@latest
+$(BIN)/errcheck: PACKAGE=github.com/kisielk/errcheck@v1.20.0
+$(BIN)/errcheck: TOOLCHAIN=$(ANALYZER_GO)
 
 VULNCHECK = $(BIN)/govulncheck
 $(BIN)/govulncheck: PACKAGE=golang.org/x/vuln/cmd/govulncheck@latest
@@ -65,6 +72,10 @@ check test tests: fmt lint vet staticcheck errcheck vulncheck; $(info $(M) runni
 	$Q python3 -m unittest discover -s internal/workflowscripts -p 'test_*.py'
 	$Q node --test internal/workflowscripts/*.test.js
 
+.PHONY: lint-scripts
+lint-scripts: ; $(info $(M) linting dependency-cursor-review scripts…) @ ## Ruff, shfmt, and shellcheck on synced scripts
+	$Q REQUIRE_DCR_LINT=1 python3 -m unittest discover -s internal/workflowscripts -p 'test_consumer_lint.py'
+
 .PHONY: fmt
 fmt: ; $(info $(M) running gofmt…) @ ## Run gofmt on all source files
 	$Q $(GO) fmt $(PKGS)
@@ -82,11 +93,11 @@ vet: ; $(info $(M) running go vet…) @ ## Run go vet on all source files
 
 .PHONY: staticcheck
 staticcheck: | $(STATICCHECK) ; $(info $(M) running staticcheck…) @
-	$Q $(STATICCHECK) $(PKGS)
+	$Q GOTOOLCHAIN=$(ANALYZER_GO) $(STATICCHECK) $(PKGS)
 
 .PHONY: errcheck
 errcheck: | $(ERRCHECK) ; $(info $(M) running errcheck…) @
-	$Q $(ERRCHECK) $(PKGS)
+	$Q GOTOOLCHAIN=$(ANALYZER_GO) $(ERRCHECK) $(PKGS)
 
 .PHONY: vulncheck
 vulncheck: | $(VULNCHECK) ; $(info $(M) running vulncheck…) @

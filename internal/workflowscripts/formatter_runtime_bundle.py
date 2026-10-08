@@ -32,6 +32,4 @@ FORMATTER_RUNTIME_FILENAMES: tuple[str, ...] = (
 )
 
 # Combine workflow entry copies runtime bundle + this script (not cold-start preload).
-DCR_COMBINE_EXTRA_FILENAMES: tuple[str, ...] = (
-    "dependency_cursor_review_combine_outputs.py",
-)
+DCR_COMBINE_EXTRA_FILENAMES: tuple[str, ...] = ("dependency_cursor_review_combine_outputs.py",)
