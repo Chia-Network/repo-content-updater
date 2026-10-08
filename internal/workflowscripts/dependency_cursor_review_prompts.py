@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Build Cursor agent prompt files for dependency-cursor-review (malware + compatibility)."""
 
 from __future__ import annotations
