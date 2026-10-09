@@ -86,6 +86,42 @@ class CombineCompleteTest(unittest.TestCase):
         )
         self.assertIs(written["complete"], True)
 
+    def test_not_scanned_report_forces_inconclusive_over_benign_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scripts = root / ".github" / "scripts"
+            scripts.mkdir(parents=True)
+            for name in _BUNDLE_STEMS:
+                shutil.copy2(_SCRIPTS / name, scripts / name)
+            (root / "malware_scan_report.json").write_text(
+                json.dumps(
+                    {
+                        "status": "not_scanned",
+                        "scan_conclusive": False,
+                        "verdict_token_in_tree": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "cursor_output_malware.json").write_text(
+                '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs."}',
+                encoding="utf-8",
+            )
+            (root / "cursor_output_compatibility.json").write_text(
+                '{"result": "compat ok"}',
+                encoding="utf-8",
+            )
+            proc = subprocess.run(
+                [sys.executable, "-I", str(_COMBINE)],
+                cwd=root,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            written = json.loads((root / "cursor_output.json").read_text(encoding="utf-8"))
+            self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
+            self.assertNotIn("**Verdict: benign**", written["result"])
+
 
 if __name__ == "__main__":
     unittest.main()

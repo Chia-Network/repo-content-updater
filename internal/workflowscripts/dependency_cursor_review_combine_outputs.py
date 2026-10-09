@@ -99,6 +99,44 @@ def _extract_text(payload) -> str:
         return str(payload)
 
 
+_INCONCLUSIVE_HEADER = "**Verdict: inconclusive (needs human review)**"
+_KNOWN_VERDICT_HEADERS = (
+    "**Verdict: benign**",
+    "**Verdict: malicious**",
+    _INCONCLUSIVE_HEADER,
+)
+
+
+def _scan_forces_inconclusive(path: Path | None = None) -> bool:
+    """Missing, unscanned, or tree-spoofed scanner reports cannot publish a verdict."""
+    report_path = path or Path("malware_scan_report.json")
+    if not report_path.is_file():
+        return True
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception:
+        return True
+    if not isinstance(report, dict):
+        return True
+    if report.get("status") == "not_scanned":
+        return True
+    if report.get("scan_conclusive") is not True:
+        return True
+    if report.get("verdict_token_in_tree") is True:
+        return True
+    return False
+
+
+def _force_inconclusive_header(text: str) -> str:
+    body = text
+    for header in _KNOWN_VERDICT_HEADERS:
+        prefix = header + "\n\n"
+        if body.startswith(prefix):
+            body = body[len(prefix) :]
+            break
+    return f"{_INCONCLUSIVE_HEADER}\n\n{body}"
+
+
 def main() -> None:
     _drop_pr_head_scripts_from_sys_path()
     ns = _host_namespace()
@@ -109,6 +147,8 @@ def main() -> None:
     malware_payload = _load_any("cursor_output_malware.json")
     compatibility_payload = _load_any("cursor_output_compatibility.json")
     malware_text = format_malware_review_verdict(_extract_text(malware_payload))
+    if _scan_forces_inconclusive():
+        malware_text = _force_inconclusive_header(malware_text)
     compatibility_text = _extract_text(compatibility_payload)
 
     combined_text = (

@@ -124,6 +124,10 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             trusted.mkdir()
             for name in _BUNDLE_STEMS:
                 shutil.copy2(_SCRIPTS / name, trusted / name)
+            (root / "malware_scan_report.json").write_text(
+                '{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false}',
+                encoding="utf-8",
+            )
             (root / "cursor_output_malware.json").write_text(
                 '{"result":"MALWARE_REVIEW_VERDICT: benign\\n\\nOK"}',
                 encoding="utf-8",

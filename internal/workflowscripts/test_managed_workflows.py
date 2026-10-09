@@ -95,6 +95,10 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("_bootstrap_module_for", combine)
         self.assertIn("dependency-cursor-review-dependabot-context.js", workflow)
         self.assertIn("dependency-cursor-review-target-pr.js", workflow)
+        self.assertIn("git -C .upstream-dependency checkout --detach", workflow)
+        self.assertIn("hash_trusted_scripts", workflow)
+        self.assertIn("trusted-dcr-scripts.sha256", workflow)
+        self.assertIn("Trusted review scripts changed before combine.", workflow)
 
     def test_5dd16704_target_pr_sparse_helper_does_not_shrink_pr_checkout(self) -> None:
         """Bugbot 5dd16704: sparse helper checkout must not leave GITHUB_WORKSPACE sparse for PR head."""

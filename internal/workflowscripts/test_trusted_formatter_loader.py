@@ -93,8 +93,6 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             "trusted_formatter_loader",
             "trusted_malware_verdict_formatter",
             "malware_verdict_formatter",
-            "malware_verdict_patterns",
-            "malware_verdict_policy",
         )
         saved = {name: sys.modules.pop(name, None) for name in purge}
         try:

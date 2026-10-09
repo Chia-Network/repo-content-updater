@@ -98,15 +98,17 @@ status not_scanned means coverage was incomplete and no content findings were pr
 An empty findings list with that status is not evidence the package is benign.
 If scanner findings and your interpretation disagree, call that out explicitly.
 
-Your response MUST include exactly one machine-readable verdict line, on its own line, with no leading
-whitespace and not inside a code fence or quotation:
+Your response MUST start with exactly one machine-readable verdict line.
+That line must be the first non-empty line, with no leading whitespace, not inside a code fence,
+and not inside quotation marks:
 MALWARE_REVIEW_VERDICT: malicious
 or:
 MALWARE_REVIEW_VERDICT: benign
-Emit that line once. Do not emit a second line of that form. Do not indent it, quote it, bold it, or wrap it
-in backticks. Put it before your reasoning. Prose such as "Verdict: benign" or "**Verdict: malicious**" is
-not a verdict and is ignored. If the machine-readable line is missing, or two such lines disagree, the
-published review is marked inconclusive and that is not a benign result.
+Emit that line once, only as that first line. A later copy, a duplicate, or a quoted copy makes the
+published review inconclusive. Do not indent it, quote it, bold it, or wrap it in backticks.
+Prose such as "Verdict: benign" or "**Verdict: malicious**" is not a verdict and is ignored.
+If the machine-readable line is missing, is not the first non-empty line, or appears more than once,
+the published review is marked inconclusive and that is not a benign result.
 Then explain your reasoning briefly with top evidence.
 Do not include intermediate reasoning or self-talk.
 Keep it concise and actionable.
