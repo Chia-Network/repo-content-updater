@@ -4,14 +4,44 @@ from __future__ import annotations
 
 import json
 import runpy
+import sys
 from pathlib import Path
 
 _INSTALL = Path(__file__).resolve().parent
+# The running script's directory is the trusted checkout (runner temp). Prefer it
+# over the PR workspace .github/scripts so a PR-head formatter cannot win.
 _SCRIPT_CANDIDATES = (
+    _INSTALL,
     Path(".github/scripts"),
     Path("internal/workflowscripts"),
 )
 _COLD_START_PATH = _INSTALL / "trusted_formatter_loader_cold_start.py"
+
+
+def _drop_pr_head_scripts_from_sys_path() -> None:
+    """Keep the PR checkout's .github/scripts off sys.path.
+
+    Trusted modules load by file path from this script's directory. A PR-head
+    directory on sys.path can shadow stdlib (dataclasses, json) in the step
+    that has CURSOR_API_KEY.
+    """
+    workspace_scripts = (Path.cwd() / ".github" / "scripts").resolve()
+    if workspace_scripts == _INSTALL.resolve():
+        return
+    kept: list[str] = []
+    for entry in sys.path:
+        if not entry:
+            kept.append(entry)
+            continue
+        try:
+            resolved = Path(entry).resolve()
+        except OSError:
+            kept.append(entry)
+            continue
+        if resolved == workspace_scripts:
+            continue
+        kept.append(entry)
+    sys.path[:] = kept
 
 
 def _host_namespace() -> dict[str, object]:
@@ -70,6 +100,7 @@ def _extract_text(payload) -> str:
 
 
 def main() -> None:
+    _drop_pr_head_scripts_from_sys_path()
     ns = _host_namespace()
     resolve_loader_bundle = ns["resolve_loader_bundle"]
     loader, script_dir = resolve_loader_bundle(_SCRIPT_CANDIDATES)

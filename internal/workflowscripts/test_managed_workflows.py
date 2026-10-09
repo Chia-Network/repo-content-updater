@@ -50,6 +50,8 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             ".github/scripts/dependency-cursor-review-trusted-scripts.paths",
             ensure_bundle,
         )
+        self.assertIn("dest:", ensure_bundle)
+        self.assertIn("trusted-dcr-scripts", ensure_bundle)
         self.assertNotIn("paths: |", ensure_bundle)
         self.assertLess(
             section.index("Install trusted git path checkout action definition"),
@@ -69,10 +71,15 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
     def test_malware_formatter_imported_from_trusted_companion_not_inline(self) -> None:
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
         self.assertIn(
-            "python3 -I .github/scripts/dependency_cursor_review_combine_outputs.py",
+            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"',
             workflow,
         )
-        self.assertIn("bash .github/scripts/upstream_malware_scan.sh", workflow)
+        self.assertIn(
+            'bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_malware_scan.sh"',
+            workflow,
+        )
+        self.assertNotIn("python3 -I .github/scripts/", workflow)
+        self.assertNotIn("bash .github/scripts/upstream_malware_scan.sh", workflow)
         combine = (
             _REPO_ROOT
             / "internal"

@@ -49,7 +49,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
 
     def test_find_and_load_internal_canonical_formatter(self) -> None:
         format_fn = _load_format_via_cold_start(_SCRIPTS)
-        result = format_fn("Verdict: benign\n\nDetails.")
+        result = format_fn("MALWARE_REVIEW_VERDICT: benign\n\nDetails.")
         self.assertTrue(result.startswith("**Verdict: benign**"))
 
     def test_trusted_module_name_is_fixed(self) -> None:
@@ -75,7 +75,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                 format_fn = _load_format_via_cold_start(scripts, trusted)
             finally:
                 sys.path[:] = [p for p in sys.path if p != script_dir]
-            result = format_fn("Verdict: benign\n\nDetails.")
+            result = format_fn("MALWARE_REVIEW_VERDICT: benign\n\nDetails.")
             self.assertTrue(result.startswith("**Verdict: benign**"))
 
     def test_f752f2d5_isolation_purge_uses_sys_modules_name_not_filename(self) -> None:
@@ -99,7 +99,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
         saved = {name: sys.modules.pop(name, None) for name in purge}
         try:
             format_fn = _load_format_via_cold_start(_SCRIPTS, _CANONICAL)
-            result = format_fn("Verdict: benign\n\nDetails.")
+            result = format_fn("MALWARE_REVIEW_VERDICT: benign\n\nDetails.")
             self.assertTrue(result.startswith("**Verdict: benign**"))
         finally:
             for name, module in saved.items():
@@ -118,7 +118,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
         saved = {name: sys.modules.pop(name, None) for name in purge}
         try:
             format_fn = _load_format_via_cold_start(_SCRIPTS)
-            result = format_fn("Verdict: benign\n\nDetails.")
+            result = format_fn("MALWARE_REVIEW_VERDICT: benign\n\nDetails.")
             self.assertTrue(result.startswith("**Verdict: benign**"))
         finally:
             for name, module in saved.items():
@@ -196,7 +196,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
             trusted.write_text(_CANONICAL.read_text(encoding="utf-8"), encoding="utf-8")
             _copy_formatter_bundle(scripts)
             format_fn = _load_format_via_cold_start(scripts, trusted)
-            result = format_fn("Verdict: benign\n\nDetails.")
+            result = format_fn("MALWARE_REVIEW_VERDICT: benign\n\nDetails.")
             self.assertTrue(result.startswith("**Verdict: benign**"))
             self.assertNotIn("hijacked", result)
 
@@ -211,7 +211,7 @@ class TrustedFormatterLoaderTest(unittest.TestCase):
                 encoding="utf-8",
             )
             format_fn = _load_format_via_cold_start(scripts)
-            result = format_fn("Verdict: benign\n\nDetails.")
+            result = format_fn("MALWARE_REVIEW_VERDICT: benign\n\nDetails.")
             self.assertTrue(result.startswith("**Verdict: benign**"))
 
 

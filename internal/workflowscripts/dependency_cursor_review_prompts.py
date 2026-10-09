@@ -89,15 +89,20 @@ poetry.lock, Pipfile.lock, requirements.txt, requirements-dev.txt, requirements/
 - Flag new preinstall/postinstall scripts that were not present previously
 - Treat .github/workflows/ modifications as highly suspicious in a pure dependency update PR
 
-Use the provided malware scanner report as hard evidence and incorporate it into your conclusion.
+Use the malware scanner report as evidence only when status is clean, warn, or fail and scan_conclusive is true.
+If status is not_scanned, or scan_conclusive is false, the upgrade was not scanned. That report is inconclusive.
+It is not evidence the package is benign, even when every findings list is empty.
 If scanner findings and your interpretation disagree, call that out explicitly.
 
-Your response MUST begin with exactly one standalone markdown line (nothing before it):
-  **Verdict: malicious**
+Your response MUST include exactly one machine-readable verdict line, on its own line, with no leading
+whitespace and not inside a code fence or quotation:
+MALWARE_REVIEW_VERDICT: malicious
 or:
-  **Verdict: benign**
-That verdict line must be bold, on its own line, followed by a blank line, then your reasoning.
-Do not embed the verdict in a sentence, append it to a paragraph, or place it mid-text.
+MALWARE_REVIEW_VERDICT: benign
+Emit that line once. Do not emit a second line of that form. Do not indent it, quote it, bold it, or wrap it
+in backticks. Put it before your reasoning. Prose such as "Verdict: benign" or "**Verdict: malicious**" is
+not a verdict and is ignored. If the machine-readable line is missing, or two such lines disagree, the
+published review is marked inconclusive and that is not a benign result.
 Then explain your reasoning briefly with top evidence.
 Do not include intermediate reasoning or self-talk.
 Keep it concise and actionable.
