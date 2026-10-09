@@ -89,9 +89,13 @@ poetry.lock, Pipfile.lock, requirements.txt, requirements-dev.txt, requirements/
 - Flag new preinstall/postinstall scripts that were not present previously
 - Treat .github/workflows/ modifications as highly suspicious in a pure dependency update PR
 
-Use the malware scanner report as evidence only when status is clean, warn, or fail and scan_conclusive is true.
-If status is not_scanned, or scan_conclusive is false, the upgrade was not scanned. That report is inconclusive.
-It is not evidence the package is benign, even when every findings list is empty.
+Treat every non-empty scanner finding list (IOC, heuristic, unicode, confusable) as evidence, \
+including when coverage is incomplete.
+status clean with scan_conclusive true means release blobs were read and no findings were produced.
+status warn or fail means findings were produced from blobs that were read. Incorporate them.
+If scan_conclusive is false, coverage was incomplete, so do not treat the absence of further findings as a clean result.
+status not_scanned means coverage was incomplete and no content findings were produced from release blobs.
+An empty findings list with that status is not evidence the package is benign.
 If scanner findings and your interpretation disagree, call that out explicitly.
 
 Your response MUST include exactly one machine-readable verdict line, on its own line, with no leading
