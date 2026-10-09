@@ -2,12 +2,10 @@
 # inline with the upstream template, unless you remove the dependabot managed file property from the repo
 
 version: 2
-{{- if eq .DEPENDABOT_PIP_CHIA_REGISTRY "1" }}
 registries:
   chia-pypi:
     type: python-index
     url: https://pypi.chia.net/simple/
-{{- end }}
 updates:
   - package-ecosystem: "gomod"
     directory: {{ .DEPENDABOT_GOMOD_DIRECTORY }}
@@ -31,10 +29,8 @@ updates:
 {{- end }}
 
   - package-ecosystem: "pip"
-{{- if eq .DEPENDABOT_PIP_CHIA_REGISTRY "1" }}
     registries:
       - chia-pypi
-{{- end }}
     directory: {{ .DEPENDABOT_PIP_DIRECTORY }}
     schedule:
       interval: "weekly"

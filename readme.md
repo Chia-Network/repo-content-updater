@@ -78,17 +78,9 @@ If you need to override any of the default settings on a per-repo basis, you can
 
 ### Chia Python package index
 
-Repositories using `https://pypi.chia.net/simple/` can opt into Dependabot access
-by adding this override to their `.repo-content-updater.yml` or
-`.repo-content-updater.yaml`:
-
-```yaml
-var_overrides:
-  DEPENDABOT_PIP_CHIA_REGISTRY: "1"
-```
-
-This declares the anonymous `chia-pypi` Python registry and enables it for pip
-updates, while retaining public PyPI access. It is disabled by default.
-Dependabot requires registries to be declared in its own configuration to allow
-network access, even when they do not require authentication. See
+The shared Dependabot template declares the anonymous `chia-pypi` Python
+registry at `https://pypi.chia.net/simple/` and enables it for pip updates.
+Public PyPI remains available; no credentials or per-repository override are
+required. Dependabot requires registries to be declared in its own configuration
+to allow network access, even when they do not require authentication. See
 [GitHub's registry access documentation](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/manage-your-dependency-security/configure-access-to-private-registries).
