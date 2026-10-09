@@ -22,5 +22,8 @@ jobs:
         with:
           node-version: lts/*
 
+      - name: Install malware scan tools
+        run: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y jq ripgrep uuid-runtime
+
       - name: Test
         run: make test

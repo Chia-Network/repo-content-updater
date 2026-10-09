@@ -14,22 +14,26 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPTS = Path(__file__).resolve().parent
 
 _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
-    ("malware_verdict_policy.py", 25),
-    ("malware_verdict_policy_context.py", 330),
-    ("malware_verdict_policy_predicates.py", 85),
     ("scripts_dir_disk_exec.py", 65),
     ("scripts_dir_path_scrub.py", 130),
-    ("malware_verdict_patterns_regex.py", 200),
-    ("malware_verdict_patterns_structure.py", 380),
-    ("malware_verdict_policy_rules_select.py", 370),
-    ("malware_verdict_policy_rules_strip.py", 360),
     ("formatter_runtime_bundle.py", 40),
     ("formatter_bundle_inventory.py", 220),
-    ("malware_verdict_policy_analysis.py", 85),
-    ("malware_verdict_patterns.py", 145),
-    ("malware_verdict_policy_view.py", 85),
+    ("malware_verdict_formatter.py", 80),
     ("isolated_module_exec.py", 100),
     ("trusted_formatter_loader_cold_start.py", 78),
+)
+
+_REMOVED_VERDICT_MODULES: tuple[str, ...] = (
+    "malware_verdict_patterns.py",
+    "malware_verdict_patterns_regex.py",
+    "malware_verdict_patterns_structure.py",
+    "malware_verdict_policy.py",
+    "malware_verdict_policy_analysis.py",
+    "malware_verdict_policy_context.py",
+    "malware_verdict_policy_predicates.py",
+    "malware_verdict_policy_view.py",
+    "malware_verdict_policy_rules_select.py",
+    "malware_verdict_policy_rules_strip.py",
 )
 
 
@@ -82,45 +86,18 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertFalse((_SCRIPTS / "malware_verdict_policy_lexical.py").exists())
 
     def test_policy_split_semantics_and_module_size_caps(self) -> None:
-        deploy = (_SCRIPTS / "malware_verdict_policy.py").read_text(encoding="utf-8")
-        analysis = (_SCRIPTS / "malware_verdict_policy_analysis.py").read_text(
-            encoding="utf-8"
-        )
-        view = (_SCRIPTS / "malware_verdict_policy_view.py").read_text(encoding="utf-8")
-        context = (_SCRIPTS / "malware_verdict_policy_context.py").read_text(
-            encoding="utf-8"
-        )
-        predicates = (_SCRIPTS / "malware_verdict_policy_predicates.py").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("format_verdict_text", deploy)
-        self.assertNotIn(
-            "from malware_verdict_policy_analysis import",
-            deploy.split("def format_verdict_text")[0],
-        )
-        self.assertIn("class VerdictAnalysis", analysis)
-        self.assertIn("pipeline_rule_catalog", analysis)
-        self.assertIn("collect_body_strip_spans", analysis)
-        self.assertNotIn("_BODY_STRIP_SPAN", analysis)
-        self.assertIn("class FormatterPolicyView", view)
-        self.assertIn("tuple[VerdictMention", view)
-        self.assertIn("build_official_selection_context", context)
-        self.assertIn("OfficialSelectionContext", context)
-        self.assertNotIn("build_official_selection_context", view.split("__all__")[1])
-        self.assertIn("_line_start_official_from_row_flags", context)
+        for filename in _REMOVED_VERDICT_MODULES:
+            self.assertFalse((_SCRIPTS / filename).exists(), filename)
+        formatter = (_SCRIPTS / "malware_verdict_formatter.py").read_text(encoding="utf-8")
+        self.assertIn("def format_malware_review_verdict", formatter)
+        self.assertNotIn("VERDICT_RE", formatter)
+        self.assertNotIn("VerdictAnalysis", formatter)
         self.assertFalse(
             (_SCRIPTS / "malware_verdict_policy_official_selection_rows.py").exists()
         )
         self.assertFalse(
             (_SCRIPTS / "malware_verdict_policy_rules_select_precedence.py").exists()
         )
-        self.assertIn("mention_loses_to_official", predicates)
-        self.assertNotIn("mention_loses_to_official", context)
-        self.assertNotIn("from malware_verdict_classification import", deploy)
-        self.assertTrue((_SCRIPTS / "malware_verdict_policy_rules_select.py").is_file())
-        self.assertTrue((_SCRIPTS / "malware_verdict_policy_rules_strip.py").is_file())
-        self.assertTrue((_SCRIPTS / "malware_verdict_patterns_regex.py").is_file())
-        self.assertTrue((_SCRIPTS / "malware_verdict_patterns_structure.py").is_file())
         scrub_src = (_SCRIPTS / "scripts_dir_path_scrub.py").read_text()
         iso_src = (_SCRIPTS / "isolated_module_exec.py").read_text(encoding="utf-8")
         self.assertIn("_exec_with_path_filter", scrub_src)
@@ -167,7 +144,7 @@ class ThermoJudo8Test(unittest.TestCase):
         for mirror_name in (
             "scripts-dir-path-scrub.py",
             "formatter-runtime-bundle.py",
-            "malware-verdict-policy-context.py",
+            "malware-verdict-formatter.py",
             "github-scripts-init.py",
         ):
             mirror_path = _REPO_ROOT / "templates" / mirror_name
@@ -193,10 +170,10 @@ class ThermoJudo8Test(unittest.TestCase):
         manifest_text = manifest.read_text(encoding="utf-8")
         self.assertIn(".github/scripts/__init__.py", manifest_text)
         self.assertIn(".github/scripts/malware_verdict_formatter.py", manifest_text)
-        self.assertIn(".github/scripts/malware_verdict_policy_analysis.py", manifest_text)
-        self.assertIn(".github/scripts/malware_verdict_policy_predicates.py", manifest_text)
-        self.assertIn(".github/scripts/malware_verdict_policy_rules_select.py", manifest_text)
-        self.assertIn(".github/scripts/malware_verdict_patterns_regex.py", manifest_text)
+        self.assertNotIn(".github/scripts/malware_verdict_policy_analysis.py", manifest_text)
+        self.assertNotIn(".github/scripts/malware_verdict_policy_predicates.py", manifest_text)
+        self.assertNotIn(".github/scripts/malware_verdict_policy_rules_select.py", manifest_text)
+        self.assertNotIn(".github/scripts/malware_verdict_patterns_regex.py", manifest_text)
         self.assertNotIn(".github/scripts/malware_verdict_policy_rules.py", manifest_text)
         self.assertNotIn(".github/scripts/malware_verdict_policy_selection.py", manifest_text)
         self.assertNotIn(".github/scripts/script_dir_isolated_load.py", manifest_text)

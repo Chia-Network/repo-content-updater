@@ -42,7 +42,7 @@ class CompanionColdStartTest(unittest.TestCase):
                     )
                     loader, _ = ns["resolve_loader_bundle"]((scripts,))
                     fn = loader.find_and_load_format_malware_review_verdict(scripts)
-                    out = fn("Verdict: benign\n\nOK")
+                    out = fn("MALWARE_REVIEW_VERDICT: benign\n\nOK")
                     self.assertTrue(out.startswith("**Verdict: benign**"))
                 finally:
                     sys.path[:] = [p for p in sys.path if p != script_dir]

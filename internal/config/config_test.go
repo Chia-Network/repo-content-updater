@@ -38,7 +38,7 @@ func TestConfigIsValid(t *testing.T) {
 	dcrGroup, err := cfg.ExpandGroup("dependency-cursor-review")
 	assert.Nil(t, err)
 	for _, required := range []string{
-		"malware-verdict-policy",
+		"malware-verdict-formatter",
 		"upstream-malware-scan",
 		"dependency-cursor-review-prompts",
 		"dependency-cursor-review-combine-outputs",
@@ -46,16 +46,27 @@ func TestConfigIsValid(t *testing.T) {
 		assert.Contains(t, dcrGroup, required)
 	}
 
-	// Bugbot d8695a0d: group must ship extracted companions, not formatter bundle alone.
+	// Extracted companions must ship with the group; the prose policy stack is gone.
 	for _, required := range []string{
 		"upstream-malware-scan-lib",
+		"upstream-malware-scan-findings",
 		"dependency-cursor-review-dependabot-context",
-		"malware-verdict-policy-rules-select",
-		"malware-verdict-policy-predicates",
+		"trusted-formatter-loader",
 		"isolated-module-exec",
-		"malware-verdict-policy-analysis",
+		"formatter-runtime-bundle",
 	} {
 		assert.Contains(t, dcrGroup, required)
+	}
+	for _, removed := range []string{
+		"malware-verdict-policy",
+		"malware-verdict-policy-rules-select",
+		"malware-verdict-policy-predicates",
+		"malware-verdict-policy-analysis",
+		"malware-verdict-patterns",
+		"malware-verdict-patterns-regex",
+		"malware-verdict-patterns-structure",
+	} {
+		assert.NotContains(t, dcrGroup, removed)
 	}
 
 	expected := dependencyCursorReviewCompanionFiles(t)
