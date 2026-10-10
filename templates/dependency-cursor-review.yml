@@ -185,39 +185,11 @@ jobs:
           sudo apt-get install -y ripgrep jq
           bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_malware_scan.sh"
 
-      # Detach the release first, then delete instruction files from that tree.
-      # Removing tracked files on the default-branch checkout dirties the
-      # worktree, and detach aborts when that would overwrite local changes
-      # (so the review never runs). Fail the step if HEAD is not resolved_to.
       - name: Check out upstream release and drop agent instructions
         if: steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         run: |
-          set -euo pipefail
-          resolved_to=""
-          if [ -f malware_scan_report.json ]; then
-            resolved_to="$(jq -r '.resolved_to // empty' malware_scan_report.json)"
-          fi
-          if [ -n "$resolved_to" ]; then
-            if ! want_sha="$(git -C .upstream-dependency rev-parse --verify "${resolved_to}^{commit}")"; then
-              echo "Failed to detach .upstream-dependency at ${resolved_to}." >&2
-              exit 1
-            fi
-            if ! git -C .upstream-dependency checkout --detach "$want_sha"; then
-              echo "Failed to detach .upstream-dependency at ${resolved_to}." >&2
-              exit 1
-            fi
-            head_sha="$(git -C .upstream-dependency rev-parse --verify HEAD)"
-            if [ "$head_sha" != "$want_sha" ]; then
-              echo "Upstream HEAD ${head_sha} is not resolved_to ${resolved_to} (${want_sha})." >&2
-              exit 1
-            fi
-          fi
-          rm -rf .upstream-dependency/.cursor
-          rm -f .upstream-dependency/.cursorrules
-          rm -f .upstream-dependency/.cursorignore
-          rm -f .upstream-dependency/AGENTS.md
-          rm -f .upstream-dependency/CLAUDE.md
+          bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_release_checkout.sh"
 
       - name: Gather local usage hints
         if: steps.target_pr.outputs.already_reviewed != 'true'

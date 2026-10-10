@@ -16,4 +16,5 @@ dependency-cursor-review-target-pr
 dependency-cursor-review-trusted-scripts
 upstream-malware-scan-lib
 upstream-malware-scan-findings
+upstream-release-checkout
 trusted-git-path-checkout-action

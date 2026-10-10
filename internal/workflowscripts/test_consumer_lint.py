@@ -194,6 +194,7 @@ class ConsumerLintTest(unittest.TestCase):
                     "upstream_malware_scan.sh",
                     "upstream_malware_scan_lib.sh",
                     "upstream_malware_scan_findings.sh",
+                    "upstream_release_checkout.sh",
                 },
             )
             for path in written:
