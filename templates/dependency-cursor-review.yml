@@ -160,16 +160,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Remove upstream agent-instruction files
-        if: steps.target_pr.outputs.already_reviewed != 'true'
-        shell: bash
-        run: |
-          rm -rf .upstream-dependency/.cursor || true
-          rm -f .upstream-dependency/.cursorrules || true
-          rm -f .upstream-dependency/.cursorignore || true
-          rm -f .upstream-dependency/AGENTS.md || true
-          rm -f .upstream-dependency/CLAUDE.md || true
-
       - name: Run upstream malware scan
         if: steps.target_pr.outputs.already_reviewed != 'true'
         id: malware_scan
@@ -199,19 +189,7 @@ jobs:
         if: steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         run: |
-          set -euo pipefail
-          resolved_to=""
-          if [ -f malware_scan_report.json ]; then
-            resolved_to="$(jq -r '.resolved_to // empty' malware_scan_report.json)"
-          fi
-          if [ -n "$resolved_to" ]; then
-            git -C .upstream-dependency checkout --detach "$resolved_to"
-          fi
-          rm -rf .upstream-dependency/.cursor || true
-          rm -f .upstream-dependency/.cursorrules || true
-          rm -f .upstream-dependency/.cursorignore || true
-          rm -f .upstream-dependency/AGENTS.md || true
-          rm -f .upstream-dependency/CLAUDE.md || true
+          bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_release_checkout.sh"
 
       - name: Gather local usage hints
         if: steps.target_pr.outputs.already_reviewed != 'true'

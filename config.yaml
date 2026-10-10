@@ -43,6 +43,7 @@ groups:
       - dependency-cursor-review-trusted-scripts
       - upstream-malware-scan-lib
       - upstream-malware-scan-findings
+      - upstream-release-checkout
       - trusted-git-path-checkout-action
 
 files:
@@ -75,6 +76,7 @@ files:
       - dependency-cursor-review-trusted-scripts
       - upstream-malware-scan-lib
       - upstream-malware-scan-findings
+      - upstream-release-checkout
       - trusted-git-path-checkout-action
     alternate_paths:
       - .github/workflows/dependabot-cursor-review.yaml
@@ -152,6 +154,10 @@ files:
   - name: upstream-malware-scan-findings
     template_name: upstream-malware-scan-findings.sh
     repo_path: .github/scripts/upstream_malware_scan_findings.sh
+
+  - name: upstream-release-checkout
+    template_name: upstream-release-checkout.sh
+    repo_path: .github/scripts/upstream_release_checkout.sh
 
   - name: dep-review
     template_name: dependency-review.yml

@@ -15,3 +15,4 @@
 .github/scripts/dependency-cursor-review-target-pr.js
 .github/scripts/upstream_malware_scan_lib.sh
 .github/scripts/upstream_malware_scan_findings.sh
+.github/scripts/upstream_release_checkout.sh

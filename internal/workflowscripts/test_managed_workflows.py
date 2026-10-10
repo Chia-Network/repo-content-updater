@@ -95,7 +95,11 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("_bootstrap_module_for", combine)
         self.assertIn("dependency-cursor-review-dependabot-context.js", workflow)
         self.assertIn("dependency-cursor-review-target-pr.js", workflow)
-        self.assertIn("git -C .upstream-dependency checkout --detach", workflow)
+        self.assertIn(
+            'bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_release_checkout.sh"',
+            workflow,
+        )
+        self.assertNotIn("git -C .upstream-dependency checkout --detach", workflow)
         self.assertIn("hash_trusted_scripts", workflow)
         self.assertIn("trusted-dcr-scripts.sha256", workflow)
         self.assertIn("Trusted review scripts changed before combine.", workflow)

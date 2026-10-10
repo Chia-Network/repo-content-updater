@@ -43,6 +43,8 @@ Local usage hints (non-authoritative rg hits):
 Repository layout:
 - Current repository root: .
 - Upstream dependency repository: .upstream-dependency (full git history is available)
+- If .upstream-dependency is absent, the release commit was not checked out (status not_scanned). \
+Do not search for another tree and do not review a default-branch checkout.
 """.strip()
 
 
@@ -135,7 +137,7 @@ Malware scan report JSON:
 Task 2: Compatibility and adoption analysis.
 1) Where in this repo the dependency appears to be used (treat rg hints as directional, not exhaustive).
 2) Whether those usage sites intersect with likely changed APIs based on release notes, commits, and direct inspection \
-of .upstream-dependency.
+of .upstream-dependency when that directory exists.
 3) Risks / unknowns for runtime/build compatibility.
 4) Recommendation: merge / merge-with-caveats / hold.
 Do not include intermediate reasoning or self-talk.
