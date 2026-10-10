@@ -43,8 +43,10 @@ inside_checkout() {
   esac
 }
 
-# find -P does not descend into symlinked directories. Symlink hits are unlinked
-# without following; real paths whose realpath leaves the checkout are skipped.
+# find -P does not descend into symlinked directories. Prune every directory
+# named .git so find does not stat the object store of a full clone. Symlink
+# hits are unlinked without following. A real path whose realpath leaves the
+# checkout fails the step.
 strip_matches() {
   local kind="$1"
   shift
@@ -54,14 +56,16 @@ strip_matches() {
       rm -- "$path"
       continue
     fi
-    if inside_checkout "$path"; then
-      if [ "$kind" = dir ]; then
-        rm -rf -- "$path"
-      else
-        rm -f -- "$path"
-      fi
+    if ! inside_checkout "$path"; then
+      echo "Refusing to strip ${path}: realpath leaves .upstream-dependency." >&2
+      exit 1
     fi
-  done < <(find -P .upstream-dependency -mindepth 1 "$@")
+    if [ "$kind" = dir ]; then
+      rm -rf -- "$path"
+    else
+      rm -f -- "$path"
+    fi
+  done < <(find -P .upstream-dependency -mindepth 1 '(' -type d -name .git -prune ')' -o "$@")
 }
 
 strip_matches dir \

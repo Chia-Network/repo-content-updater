@@ -13,7 +13,7 @@ from pathlib import Path
 _SCRIPT = Path(__file__).resolve().parent / "upstream_release_checkout.sh"
 
 
-def _run(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _run(cwd: Path, *args: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update(
         GIT_AUTHOR_NAME="checkout-test",
@@ -21,6 +21,8 @@ def _run(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
         GIT_COMMITTER_NAME="checkout-test",
         GIT_COMMITTER_EMAIL="checkout-test@example.com",
     )
+    if extra_env:
+        env.update(extra_env)
     argv = [shutil.which("bash") or "bash", *args[1:]] if args and args[0] == "bash" else list(args)
     return subprocess.run(argv, cwd=cwd, env=env, check=False, capture_output=True, text=True)
 
@@ -87,9 +89,9 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
     def _report(self, work: Path, payload: dict) -> None:
         (work / "malware_scan_report.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
-    def _script(self, work: Path) -> subprocess.CompletedProcess[str]:
+    def _script(self, work: Path, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         self.assertIsNotNone(shutil.which("jq"))
-        return _run(work, "bash", str(_SCRIPT))
+        return _run(work, "bash", str(_SCRIPT), extra_env=extra_env)
 
     def test_differing_blob_detaches_and_strips_nested_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -172,6 +174,61 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
             self.assertTrue((repo / "ext").is_symlink())
             self.assertEqual((outside / "AGENTS.md").read_text(encoding="utf-8"), "outside agents\n")
             self.assertEqual((outside / "keep.txt").read_text(encoding="utf-8"), "keep\n")
+
+    def test_git_dirs_are_not_walked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work, repo, release = self._tree(Path(tmp))
+            (repo / ".git" / "AGENTS.md").write_text("inside git\n", encoding="utf-8")
+            _write(repo, "pkg/.git/AGENTS.md", "nested git\n")
+            objects = {path: path.read_bytes() for path in (repo / ".git" / "objects").rglob("*") if path.is_file()}
+            self._report(work, {"resolved_to": release})
+            proc = self._script(work)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual((repo / ".git" / "AGENTS.md").read_text(encoding="utf-8"), "inside git\n")
+            self.assertEqual((repo / "pkg" / ".git" / "AGENTS.md").read_text(encoding="utf-8"), "nested git\n")
+            self.assertFalse((repo / "pkg" / "AGENTS.md").exists())
+            for path, data in objects.items():
+                self.assertEqual(path.read_bytes(), data)
+            self.assertEqual(_git(repo, "rev-parse", "HEAD"), release)
+
+    def test_containment_failure_exits_nonzero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            work, repo, release = self._tree(root)
+            realpath = shutil.which("realpath")
+            self.assertIsNotNone(realpath)
+            bindir = root / "bin"
+            bindir.mkdir()
+            stub = bindir / "realpath"
+            stub.write_text(
+                "#!/bin/sh\n"
+                "path=\n"
+                'for arg in "$@"; do\n'
+                '  case "$arg" in\n'
+                "  -*) ;;\n"
+                "  *) path=$arg ;;\n"
+                "  esac\n"
+                "done\n"
+                'case "$path" in\n'
+                ".upstream-dependency)\n"
+                f'  exec {realpath} "$@"\n'
+                "  ;;\n"
+                ".upstream-dependency/*)\n"
+                "  echo /outside/escaped\n"
+                "  ;;\n"
+                "*)\n"
+                f'  exec {realpath} "$@"\n'
+                "  ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            stub.chmod(0o755)
+            self._report(work, {"resolved_to": release})
+            proc = self._script(work, extra_env={"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"})
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("realpath leaves .upstream-dependency", proc.stderr)
+            self.assertEqual((repo / "AGENTS.md").read_text(encoding="utf-8"), "release agents\n")
+            self.assertEqual(_git(repo, "rev-parse", "HEAD"), release)
 
     def test_annotated_tag_object_and_branch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
