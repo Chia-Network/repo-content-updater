@@ -101,8 +101,25 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         )
         self.assertNotIn("git -C .upstream-dependency checkout --detach", workflow)
         self.assertIn("hash_trusted_scripts", workflow)
-        self.assertIn("trusted-dcr-scripts.sha256", workflow)
+        self.assertIn("TRUSTED_DCR_SCRIPTS_SHA256", workflow)
+        self.assertIn("trusted_hash_snapshot", workflow)
         self.assertIn("Trusted review scripts changed before combine.", workflow)
+        self.assertNotIn("cmp -s", workflow)
+        copy_report = 'cp malware_scan_report.json "${trusted_root}/malware_scan_report.json"'
+        self.assertIn(copy_report, workflow)
+        self.assertLess(workflow.index(copy_report), workflow.index("trusted_hash_snapshot="))
+        self.assertLess(
+            workflow.index("trusted_hash_snapshot="),
+            workflow.index('run_agent_prompt "cursor_prompt_malware.txt"'),
+        )
+        self.assertLess(
+            workflow.index('run_agent_prompt "cursor_prompt_compatibility.txt"'),
+            workflow.index('if [ "$trusted_hash_now" != "$trusted_hash_snapshot" ]'),
+        )
+        self.assertIn(
+            'find "$trusted_root" -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum',
+            workflow,
+        )
 
     def test_5dd16704_target_pr_sparse_helper_does_not_shrink_pr_checkout(self) -> None:
         """Bugbot 5dd16704: sparse helper checkout must not leave GITHUB_WORKSPACE sparse for PR head."""

@@ -227,12 +227,31 @@ jobs:
 
           python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_prompts.py"
 
+          # Copy the scan report into the trusted tree before the hash snapshot.
+          # The snapshot stays in the shell: agents can rewrite the workspace
+          # report, and combine still checks this snapshot.
           trusted_root="${RUNNER_TEMP}/trusted-dcr-scripts"
+          if ! trusted_root="$(cd "$trusted_root" && pwd -P)"; then
+            echo "Trusted review scripts directory is missing." >&2
+            exit 1
+          fi
+          if [ ! -s malware_scan_report.json ]; then
+            echo "Malware scan report missing before agent run." >&2
+            exit 1
+          fi
+          cp malware_scan_report.json "${trusted_root}/malware_scan_report.json"
           hash_trusted_scripts() {
-            find "$trusted_root" -type f -print0 | sort -z | xargs -0 sha256sum
+            find "$trusted_root" -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum
           }
-          trusted_hash="${RUNNER_TEMP}/trusted-dcr-scripts.sha256"
-          hash_trusted_scripts >"$trusted_hash"
+          if ! trusted_hash_snapshot="$(hash_trusted_scripts)"; then
+            echo "Trusted review script hash failed." >&2
+            exit 1
+          fi
+          if [ -z "$trusted_hash_snapshot" ]; then
+            echo "Trusted review script hash was empty." >&2
+            exit 1
+          fi
+          export TRUSTED_DCR_SCRIPTS_SHA256="$trusted_hash_snapshot"
 
           run_agent_prompt() {
             local prompt_file="$1"
@@ -246,10 +265,16 @@ jobs:
           run_agent_prompt "cursor_prompt_malware.txt" "cursor_output_malware.json"
           run_agent_prompt "cursor_prompt_compatibility.txt" "cursor_output_compatibility.json"
 
-          if ! hash_trusted_scripts | cmp -s "$trusted_hash" -; then
+          if ! trusted_hash_now="$(hash_trusted_scripts)"; then
+            echo "Trusted review script hash failed." >&2
+            exit 1
+          fi
+          if [ "$trusted_hash_now" != "$trusted_hash_snapshot" ]; then
             echo "Trusted review scripts changed before combine." >&2
             exit 1
           fi
+          # Artifact matches the frozen bytes. Combine reads the trusted copy.
+          cp "${trusted_root}/malware_scan_report.json" malware_scan_report.json
           python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"
       - name: Upload malware scan artifacts
         if: always() && steps.target_pr.outputs.already_reviewed != 'true'

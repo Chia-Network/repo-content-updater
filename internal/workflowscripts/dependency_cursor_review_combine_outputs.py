@@ -1,8 +1,16 @@
-"""Merge Cursor malware + compatibility JSON outputs; format malware verdict via trusted loader."""
+"""Merge Cursor malware + compatibility JSON outputs; format malware verdict via trusted loader.
+
+When this file runs from the trusted-dcr-scripts checkout, the malware scan
+report must already sit at the root of that tree and TRUSTED_DCR_SCRIPTS_SHA256
+must be the pre-agent sha256sum manifest of the tree. A mismatch or a missing
+report fails closed. The workspace copy is ignored.
+"""
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import runpy
 import sys
 from pathlib import Path
@@ -105,26 +113,112 @@ _KNOWN_VERDICT_HEADERS = (
     "**Verdict: malicious**",
     _INCONCLUSIVE_HEADER,
 )
+_TRUSTED_CHECKOUT_DIR = "trusted-dcr-scripts"
+_TRUSTED_HASH_ENV = "TRUSTED_DCR_SCRIPTS_SHA256"
+_SCAN_REPORT_NAME = "malware_scan_report.json"
 
 
-def _scan_forces_inconclusive(path: Path | None = None) -> bool:
-    """Missing, unscanned, or tree-spoofed scanner reports cannot publish a verdict."""
-    report_path = path or Path("malware_scan_report.json")
-    if not report_path.is_file():
-        return True
-    try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-    except Exception:
-        return True
+def trusted_tree_manifest(root: Path) -> str:
+    """sha256sum listing of regular files under root, without a trailing newline.
+
+    Matches `find "$root" -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum`
+    after command substitution strips the final newline. That is the workflow
+    snapshot stored in TRUSTED_DCR_SCRIPTS_SHA256 before the agents run.
+    """
+    manifest, _files = _trusted_tree_snapshot(root)
+    return manifest
+
+
+def _trusted_tree_snapshot(root: Path) -> tuple[str, dict[str, bytes]]:
+    """Manifest plus the bytes hashed for each relative path."""
+    root = root.resolve()
+    entries: list[tuple[bytes, str, bytes]] = []
+    for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
+        for name in filenames:
+            path = Path(dirpath) / name
+            if path.is_symlink() or not path.is_file():
+                continue
+            data = path.read_bytes()
+            rel = path.relative_to(root).as_posix()
+            entries.append((os.fsencode(path), rel, data))
+    entries.sort(key=lambda item: item[0])
+    lines: list[str] = []
+    files: dict[str, bytes] = {}
+    for encoded, rel, data in entries:
+        digest = hashlib.sha256(data).hexdigest()
+        lines.append(f"{digest}  {os.fsdecode(encoded)}")
+        files[rel] = data
+    return "\n".join(lines), files
+
+
+def _trusted_checkout_root() -> Path | None:
+    """Production layout is <trusted-dcr-scripts>/.github/scripts/<this file>."""
+    script = Path(__file__).resolve()
+    if script.parent.name != "scripts" or script.parent.parent.name != ".github":
+        return None
+    root = script.parents[2]
+    if root.name != _TRUSTED_CHECKOUT_DIR:
+        return None
+    return root
+
+
+def _report_forces_inconclusive(report: object) -> bool:
     if not isinstance(report, dict):
         return True
     if report.get("status") == "not_scanned":
         return True
     if report.get("scan_conclusive") is not True:
         return True
-    if report.get("verdict_token_in_tree") is True:
+    return report.get("verdict_token_in_tree") is True
+
+
+def _bytes_force_inconclusive(data: bytes) -> bool:
+    try:
+        report = json.loads(data.decode("utf-8"))
+    except Exception:
         return True
-    return False
+    return _report_forces_inconclusive(report)
+
+
+def _scan_forces_inconclusive(path: Path | None = None) -> bool:
+    """Missing, unscanned, or tree-spoofed scanner reports cannot publish a verdict."""
+    report_path = path or Path(_SCAN_REPORT_NAME)
+    if not report_path.is_file():
+        return True
+    try:
+        data = report_path.read_bytes()
+    except OSError:
+        return True
+    return _bytes_force_inconclusive(data)
+
+
+def _fail_closed(message: str) -> None:
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def _scan_gate_forces_inconclusive() -> bool:
+    """Fail closed unless the pre-agent trusted-tree hash still matches.
+
+    Unit tests that omit the freeze env and are not the trusted checkout keep
+    the workspace-file gate. A freeze env outside that checkout cannot fall
+    open onto the workspace report.
+    """
+    root = _trusted_checkout_root()
+    expected = os.environ.get(_TRUSTED_HASH_ENV, "").rstrip("\n")
+    if root is None and not expected:
+        return _scan_forces_inconclusive()
+    if root is None:
+        _fail_closed("Trusted scan report checkout is missing before combine.")
+    if not expected:
+        _fail_closed("Trusted scan report hash missing before combine.")
+    manifest, files = _trusted_tree_snapshot(root)
+    if manifest != expected:
+        _fail_closed("Trusted review scripts changed before combine.")
+    report_bytes = files.get(_SCAN_REPORT_NAME)
+    if report_bytes is None:
+        _fail_closed("Malware scan report missing from trusted checkout.")
+    return _bytes_force_inconclusive(report_bytes)
 
 
 def _force_inconclusive_header(text: str) -> str:
@@ -139,6 +233,8 @@ def _force_inconclusive_header(text: str) -> str:
 
 def main() -> None:
     _drop_pr_head_scripts_from_sys_path()
+    # Verify the frozen tree before loading any sibling module from it.
+    force_inconclusive = _scan_gate_forces_inconclusive()
     ns = _host_namespace()
     resolve_loader_bundle = ns["resolve_loader_bundle"]
     loader, script_dir = resolve_loader_bundle(_SCRIPT_CANDIDATES)
@@ -147,7 +243,7 @@ def main() -> None:
     malware_payload = _load_any("cursor_output_malware.json")
     compatibility_payload = _load_any("cursor_output_compatibility.json")
     malware_text = format_malware_review_verdict(_extract_text(malware_payload))
-    if _scan_forces_inconclusive():
+    if force_inconclusive:
         malware_text = _force_inconclusive_header(malware_text)
     compatibility_text = _extract_text(compatibility_payload)
 
