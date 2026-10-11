@@ -67,14 +67,20 @@ jobs:
           test -s "${dest}/dependency-cursor-review-target-pr.js"
           test -s "${dest}/dependency-cursor-review-dependabot-context.js"
           test -s "${dest}/dependency-cursor-review-post-comment.js"
-          helper="${dest}/dependency-cursor-review-post-comment.js"
-          helper_line="$(/usr/bin/sha256sum "$helper")"
-          helper_sha256="${helper_line%% *}"
-          if [ -z "$helper_sha256" ]; then
-            echo "Post-comment helper digest was empty." >&2
-            exit 1
-          fi
-          echo "post_comment_sha256=${helper_sha256}" >> "$GITHUB_OUTPUT"
+          seal_digest() {
+            local file="$1"
+            local key="$2"
+            local line digest
+            line="$(/usr/bin/sha256sum "$file")"
+            digest="${line%% *}"
+            if [ -z "$digest" ]; then
+              echo "Trusted helper digest was empty." >&2
+              exit 1
+            fi
+            echo "${key}=${digest}" >> "$GITHUB_OUTPUT"
+          }
+          seal_digest "${dest}/dependency-cursor-review-post-comment.js" post_comment_sha256
+          seal_digest "${dest}/dependency-cursor-review-dependabot-context.js" post_comment_context_sha256
 
       - name: Resolve target PR context
         id: target_pr
@@ -352,21 +358,49 @@ jobs:
           MALWARE_SCAN_CHANGED_COUNT: ${{`{{ steps.malware_scan.outputs.changed_files_count }}`}}
           MALWARE_SCAN_SUMMARY: ${{`{{ steps.malware_scan.outputs.summary }}`}}
           POST_COMMENT_SHA256: ${{`{{ steps.trusted_helper.outputs.post_comment_sha256 }}`}}
+          POST_COMMENT_CONTEXT_SHA256: ${{`{{ steps.trusted_helper.outputs.post_comment_context_sha256 }}`}}
         with:
           script: |
             const fs = require('fs');
             const crypto = require('crypto');
             const path = require('path');
+            const vm = require('vm');
             const Module = require('module');
-            const helperPath = `${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`;
-            const expected = process.env.POST_COMMENT_SHA256 || '';
-            const bytes = fs.readFileSync(helperPath);
-            const digest = crypto.createHash('sha256').update(bytes).digest('hex');
-            if (!/^[0-9a-f]{64}$/.test(expected) || digest !== expected) {
-              throw new Error('Post-comment helper digest mismatch.');
+
+            function readSealed(filePath, expected) {
+              const bytes = fs.readFileSync(filePath);
+              const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+              if (!/^[0-9a-f]{64}$/.test(expected || '') || digest !== expected) {
+                throw new Error(`Trusted helper digest mismatch for ${path.basename(filePath)}.`);
+              }
+              return bytes.toString('utf8');
             }
-            const helperModule = new Module(helperPath);
-            helperModule.filename = helperPath;
-            helperModule.paths = Module._nodeModulePaths(path.dirname(helperPath));
-            helperModule._compile(bytes.toString('utf8'), helperPath);
-            await helperModule.exports({ github, context, core });
+
+            function loadSealed(filePath, source, localRequire) {
+              const compiled = vm.runInThisContext(Module.wrap(source), { filename: filePath });
+              const mod = { exports: {} };
+              compiled(mod.exports, localRequire, mod, filePath, path.dirname(filePath));
+              return mod.exports;
+            }
+
+            const helperPath = `${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`;
+            const contextPath = `${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-dependabot-context.js`;
+            const helperSource = readSealed(helperPath, process.env.POST_COMMENT_SHA256);
+            const contextSource = readSealed(contextPath, process.env.POST_COMMENT_CONTEXT_SHA256);
+            const builtinRequire = Module.createRequire(helperPath);
+            const contextExports = loadSealed(contextPath, contextSource, (request) => {
+              if (request.startsWith('.')) {
+                throw new Error(`Trusted helper refused local require ${request}.`);
+              }
+              return builtinRequire(request);
+            });
+            const run = loadSealed(helperPath, helperSource, (request) => {
+              if (request === './dependency-cursor-review-dependabot-context.js') {
+                return contextExports;
+              }
+              if (request.startsWith('.')) {
+                throw new Error(`Trusted helper refused local require ${request}.`);
+              }
+              return builtinRequire(request);
+            });
+            await run({ github, context, core });

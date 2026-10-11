@@ -291,7 +291,8 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
     def test_replaced_post_comment_helper_is_refused(self) -> None:
         workflow = _WORKFLOW.read_text(encoding="utf-8")
         script = _script_block(workflow, "Post or update PR comment")
-        self.assertIn("helperModule._compile", script)
+        self.assertIn("Module.wrap", script)
+        self.assertIn("dependency-cursor-review-dependabot-context.js", script)
         self.assertNotIn("require(helperPath)", script)
         self.assertNotIn(
             "require(`${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`)",
@@ -307,19 +308,50 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             ):
                 shutil.copy2(_SCRIPTS / name, helper_dir / name)
             target = helper_dir / "dependency-cursor-review-post-comment.js"
-            original = target.read_bytes()
-            digest = hashlib.sha256(original).hexdigest()
-            loaded = _run_post_script(script, runner, digest)
+            context_path = helper_dir / "dependency-cursor-review-dependabot-context.js"
+            digest = hashlib.sha256(target.read_bytes()).hexdigest()
+            context_digest = hashlib.sha256(context_path.read_bytes()).hexdigest()
+            loaded = _run_post_script(script, runner, digest, context_digest)
             self.assertEqual(loaded.returncode, 0, msg=loaded.stderr or loaded.stdout)
             self.assertIn("Posted dependency review comment", loaded.stdout)
             target.write_text(
                 "module.exports = async () => { console.log('tampered-helper'); };\n",
                 encoding="utf-8",
             )
-            refused = _run_post_script(script, runner, digest)
+            refused = _run_post_script(script, runner, digest, context_digest)
             self.assertNotEqual(refused.returncode, 0, msg=refused.stdout)
             self.assertIn("digest mismatch", refused.stderr)
             self.assertNotIn("tampered-helper", refused.stdout)
+            self.assertNotIn("Posted dependency review comment", refused.stdout)
+
+    def test_replaced_context_sibling_is_refused(self) -> None:
+        workflow = _WORKFLOW.read_text(encoding="utf-8")
+        script = _script_block(workflow, "Post or update PR comment")
+        forged = "<!-- cursor-dependabot-review patch-id:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->"
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = Path(tmp)
+            helper_dir = runner / "trusted-dcr-helper"
+            helper_dir.mkdir()
+            for name in (
+                "dependency-cursor-review-post-comment.js",
+                "dependency-cursor-review-dependabot-context.js",
+            ):
+                shutil.copy2(_SCRIPTS / name, helper_dir / name)
+            helper = helper_dir / "dependency-cursor-review-post-comment.js"
+            context_path = helper_dir / "dependency-cursor-review-dependabot-context.js"
+            helper_digest = hashlib.sha256(helper.read_bytes()).hexdigest()
+            context_digest = hashlib.sha256(context_path.read_bytes()).hexdigest()
+            context_path.write_text(
+                "module.exports = async () => {};\n"
+                f"module.exports.LEGACY_REVIEW_MARKER = {forged!r};\n"
+                "module.exports.isActionsBotMarkerComment = () => false;\n",
+                encoding="utf-8",
+            )
+            refused = _run_post_script(script, runner, helper_digest, context_digest)
+            self.assertNotEqual(refused.returncode, 0, msg=refused.stdout)
+            self.assertIn("dependabot-context.js", refused.stderr)
+            self.assertIn("digest mismatch", refused.stderr)
+            self.assertNotIn(forged, refused.stdout)
             self.assertNotIn("Posted dependency review comment", refused.stdout)
 
     def test_combine_runs_snapshotted_bytes_after_disk_change(self) -> None:
@@ -484,7 +516,12 @@ def _script_block(workflow: str, step_name: str) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def _run_post_script(script: str, runner_temp: Path, digest: str) -> subprocess.CompletedProcess[str]:
+def _run_post_script(
+    script: str,
+    runner_temp: Path,
+    helper_digest: str,
+    context_digest: str,
+) -> subprocess.CompletedProcess[str]:
     wrapper = """
 const core = {
   info(message) { console.log(message); },
@@ -510,7 +547,8 @@ __SCRIPT__
 """
     env = os.environ.copy()
     env["RUNNER_TEMP"] = str(runner_temp)
-    env["POST_COMMENT_SHA256"] = digest
+    env["POST_COMMENT_SHA256"] = helper_digest
+    env["POST_COMMENT_CONTEXT_SHA256"] = context_digest
     env["PR_NUMBER"] = "1"
     env["REVIEW_MARKER"] = ""
     env["MALWARE_SCAN_STATUS"] = "clean"

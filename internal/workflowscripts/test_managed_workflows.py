@@ -136,17 +136,30 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             '/usr/bin/find "$trusted_root" -type f -print0 | LC_ALL=C /usr/bin/sort -z | /usr/bin/xargs -0 -r /usr/bin/sha256sum',
             workflow,
         )
-        self.assertIn("post_comment_sha256=", workflow)
+        self.assertIn(
+            'seal_digest "${dest}/dependency-cursor-review-post-comment.js" post_comment_sha256',
+            workflow,
+        )
+        self.assertIn(
+            'seal_digest "${dest}/dependency-cursor-review-dependabot-context.js" post_comment_context_sha256',
+            workflow,
+        )
         self.assertIn("steps.trusted_helper.outputs.post_comment_sha256", workflow)
+        self.assertIn("steps.trusted_helper.outputs.post_comment_context_sha256", workflow)
         self.assertLess(
-            workflow.index("post_comment_sha256="),
+            workflow.index("post_comment_sha256"),
+            workflow.index("- name: Run Cursor analysis"),
+        )
+        self.assertLess(
+            workflow.index("post_comment_context_sha256"),
             workflow.index("- name: Run Cursor analysis"),
         )
         analysis = workflow.split("- name: Run Cursor analysis\n", 1)[1].split("\n      - name:", 1)[0]
         self.assertNotIn("GITHUB_OUTPUT", analysis)
         self.assertNotIn("post_comment_sha256", analysis)
+        self.assertNotIn("post_comment_context_sha256", analysis)
         self.assertIn("/usr/bin/sha256sum -c -", workflow)
-        self.assertIn("helperModule._compile", workflow)
+        self.assertIn("Module.wrap", workflow)
         self.assertNotIn(
             "require(`${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`)",
             workflow,
