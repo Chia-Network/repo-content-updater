@@ -53,7 +53,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         self.assertNotIn("cp --remove-destination", workflow)
         self.assertNotIn("O_NOFOLLOW", (_SCRIPTS / "dependency_cursor_review_combine_outputs.py").read_text())
         prompts = (_SCRIPTS / "dependency_cursor_review_prompts.py").read_text(encoding="utf-8")
-        self.assertIn("only the release range from..to is available", prompts)
+        self.assertIn("the from and to commits are checked out", prompts)
         self.assertNotIn("full git history is available", prompts)
 
     def test_agent_job_is_isolated_from_the_verdict(self) -> None:

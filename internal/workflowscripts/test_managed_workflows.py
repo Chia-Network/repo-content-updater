@@ -154,7 +154,8 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("pull-requests:", agent)
         self.assertNotIn("fetch-depth: 0", agent)
         self.assertNotIn("--shallow-exclude", agent)
-        self.assertIn("merge-base --is-ancestor", agent)
+        self.assertNotIn("merge-base --is-ancestor", agent)
+        self.assertIn('fetch --no-tags --depth=1 origin "${RESOLVED_FROM}"', agent)
         self.assertNotIn("dependency_cursor_review_combine_outputs.py", agent)
         self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
         self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
@@ -199,14 +200,13 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn("function selectPostedMarker", post_js)
 
     def test_tag_range_fetch_uses_peeled_shas(self) -> None:
-        """Annotated tags peel to SHAs. The agent fetch must still connect that range."""
+        """Peeled tag SHAs and a non-ancestor pair both diff after one depth-1 fetch."""
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
         agent = self._job(workflow, "dependency-review-agent")
-        block = agent.split("- name: Fetch upstream release range\n", 1)[1].split("\n      - name:", 1)[0]
+        block = agent.split("- name: Fetch upstream from commit\n", 1)[1].split("\n      - name:", 1)[0]
         script = textwrap.dedent(block.split("run: |\n", 1)[1])
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            origin = root / "origin"
+            origin = Path(tmp) / "origin"
             self._git(origin, "init", "-b", "main")
             self._git_config(origin)
             for name in ("base", "released", "middle", "head"):
@@ -218,30 +218,54 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             resolved_from = self._git(origin, "rev-parse", "v1.0.0^{commit}")
             resolved_to = self._git(origin, "rev-parse", "v1.2.0^{commit}")
             self.assertNotEqual(resolved_from, self._git(origin, "rev-parse", "v1.0.0"))
-            work = root / "work"
-            upstream = work / ".upstream-dependency"
-            upstream.mkdir(parents=True)
-            self._git(upstream, "init", "-b", "main")
-            self._git(upstream, "remote", "add", "origin", str(origin))
-            self._git(upstream, "fetch", "--depth=1", "origin", resolved_to)
-            self._git(upstream, "checkout", "--detach", "FETCH_HEAD")
-            env = os.environ.copy()
-            env.update(GH_TOKEN="x", RESOLVED_FROM=resolved_from, RESOLVED_TO=resolved_to)
-            proc = subprocess.run(
-                ["bash", "-c", script],
-                cwd=work,
-                env=env,
+            self._assert_tree_diff(script, origin, resolved_from, resolved_to, "-released", "+head")
+
+            self._git(origin, "checkout", "--orphan", "rewritten")
+            self._git(origin, "rm", "-rf", ".")
+            (origin / "pkg.txt").write_text("orphan\n", encoding="utf-8")
+            self._git(origin, "add", "pkg.txt")
+            self._git(origin, "commit", "-m", "orphan")
+            orphan = self._git(origin, "rev-parse", "HEAD")
+            self._git(origin, "checkout", "main")
+            head = self._git(origin, "rev-parse", "HEAD")
+            ancestry = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", orphan, head],
+                cwd=origin,
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
-            self.assertEqual(self._git(upstream, "rev-parse", "HEAD"), resolved_to)
-            self.assertEqual(self._git(upstream, "merge-base", "--is-ancestor", resolved_from, resolved_to), "")
-            log = self._git(upstream, "log", "--format=%s", f"{resolved_from}..{resolved_to}")
-            self.assertEqual(log.splitlines(), ["head", "middle"])
-            diff = self._git(upstream, "diff", resolved_from, resolved_to)
-            self.assertIn("-released", diff)
-            self.assertIn("+head", diff)
+            self.assertNotEqual(ancestry.returncode, 0)
+            self._assert_tree_diff(script, origin, orphan, head, "-orphan", "+head")
+
+    def _assert_tree_diff(
+        self,
+        script: str,
+        origin: Path,
+        resolved_from: str,
+        resolved_to: str,
+        removed: str,
+        added: str,
+    ) -> None:
+        work = origin.parent / f"work-{resolved_from[:8]}"
+        upstream = work / ".upstream-dependency"
+        self._git(upstream, "init", "-b", "main")
+        self._git(upstream, "remote", "add", "origin", str(origin))
+        self._git(upstream, "fetch", "--depth=1", "origin", resolved_to)
+        self._git(upstream, "checkout", "--detach", "FETCH_HEAD")
+        env = os.environ.copy()
+        env.update(GH_TOKEN="x", RESOLVED_FROM=resolved_from)
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            cwd=work,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+        self.assertEqual(self._git(upstream, "rev-parse", "HEAD"), resolved_to)
+        diff = self._git(upstream, "diff", resolved_from, resolved_to)
+        self.assertIn(removed, diff)
+        self.assertIn(added, diff)
 
     def _git(self, repo: Path, *args: str) -> str:
         repo.mkdir(parents=True, exist_ok=True)

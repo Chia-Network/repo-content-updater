@@ -267,28 +267,18 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Fetch upstream release range
+      - name: Fetch upstream from commit
         if: ${{`{{ needs.dependency-review-scan.outputs.resolved_from != '' && needs.dependency-review-scan.outputs.resolved_to != '' }}`}}
         shell: bash
         env:
           GH_TOKEN: ${{`{{ github.token }}`}}
           RESOLVED_FROM: ${{`{{ needs.dependency-review-scan.outputs.resolved_from }}`}}
-          RESOLVED_TO: ${{`{{ needs.dependency-review-scan.outputs.resolved_to }}`}}
         run: |
           set -euo pipefail
           auth_basic="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
-          git_fetch() {
-            git -C .upstream-dependency \
-              -c "http.extraheader=AUTHORIZATION: basic ${auth_basic}" \
-              fetch --no-tags "$@"
-          }
-          git_fetch --depth=1 origin "${RESOLVED_FROM}"
-          fetched=0
-          until git -C .upstream-dependency merge-base --is-ancestor "${RESOLVED_FROM}" "${RESOLVED_TO}"; do
-            [ "$fetched" -lt 6400 ]
-            git_fetch --deepen=100 origin "${RESOLVED_TO}"
-            fetched=$((fetched + 100))
-          done
+          git -C .upstream-dependency \
+            -c "http.extraheader=AUTHORIZATION: basic ${auth_basic}" \
+            fetch --no-tags --depth=1 origin "${RESOLVED_FROM}"
 
       - name: Drop agent instructions
         if: ${{`{{ needs.dependency-review-scan.outputs.resolved_to != '' }}`}}
