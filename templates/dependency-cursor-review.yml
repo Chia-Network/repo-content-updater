@@ -184,6 +184,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep jq
           bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_malware_scan.sh"
+          frozen="${RUNNER_TEMP}/frozen-malware-scan-report.json"
+          if [ ! -s malware_scan_report.json ]; then
+            echo "Malware scan report missing." >&2
+            exit 1
+          fi
+          /usr/bin/cp --remove-destination malware_scan_report.json "$frozen"
+          if [ -L "$frozen" ] || [ ! -f "$frozen" ]; then
+            echo "Frozen malware scan report is not a regular file." >&2
+            exit 1
+          fi
+          report_line="$(/usr/bin/sha256sum "$frozen")"
+          report_sha256="${report_line%% *}"
+          if [ -z "$report_sha256" ]; then
+            echo "Malware scan report digest was empty." >&2
+            exit 1
+          fi
+          echo "report_sha256=${report_sha256}" >> "$GITHUB_OUTPUT"
 
       - name: Check out upstream release and drop agent instructions
         if: steps.target_pr.outputs.already_reviewed != 'true'
@@ -218,6 +235,7 @@ jobs:
           PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
           FROM_VERSION: ${{`{{ steps.dependabot_context.outputs.from_version }}`}}
           TO_VERSION: ${{`{{ steps.dependabot_context.outputs.to_version }}`}}
+          MALWARE_SCAN_REPORT_SHA256: ${{`{{ steps.malware_scan.outputs.report_sha256 }}`}}
         shell: bash
         run: |
           if [ -z "$CURSOR_API_KEY" ]; then
@@ -225,23 +243,16 @@ jobs:
             exit 0
           fi
 
-          python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_prompts.py"
+          /usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_prompts.py"
+          /usr/bin/rm -f malware_scan_report.json
 
-          # Copy the scan report into the trusted tree before the hash snapshot.
-          # The snapshot stays in the shell: agents can rewrite the workspace
-          # report, and combine still checks this snapshot.
           trusted_root="${RUNNER_TEMP}/trusted-dcr-scripts"
           if ! trusted_root="$(cd "$trusted_root" && pwd -P)"; then
             echo "Trusted review scripts directory is missing." >&2
             exit 1
           fi
-          if [ ! -s malware_scan_report.json ]; then
-            echo "Malware scan report missing before agent run." >&2
-            exit 1
-          fi
-          cp malware_scan_report.json "${trusted_root}/malware_scan_report.json"
           hash_trusted_scripts() {
-            find "$trusted_root" -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum
+            /usr/bin/find "$trusted_root" -type f -print0 | LC_ALL=C /usr/bin/sort -z | /usr/bin/xargs -0 -r /usr/bin/sha256sum
           }
           if ! trusted_hash_snapshot="$(hash_trusted_scripts)"; then
             echo "Trusted review script hash failed." >&2
@@ -251,13 +262,12 @@ jobs:
             echo "Trusted review script hash was empty." >&2
             exit 1
           fi
-          export TRUSTED_DCR_SCRIPTS_SHA256="$trusted_hash_snapshot"
 
           run_agent_prompt() {
             local prompt_file="$1"
             local output_file="$2"
             if ! agent -f --mode ask -p --output-format json < "$prompt_file" > "$output_file"; then
-              FALLBACK_PROMPT="$(python3 -c 'from pathlib import Path; import sys; path = sys.argv[1]; max_bytes = 60000; raw = Path(path).read_bytes(); text = raw[:max_bytes].decode("utf-8", errors="ignore"); text += "\n\n[Prompt truncated for CLI argument compatibility.]" if len(raw) > max_bytes else ""; print(text, end="")' "$prompt_file")"
+              FALLBACK_PROMPT="$(/usr/bin/python3 -c 'from pathlib import Path; import sys; path = sys.argv[1]; max_bytes = 60000; raw = Path(path).read_bytes(); text = raw[:max_bytes].decode("utf-8", errors="ignore"); text += "\n\n[Prompt truncated for CLI argument compatibility.]" if len(raw) > max_bytes else ""; print(text, end="")' "$prompt_file")"
               agent -f --mode ask -p --output-format json "$FALLBACK_PROMPT" > "$output_file"
             fi
           }
@@ -273,9 +283,7 @@ jobs:
             echo "Trusted review scripts changed before combine." >&2
             exit 1
           fi
-          # Artifact matches the frozen bytes. Combine reads the trusted copy.
-          cp "${trusted_root}/malware_scan_report.json" malware_scan_report.json
-          python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"
+          /usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"
       - name: Upload malware scan artifacts
         if: always() && steps.target_pr.outputs.already_reviewed != 'true'
         uses: actions/upload-artifact@v7
@@ -283,8 +291,7 @@ jobs:
           name: dependabot-malware-scan-${{`{{ steps.target_pr.outputs.number }}`}}
           if-no-files-found: warn
           path: |
-            malware_scan_report.json
-            malware_scan_summary.md
+            ${{`{{ runner.temp }}`}}/frozen-malware-scan-report.json
             upstream_changed_files.txt
 
       # The patch-id marker is posted only after this analysis step succeeds.

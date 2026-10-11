@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -17,7 +18,6 @@ _WORKFLOW = _REPO_ROOT / "templates" / "dependency-cursor-review.yml"
 
 # Minimal trusted bundle files needed for combine_outputs to reach formatter load.
 import formatter_runtime_bundle as _runtime  # noqa: E402
-from dependency_cursor_review_combine_outputs import trusted_tree_manifest  # noqa: E402
 
 _BUNDLE_STEMS = (
     *_runtime.FORMATTER_RUNTIME_FILENAMES,
@@ -30,27 +30,27 @@ _INCONCLUSIVE_REPORT = {
     "scan_conclusive": False,
     "verdict_token_in_tree": False,
 }
-_CONCLUSIVE_REPORT = {
-    "status": "clean",
-    "scan_conclusive": True,
-    "verdict_token_in_tree": False,
-}
-_HASH_PIPELINE = (
-    'find "$root" -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum'
+_CONCLUSIVE_BYTES = (
+    b'{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false}\n'
 )
+_FROZEN_NAME = "frozen-malware-scan-report.json"
 
 
 class DependencyCursorReviewSecurityTest(unittest.TestCase):
     def test_workflow_runs_python_companions_with_isolated_flag(self) -> None:
         workflow = _WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(
-            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_prompts.py"',
+            '/usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_prompts.py"',
             workflow,
         )
         self.assertIn(
-            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"',
+            '/usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"',
             workflow,
         )
+        self.assertIn("cp --remove-destination", workflow)
+        self.assertIn("/usr/bin/sha256sum", workflow)
+        self.assertIn("report_sha256=", workflow)
+        self.assertNotIn("malware_scan_summary.md", (_SCRIPTS / "dependency-cursor-review-post-comment.js").read_text())
         self.assertNotIn("sys.path", workflow)
         self.assertIn("trusted-dcr-scripts", workflow)
 
@@ -110,6 +110,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
                     str(scripts / "dependency_cursor_review_combine_outputs.py"),
                 ],
                 cwd=root,
+                env=_seal_env(root, _CONCLUSIVE_BYTES),
                 capture_output=True,
                 text=True,
             )
@@ -142,10 +143,6 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             trusted.mkdir()
             for name in _BUNDLE_STEMS:
                 shutil.copy2(_SCRIPTS / name, trusted / name)
-            (root / "malware_scan_report.json").write_text(
-                '{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false}',
-                encoding="utf-8",
-            )
             (root / "cursor_output_malware.json").write_text(
                 '{"result":"MALWARE_REVIEW_VERDICT: benign\\n\\nOK"}',
                 encoding="utf-8",
@@ -161,6 +158,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
                     str(trusted / "dependency_cursor_review_combine_outputs.py"),
                 ],
                 cwd=root,
+                env=_seal_env(root, _CONCLUSIVE_BYTES),
                 capture_output=True,
                 text=True,
             )
@@ -203,98 +201,74 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
                     else:
                         sys.modules[name] = module
 
-    def test_trusted_tree_manifest_matches_workflow_sha256sum(self) -> None:
-        workflow = _WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn(
-            'find "$trusted_root" -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum',
-            workflow,
-        )
+    def test_matching_inconclusive_report_ignores_workspace_fake(self) -> None:
+        payload = (json.dumps(_INCONCLUSIVE_REPORT) + "\n").encode()
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "trusted-dcr-scripts"
-            nested = root / ".github" / "scripts"
-            nested.mkdir(parents=True)
-            (nested / "b file.py").write_text("x\n", encoding="utf-8")
-            (root / "caf\u00e9.py").write_text("u\n", encoding="utf-8")
-            (root / "malware_scan_report.json").write_text("{}\n", encoding="utf-8")
-            (root / "link.py").symlink_to(nested / "b file.py")
-            self.assertEqual(
-                trusted_tree_manifest(root),
-                _bash_trusted_manifest(root),
-            )
-
-    def test_frozen_inconclusive_report_ignores_workspace_fake(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root, workspace = _frozen_layout(Path(tmp), _INCONCLUSIVE_REPORT)
-            proc = _run_frozen_combine(root, workspace, _bash_trusted_manifest(root))
+            proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(payload).hexdigest())
             self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
             written = json.loads((workspace / "cursor_output.json").read_text(encoding="utf-8"))
             self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
             self.assertNotIn("**Verdict: benign**", written["result"])
 
-    def test_frozen_conclusive_report_publishes_benign(self) -> None:
+    def test_digest_mismatch_exits(self) -> None:
+        payload = (json.dumps(_INCONCLUSIVE_REPORT) + "\n").encode()
         with tempfile.TemporaryDirectory() as tmp:
-            root, workspace = _frozen_layout(Path(tmp), _CONCLUSIVE_REPORT)
-            proc = _run_frozen_combine(root, workspace, _bash_trusted_manifest(root))
+            proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(b"other").hexdigest())
+            self._assert_combine_failed(proc, workspace)
+            self.assertIn("digest mismatch", proc.stderr)
+
+    def test_empty_digest_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, workspace = _combine_in(Path(tmp), _CONCLUSIVE_BYTES, "")
+            self._assert_combine_failed(proc, workspace)
+            self.assertIn("digest is missing", proc.stderr)
+
+    def test_frozen_symlink_is_rejected(self) -> None:
+        payload = _CONCLUSIVE_BYTES
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            real = base / "real.json"
+            real.write_bytes(payload)
+            runner = base / "runner-temp"
+            runner.mkdir()
+            frozen = runner / _FROZEN_NAME
+            frozen.symlink_to(real)
+            workspace = _workspace(base)
+            proc = _run_combine(
+                workspace,
+                {
+                    "RUNNER_TEMP": str(runner),
+                    "MALWARE_SCAN_REPORT_SHA256": hashlib.sha256(payload).hexdigest(),
+                },
+            )
+            self._assert_combine_failed(proc, workspace)
+            self.assertIn("symlink", proc.stderr)
+
+    def test_cp_remove_destination_does_not_follow_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "malware_scan_report.json"
+            source.write_bytes(_CONCLUSIVE_BYTES)
+            secret = base / "secret.txt"
+            secret.write_text("original-secret\n", encoding="utf-8")
+            dest = base / _FROZEN_NAME
+            dest.symlink_to(secret)
+            subprocess.run(
+                ["cp", "--remove-destination", str(source), str(dest)],
+                check=True,
+            )
+            self.assertFalse(dest.is_symlink())
+            self.assertEqual(dest.read_bytes(), _CONCLUSIVE_BYTES)
+            self.assertEqual(secret.read_text(encoding="utf-8"), "original-secret\n")
+
+    def test_malformed_json_with_matching_digest_is_inconclusive(self) -> None:
+        payload = b"{not-json"
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(payload).hexdigest())
             self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
             written = json.loads((workspace / "cursor_output.json").read_text(encoding="utf-8"))
-            self.assertIn("**Verdict: benign**", written["result"])
-
-    def test_hash_env_outside_trusted_checkout_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            workspace = Path(tmp)
-            (workspace / "cursor_output_malware.json").write_text(_BENIGN_AGENT, encoding="utf-8")
-            (workspace / "cursor_output_compatibility.json").write_text(
-                _COMPAT_AGENT, encoding="utf-8"
-            )
-            (workspace / "malware_scan_report.json").write_text(
-                json.dumps(_CONCLUSIVE_REPORT) + "\n",
-                encoding="utf-8",
-            )
-            env = os.environ.copy()
-            env["TRUSTED_DCR_SCRIPTS_SHA256"] = "not-the-trusted-tree"
-            proc = subprocess.run(
-                [
-                    sys.executable,
-                    "-I",
-                    str(_SCRIPTS / "dependency_cursor_review_combine_outputs.py"),
-                ],
-                cwd=workspace,
-                env=env,
-                capture_output=True,
-                text=True,
-            )
-            self._assert_combine_failed(proc, workspace)
-            self.assertIn("checkout is missing", proc.stderr)
-
-    def test_missing_freeze_hash_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root, workspace = _frozen_layout(Path(tmp), _INCONCLUSIVE_REPORT)
-            proc = _run_frozen_combine(root, workspace, None)
-            self._assert_combine_failed(proc, workspace)
-            self.assertIn("hash missing", proc.stderr)
-
-    def test_report_missing_from_frozen_tree_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root, workspace = _frozen_layout(Path(tmp), None)
-            proc = _run_frozen_combine(root, workspace, _bash_trusted_manifest(root))
-            self._assert_combine_failed(proc, workspace)
-            self.assertIn("missing from trusted checkout", proc.stderr)
-
-    def test_tampered_scan_report_fails_closed(self) -> None:
-        cases = (
-            ("flip scan_conclusive", _flip_scan_conclusive),
-            ("delete report", _delete_report),
-            ("swap fake report", _swap_fake_report),
-        )
-        for name, tamper in cases:
-            with self.subTest(name=name):
-                with tempfile.TemporaryDirectory() as tmp:
-                    root, workspace = _frozen_layout(Path(tmp), _INCONCLUSIVE_REPORT)
-                    manifest = _bash_trusted_manifest(root)
-                    tamper(root / "malware_scan_report.json")
-                    proc = _run_frozen_combine(root, workspace, manifest)
-                    self._assert_combine_failed(proc, workspace)
-                    self.assertIn("changed before combine", proc.stderr)
+            self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
+            self.assertNotIn("**Verdict: benign**", written["result"])
 
     def _assert_combine_failed(
         self,
@@ -305,55 +279,33 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         self.assertFalse((workspace / "cursor_output.json").exists())
 
 
-def _bash_trusted_manifest(root: Path) -> str:
-    proc = subprocess.run(
-        [
-            "bash",
-            "-c",
-            'root="$(cd "$1" && pwd -P)" || exit 1\n' + _HASH_PIPELINE,
-            "hash_trusted_scripts",
-            str(root),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    return proc.stdout.decode().rstrip("\n")
+def _seal_env(parent: Path, payload: bytes, digest: str | None = None) -> dict[str, str]:
+    runner = parent / "runner-temp"
+    runner.mkdir(exist_ok=True)
+    (runner / _FROZEN_NAME).write_bytes(payload)
+    env = os.environ.copy()
+    env["RUNNER_TEMP"] = str(runner)
+    if digest is None:
+        env["MALWARE_SCAN_REPORT_SHA256"] = hashlib.sha256(payload).hexdigest()
+    else:
+        env["MALWARE_SCAN_REPORT_SHA256"] = digest
+    return env
 
 
-def _frozen_layout(base: Path, report: dict | None) -> tuple[Path, Path]:
-    root = base / "trusted-dcr-scripts"
-    scripts = root / ".github" / "scripts"
-    scripts.mkdir(parents=True)
-    for name in _BUNDLE_STEMS:
-        shutil.copy2(_SCRIPTS / name, scripts / name)
-    if report is not None:
-        (root / "malware_scan_report.json").write_text(
-            json.dumps(report) + "\n",
-            encoding="utf-8",
-        )
+def _workspace(base: Path) -> Path:
     workspace = base / "workspace"
     workspace.mkdir()
     (workspace / "cursor_output_malware.json").write_text(_BENIGN_AGENT, encoding="utf-8")
     (workspace / "cursor_output_compatibility.json").write_text(_COMPAT_AGENT, encoding="utf-8")
-    (workspace / "malware_scan_report.json").write_text(
-        json.dumps(_CONCLUSIVE_REPORT) + "\n",
-        encoding="utf-8",
-    )
-    return root, workspace
+    (workspace / "malware_scan_report.json").write_bytes(_CONCLUSIVE_BYTES)
+    return workspace
 
 
-def _run_frozen_combine(
-    root: Path,
-    workspace: Path,
-    manifest: str | None,
-) -> subprocess.CompletedProcess[str]:
-    script = root / ".github" / "scripts" / "dependency_cursor_review_combine_outputs.py"
+def _run_combine(workspace: Path, updates: dict[str, str]) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env.pop("TRUSTED_DCR_SCRIPTS_SHA256", None)
-    if manifest is not None:
-        env["TRUSTED_DCR_SCRIPTS_SHA256"] = manifest
+    env.update(updates)
     return subprocess.run(
-        [sys.executable, "-I", str(script)],
+        [sys.executable, "-I", str(_SCRIPTS / "dependency_cursor_review_combine_outputs.py")],
         cwd=workspace,
         env=env,
         capture_output=True,
@@ -361,21 +313,20 @@ def _run_frozen_combine(
     )
 
 
-def _flip_scan_conclusive(report_path: Path) -> None:
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["scan_conclusive"] = True
-    report_path.write_text(json.dumps(report) + "\n", encoding="utf-8")
-
-
-def _delete_report(report_path: Path) -> None:
-    report_path.unlink()
-
-
-def _swap_fake_report(report_path: Path) -> None:
-    report_path.write_text(
-        json.dumps(_CONCLUSIVE_REPORT) + "\n",
-        encoding="utf-8",
+def _combine_in(
+    base: Path,
+    payload: bytes,
+    digest: str,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    runner = base / "runner-temp"
+    runner.mkdir()
+    (runner / _FROZEN_NAME).write_bytes(payload)
+    workspace = _workspace(base)
+    proc = _run_combine(
+        workspace,
+        {"RUNNER_TEMP": str(runner), "MALWARE_SCAN_REPORT_SHA256": digest},
     )
+    return proc, workspace
 
 
 if __name__ == "__main__":

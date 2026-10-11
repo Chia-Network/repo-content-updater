@@ -1,13 +1,13 @@
 """Merge Cursor malware + compatibility JSON outputs; format malware verdict via trusted loader.
 
-When this file runs from the trusted-dcr-scripts checkout, the malware scan
-report must already sit at the root of that tree and TRUSTED_DCR_SCRIPTS_SHA256
-must be the pre-agent sha256sum manifest of the tree. A mismatch or a missing
-report fails closed. The workspace copy is ignored.
+The scan step seals frozen-malware-scan-report.json under RUNNER_TEMP and its
+sha256 as a step output before the agents start. Combine reads those bytes and
+exits unless hashlib.sha256 matches MALWARE_SCAN_REPORT_SHA256.
 """
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -113,53 +113,8 @@ _KNOWN_VERDICT_HEADERS = (
     "**Verdict: malicious**",
     _INCONCLUSIVE_HEADER,
 )
-_TRUSTED_CHECKOUT_DIR = "trusted-dcr-scripts"
-_TRUSTED_HASH_ENV = "TRUSTED_DCR_SCRIPTS_SHA256"
-_SCAN_REPORT_NAME = "malware_scan_report.json"
-
-
-def trusted_tree_manifest(root: Path) -> str:
-    """sha256sum listing of regular files under root, without a trailing newline.
-
-    Matches `find "$root" -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum`
-    after command substitution strips the final newline. That is the workflow
-    snapshot stored in TRUSTED_DCR_SCRIPTS_SHA256 before the agents run.
-    """
-    manifest, _files = _trusted_tree_snapshot(root)
-    return manifest
-
-
-def _trusted_tree_snapshot(root: Path) -> tuple[str, dict[str, bytes]]:
-    """Manifest plus the bytes hashed for each relative path."""
-    root = root.resolve()
-    entries: list[tuple[bytes, str, bytes]] = []
-    for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
-        for name in filenames:
-            path = Path(dirpath) / name
-            if path.is_symlink() or not path.is_file():
-                continue
-            data = path.read_bytes()
-            rel = path.relative_to(root).as_posix()
-            entries.append((os.fsencode(path), rel, data))
-    entries.sort(key=lambda item: item[0])
-    lines: list[str] = []
-    files: dict[str, bytes] = {}
-    for encoded, rel, data in entries:
-        digest = hashlib.sha256(data).hexdigest()
-        lines.append(f"{digest}  {os.fsdecode(encoded)}")
-        files[rel] = data
-    return "\n".join(lines), files
-
-
-def _trusted_checkout_root() -> Path | None:
-    """Production layout is <trusted-dcr-scripts>/.github/scripts/<this file>."""
-    script = Path(__file__).resolve()
-    if script.parent.name != "scripts" or script.parent.parent.name != ".github":
-        return None
-    root = script.parents[2]
-    if root.name != _TRUSTED_CHECKOUT_DIR:
-        return None
-    return root
+_FROZEN_REPORT_NAME = "frozen-malware-scan-report.json"
+_REPORT_SHA256_ENV = "MALWARE_SCAN_REPORT_SHA256"
 
 
 def _report_forces_inconclusive(report: object) -> bool:
@@ -180,45 +135,49 @@ def _bytes_force_inconclusive(data: bytes) -> bool:
     return _report_forces_inconclusive(report)
 
 
-def _scan_forces_inconclusive(path: Path | None = None) -> bool:
-    """Missing, unscanned, or tree-spoofed scanner reports cannot publish a verdict."""
-    report_path = path or Path(_SCAN_REPORT_NAME)
-    if not report_path.is_file():
-        return True
-    try:
-        data = report_path.read_bytes()
-    except OSError:
-        return True
-    return _bytes_force_inconclusive(data)
-
-
 def _fail_closed(message: str) -> None:
     print(message, file=sys.stderr)
     sys.exit(1)
 
 
-def _scan_gate_forces_inconclusive() -> bool:
-    """Fail closed unless the pre-agent trusted-tree hash still matches.
+def _digest_is_sha256(value: str) -> bool:
+    if len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return value == value.lower()
 
-    Unit tests that omit the freeze env and are not the trusted checkout keep
-    the workspace-file gate. A freeze env outside that checkout cannot fall
-    open onto the workspace report.
-    """
-    root = _trusted_checkout_root()
-    expected = os.environ.get(_TRUSTED_HASH_ENV, "").rstrip("\n")
-    if root is None and not expected:
-        return _scan_forces_inconclusive()
-    if root is None:
-        _fail_closed("Trusted scan report checkout is missing before combine.")
-    if not expected:
-        _fail_closed("Trusted scan report hash missing before combine.")
-    manifest, files = _trusted_tree_snapshot(root)
-    if manifest != expected:
-        _fail_closed("Trusted review scripts changed before combine.")
-    report_bytes = files.get(_SCAN_REPORT_NAME)
-    if report_bytes is None:
-        _fail_closed("Malware scan report missing from trusted checkout.")
-    return _bytes_force_inconclusive(report_bytes)
+
+def _read_frozen_report(path: Path) -> bytes:
+    """Read the sealed report without following a symlink planted at that path."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            _fail_closed("Frozen malware scan report is a symlink.")
+        _fail_closed("Frozen malware scan report is missing.")
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            return handle.read()
+    except OSError:
+        _fail_closed("Frozen malware scan report is missing.")
+
+
+def _scan_gate_forces_inconclusive() -> bool:
+    """Fail closed unless the sealed scan-step digest matches the frozen bytes."""
+    expected = os.environ.get(_REPORT_SHA256_ENV, "").strip()
+    if not _digest_is_sha256(expected):
+        _fail_closed("Malware scan report digest is missing.")
+    runner_temp = os.environ.get("RUNNER_TEMP", "")
+    if not runner_temp:
+        _fail_closed("Frozen malware scan report path is missing.")
+    data = _read_frozen_report(Path(runner_temp) / _FROZEN_REPORT_NAME)
+    if hashlib.sha256(data).hexdigest() != expected:
+        _fail_closed("Frozen malware scan report digest mismatch.")
+    return _bytes_force_inconclusive(data)
 
 
 def _force_inconclusive_header(text: str) -> str:
@@ -233,7 +192,7 @@ def _force_inconclusive_header(text: str) -> str:
 
 def main() -> None:
     _drop_pr_head_scripts_from_sys_path()
-    # Verify the frozen tree before loading any sibling module from it.
+    # Check the sealed report before loading any sibling module.
     force_inconclusive = _scan_gate_forces_inconclusive()
     ns = _host_namespace()
     resolve_loader_bundle = ns["resolve_loader_bundle"]

@@ -71,7 +71,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
     def test_malware_formatter_imported_from_trusted_companion_not_inline(self) -> None:
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
         self.assertIn(
-            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"',
+            '/usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"',
             workflow,
         )
         self.assertIn(
@@ -101,13 +101,26 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         )
         self.assertNotIn("git -C .upstream-dependency checkout --detach", workflow)
         self.assertIn("hash_trusted_scripts", workflow)
-        self.assertIn("TRUSTED_DCR_SCRIPTS_SHA256", workflow)
         self.assertIn("trusted_hash_snapshot", workflow)
         self.assertIn("Trusted review scripts changed before combine.", workflow)
-        self.assertNotIn("cmp -s", workflow)
-        copy_report = 'cp malware_scan_report.json "${trusted_root}/malware_scan_report.json"'
-        self.assertIn(copy_report, workflow)
-        self.assertLess(workflow.index(copy_report), workflow.index("trusted_hash_snapshot="))
+        self.assertIn("cp --remove-destination", workflow)
+        self.assertIn("${RUNNER_TEMP}/frozen-malware-scan-report.json", workflow)
+        self.assertIn("report_sha256=", workflow)
+        self.assertIn("/usr/bin/sha256sum", workflow)
+        self.assertNotIn("TRUSTED_DCR_SCRIPTS_SHA256", workflow)
+        self.assertNotIn(
+            'cp malware_scan_report.json "${trusted_root}/malware_scan_report.json"',
+            workflow,
+        )
+        self.assertIn("/usr/bin/rm -f malware_scan_report.json", workflow)
+        self.assertLess(
+            workflow.index("dependency_cursor_review_prompts.py"),
+            workflow.index("/usr/bin/rm -f malware_scan_report.json"),
+        )
+        self.assertLess(
+            workflow.index("/usr/bin/rm -f malware_scan_report.json"),
+            workflow.index('run_agent_prompt "cursor_prompt_malware.txt"'),
+        )
         self.assertLess(
             workflow.index("trusted_hash_snapshot="),
             workflow.index('run_agent_prompt "cursor_prompt_malware.txt"'),
@@ -117,7 +130,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             workflow.index('if [ "$trusted_hash_now" != "$trusted_hash_snapshot" ]'),
         )
         self.assertIn(
-            'find "$trusted_root" -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum',
+            '/usr/bin/find "$trusted_root" -type f -print0 | LC_ALL=C /usr/bin/sort -z | /usr/bin/xargs -0 -r /usr/bin/sha256sum',
             workflow,
         )
 

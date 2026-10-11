@@ -112,7 +112,7 @@ async function runPostComment({ github, context, core }) {
   const raw = readText('cursor_output.json', '{"result":"No Cursor output generated.","complete":false}');
   const analysisText = analysisTextFromRaw(raw);
   const marker = selectPostedMarker(reviewMarker);
-  const malwareSummaryFallback =
+  const malwareSummary =
     (typeof malwareScanSummaryOutput === 'string' && malwareScanSummaryOutput.trim()) ||
     [
       '## Malware Scan Summary',
@@ -121,7 +121,6 @@ async function runPostComment({ github, context, core }) {
       `- Changed upstream files scanned: \`${malwareScanChangedCount || 'unknown'}\``,
       '- Scanner output file missing.',
     ].join('\n');
-  const malwareSummary = readText('malware_scan_summary.md', malwareSummaryFallback);
 
   let trimmedAnalysis = analysisText.slice(0, analysisMaxLen);
   let trimmedMalware = malwareSummary.slice(0, malwareMaxLen);
