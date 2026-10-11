@@ -25,7 +25,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             "Install trusted git path checkout action definition", 1
         )[1].split("Ensure malware verdict formatter bundle", 1)[0]
         ensure_bundle = section.split("Ensure malware verdict formatter bundle", 1)[1].split(
-            "Install Cursor CLI", 1
+            "Extract Dependabot comment context", 1
         )[0]
         self.assertNotIn("Formatter script present on PR head.", section)
         self.assertIn(
@@ -68,20 +68,29 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             msg="dependency-cursor-review.yml should stay under thermonuclear line budget",
         )
 
+    def _job(self, workflow: str, name: str) -> str:
+        start = workflow.index(f"\n  {name}:\n") + 1
+        if name == "dependency-review":
+            return workflow[start:]
+        end = workflow.index(f"\n  {self._next_job(name)}:\n", start)
+        return workflow[start:end]
+
+    @staticmethod
+    def _next_job(name: str) -> str:
+        return {
+            "dependency-review-scan": "dependency-review-agent",
+            "dependency-review-agent": "dependency-review",
+        }[name]
+
     def test_malware_formatter_imported_from_trusted_companion_not_inline(self) -> None:
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
-        self.assertIn("/usr/bin/python3 -I -c", workflow)
-        self.assertIn('exec(compile(data, path, "exec")', workflow)
-        self.assertIn('combine_b64="$(/usr/bin/base64 -w0 "$combine_path")"', workflow)
-        self.assertNotIn(
-            '/usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"',
-            workflow,
-        )
+        scan = self._job(workflow, "dependency-review-scan")
+        agent = self._job(workflow, "dependency-review-agent")
+        verdict = self._job(workflow, "dependency-review")
         self.assertIn(
             'bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_malware_scan.sh"',
-            workflow,
+            scan,
         )
-        self.assertNotIn("python3 -I .github/scripts/", workflow)
         self.assertNotIn("bash .github/scripts/upstream_malware_scan.sh", workflow)
         combine = (
             _REPO_ROOT
@@ -96,81 +105,94 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("_util_via_bootstrap", combine)
         self.assertNotIn("_cold_start_module", combine)
         self.assertNotIn("_bootstrap_module_for", combine)
-        self.assertIn("dependency-cursor-review-dependabot-context.js", workflow)
-        self.assertIn("dependency-cursor-review-target-pr.js", workflow)
+        self.assertIn("dependency-cursor-review-dependabot-context.js", scan)
+        self.assertIn("dependency-cursor-review-target-pr.js", scan)
         self.assertIn(
             'bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_release_checkout.sh"',
-            workflow,
+            scan,
         )
         self.assertNotIn("git -C .upstream-dependency checkout --detach", workflow)
-        self.assertIn("hash_trusted_scripts", workflow)
-        self.assertIn("trusted_hash_snapshot", workflow)
-        self.assertIn("Trusted review scripts changed before combine.", workflow)
-        self.assertIn("cp --remove-destination", workflow)
-        self.assertIn("${RUNNER_TEMP}/frozen-malware-scan-report.json", workflow)
-        self.assertIn("report_sha256=", workflow)
-        self.assertIn("/usr/bin/sha256sum", workflow)
+        self.assertNotIn("hash_trusted_scripts", workflow)
+        self.assertNotIn("trusted_hash_snapshot", workflow)
+        self.assertNotIn("cp --remove-destination", workflow)
+        self.assertNotIn("frozen-malware-scan-report.json", workflow)
+        self.assertNotIn("O_NOFOLLOW", combine)
+        self.assertNotIn("post_comment_sha256", workflow)
+        self.assertNotIn("Module.wrap", workflow)
+        self.assertNotIn("/usr/bin/python3", workflow)
+        self.assertNotIn("/usr/bin/sha256sum", workflow)
         self.assertNotIn("TRUSTED_DCR_SCRIPTS_SHA256", workflow)
+        self.assertIn("report_sha256=", scan)
+        upload = scan.split("- name: Upload scan inputs\n", 1)[1]
+        for name in (
+            "malware_scan_report.json",
+            "malware_scan_summary.md",
+            "upstream_changed_files.txt",
+            "cursor_prompt_malware.txt",
+            "cursor_prompt_compatibility.txt",
+        ):
+            self.assertIn(name, upload)
+        self.assertIn("retention-days: 1", upload)
+        self.assertNotIn("cursor_output_malware.json", upload)
+
+    def test_agent_job_cannot_reach_the_verdict(self) -> None:
+        """The agent runner has no write token, no verdict scripts, and no full history."""
+        workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
+        scan = self._job(workflow, "dependency-review-scan")
+        agent = self._job(workflow, "dependency-review-agent")
+        verdict = self._job(workflow, "dependency-review")
+        workflow_perms = workflow.split("\njobs:\n", 1)[0]
+        self.assertIn("permissions:\n  contents: read\n", workflow_perms)
+        self.assertNotIn("pull-requests:", workflow_perms)
+        self.assertIn("pull-requests: read", scan)
+        self.assertNotIn("pull-requests: write", scan)
+        self.assertNotIn("CURSOR_API_KEY", scan)
+        self.assertIn("contents: read", agent)
+        self.assertNotIn("pull-requests:", agent)
+        self.assertNotIn("fetch-depth: 0", agent)
+        self.assertIn("--shallow-exclude=", agent)
+        self.assertNotIn("dependency_cursor_review_combine_outputs.py", agent)
+        self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
+        self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
+        self.assertNotIn("CURSOR_API_KEY", verdict)
+        self.assertNotIn("secrets.CURSOR_API_KEY", agent.split("- name: Run Cursor agent\n", 1)[0])
+        agent_step = agent.split("- name: Run Cursor agent\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("secrets.CURSOR_API_KEY", agent_step)
+        self.assertEqual(workflow.count("secrets.CURSOR_API_KEY"), 1)
+        verdict_if = verdict.split("\n    steps:\n", 1)[0]
+        self.assertIn("always()", verdict_if)
+        self.assertIn("!cancelled()", verdict_if)
+        self.assertIn("needs.dependency-review-scan.result != 'skipped'", verdict_if)
+        self.assertNotIn("already_reviewed", verdict_if)
+        self.assertIn("pull-requests: write", verdict)
+        self.assertIn("- name: Already reviewed", verdict)
+        self.assertIn("exit 1", verdict.split("- name: Fail closed when scan or agent failed\n", 1)[1])
+        post = verdict.split("- name: Post or update PR comment\n", 1)[1]
+        self.assertIn(
+            "require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-post-comment.js`)",
+            post,
+        )
+        self.assertNotIn("RUNNER_TEMP", post)
+        self.assertLess(verdict.index("Checkout default-branch helpers"), verdict.index("Post or update PR comment"))
+        self.assertIn("DCR_SCAN_REPORT:", verdict)
+        self.assertIn("DCR_MALWARE_JSON:", verdict)
+        self.assertIn("DCR_COMPAT_JSON:", verdict)
+        self.assertIn("DCR_COMBINED_JSON:", verdict)
+        self.assertIn("needs.dependency-review-scan.outputs.report_sha256", verdict)
+        self.assertIn(
+            "python3 -I .github/scripts/dependency_cursor_review_combine_outputs.py",
+            verdict,
+        )
         self.assertNotIn(
-            'cp malware_scan_report.json "${trusted_root}/malware_scan_report.json"',
-            workflow,
+            "python3 -I .github/scripts/dependency_cursor_review_combine_outputs.py",
+            agent,
         )
-        self.assertIn("/usr/bin/rm -f malware_scan_report.json", workflow)
-        self.assertLess(
-            workflow.index("dependency_cursor_review_prompts.py"),
-            workflow.index("/usr/bin/rm -f malware_scan_report.json"),
-        )
-        self.assertLess(
-            workflow.index("/usr/bin/rm -f malware_scan_report.json"),
-            workflow.index('run_agent_prompt "cursor_prompt_malware.txt"'),
-        )
-        self.assertLess(
-            workflow.index("trusted_hash_snapshot="),
-            workflow.index('run_agent_prompt "cursor_prompt_malware.txt"'),
-        )
-        self.assertLess(
-            workflow.index('run_agent_prompt "cursor_prompt_compatibility.txt"'),
-            workflow.index('if [ "$trusted_hash_now" != "$trusted_hash_snapshot" ]'),
-        )
-        self.assertIn(
-            '/usr/bin/find "$trusted_root" -type f -print0 | LC_ALL=C /usr/bin/sort -z | /usr/bin/xargs -0 -r /usr/bin/sha256sum',
-            workflow,
-        )
-        self.assertIn(
-            'seal_digest "${dest}/dependency-cursor-review-post-comment.js" post_comment_sha256',
-            workflow,
-        )
-        self.assertIn(
-            'seal_digest "${dest}/dependency-cursor-review-dependabot-context.js" post_comment_context_sha256',
-            workflow,
-        )
-        self.assertIn("steps.trusted_helper.outputs.post_comment_sha256", workflow)
-        self.assertIn("steps.trusted_helper.outputs.post_comment_context_sha256", workflow)
-        self.assertLess(
-            workflow.index("post_comment_sha256"),
-            workflow.index("- name: Run Cursor analysis"),
-        )
-        self.assertLess(
-            workflow.index("post_comment_context_sha256"),
-            workflow.index("- name: Run Cursor analysis"),
-        )
-        analysis = workflow.split("- name: Run Cursor analysis\n", 1)[1].split("\n      - name:", 1)[0]
-        self.assertNotIn("GITHUB_OUTPUT", analysis)
-        self.assertNotIn("post_comment_sha256", analysis)
-        self.assertNotIn("post_comment_context_sha256", analysis)
-        self.assertIn("/usr/bin/sha256sum -c -", workflow)
-        self.assertIn("Module.wrap", workflow)
-        self.assertNotIn(
-            "require(`${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`)",
-            workflow,
-        )
-        upload = workflow.split("- name: Upload malware scan artifacts\n", 1)[1].split("\n      - name:", 1)[0]
-        self.assertIn("frozen-malware-scan-report.json", upload)
-        self.assertNotIn("upstream_changed_files.txt", upload)
-        self.assertLess(
-            workflow.index("/usr/bin/sha256sum -c -"),
-            workflow.index("actions/upload-artifact@v7"),
-        )
+        post_js = (
+            _REPO_ROOT / "internal/workflowscripts/dependency-cursor-review-post-comment.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("require('./dependency-cursor-review-dependabot-context.js')", post_js)
+        self.assertNotIn("RUNNER_TEMP", post_js)
+        self.assertIn("function selectPostedMarker", post_js)
 
     def test_5dd16704_target_pr_sparse_helper_does_not_shrink_pr_checkout(self) -> None:
         """Bugbot 5dd16704: sparse helper checkout must not leave GITHUB_WORKSPACE sparse for PR head."""

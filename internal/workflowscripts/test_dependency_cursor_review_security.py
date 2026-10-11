@@ -33,28 +33,50 @@ _INCONCLUSIVE_REPORT = {
 _CONCLUSIVE_BYTES = (
     b'{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false}\n'
 )
-_FROZEN_NAME = "frozen-malware-scan-report.json"
 
 
 class DependencyCursorReviewSecurityTest(unittest.TestCase):
     def test_workflow_runs_python_companions_with_isolated_flag(self) -> None:
         workflow = _WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(
-            '/usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_prompts.py"',
+            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_prompts.py"',
             workflow,
         )
-        self.assertIn("/usr/bin/python3 -I -c", workflow)
-        self.assertIn('exec(compile(data, path, "exec")', workflow)
-        self.assertNotIn(
-            '/usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"',
+        self.assertIn(
+            "python3 -I .github/scripts/dependency_cursor_review_combine_outputs.py",
             workflow,
         )
-        self.assertIn("cp --remove-destination", workflow)
-        self.assertIn("/usr/bin/sha256sum", workflow)
         self.assertIn("report_sha256=", workflow)
         self.assertNotIn("malware_scan_summary.md", (_SCRIPTS / "dependency-cursor-review-post-comment.js").read_text())
         self.assertNotIn("sys.path", workflow)
         self.assertIn("trusted-dcr-scripts", workflow)
+        self.assertNotIn("cp --remove-destination", workflow)
+        self.assertNotIn("O_NOFOLLOW", (_SCRIPTS / "dependency_cursor_review_combine_outputs.py").read_text())
+        prompts = (_SCRIPTS / "dependency_cursor_review_prompts.py").read_text(encoding="utf-8")
+        self.assertIn("only the release range from..to is available", prompts)
+        self.assertNotIn("full git history is available", prompts)
+
+    def test_agent_job_is_isolated_from_the_verdict(self) -> None:
+        workflow = _WORKFLOW.read_text(encoding="utf-8")
+        agent = workflow.split("\n  dependency-review-agent:\n", 1)[1].split("\n  dependency-review:\n", 1)[0]
+        verdict = workflow.split("\n  dependency-review:\n", 1)[1]
+        self.assertNotIn("pull-requests:", agent)
+        self.assertNotIn("fetch-depth: 0", agent)
+        self.assertNotIn("dependency_cursor_review_combine_outputs.py", agent)
+        self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
+        self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
+        self.assertNotIn("secrets.CURSOR_API_KEY", agent.split("- name: Run Cursor agent\n", 1)[0])
+        self.assertEqual(workflow.count("secrets.CURSOR_API_KEY"), 1)
+        verdict_if = verdict.split("\n    steps:\n", 1)[0]
+        self.assertIn("always()", verdict_if)
+        self.assertNotIn("already_reviewed", verdict_if)
+        self.assertIn("pull-requests: write", verdict)
+        self.assertNotIn("CURSOR_API_KEY", verdict)
+        self.assertIn(
+            "require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-post-comment.js`)",
+            verdict,
+        )
+        self.assertIn("needs.dependency-review-scan.outputs.report_sha256", verdict)
 
     def test_a46061b8_combine_resists_importlib_shadow_on_scripts_dir(self) -> None:
         """Scripts-dir shadow must not run when bootstrap/companion load scrubs sys.path."""
@@ -212,59 +234,8 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
             self.assertNotIn("**Verdict: benign**", written["result"])
 
-    def test_digest_mismatch_exits(self) -> None:
-        payload = (json.dumps(_INCONCLUSIVE_REPORT) + "\n").encode()
-        with tempfile.TemporaryDirectory() as tmp:
-            proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(b"other").hexdigest())
-            self._assert_combine_failed(proc, workspace)
-            self.assertIn("digest mismatch", proc.stderr)
-
-    def test_empty_digest_exits(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            proc, workspace = _combine_in(Path(tmp), _CONCLUSIVE_BYTES, "")
-            self._assert_combine_failed(proc, workspace)
-            self.assertIn("digest is missing", proc.stderr)
-
-    def test_frozen_symlink_is_rejected(self) -> None:
-        payload = _CONCLUSIVE_BYTES
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            real = base / "real.json"
-            real.write_bytes(payload)
-            runner = base / "runner-temp"
-            runner.mkdir()
-            frozen = runner / _FROZEN_NAME
-            frozen.symlink_to(real)
-            workspace = _workspace(base)
-            proc = _run_combine(
-                workspace,
-                {
-                    "RUNNER_TEMP": str(runner),
-                    "MALWARE_SCAN_REPORT_SHA256": hashlib.sha256(payload).hexdigest(),
-                },
-            )
-            self._assert_combine_failed(proc, workspace)
-            self.assertIn("symlink", proc.stderr)
-
-    def test_cp_remove_destination_does_not_follow_symlink(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            source = base / "malware_scan_report.json"
-            source.write_bytes(_CONCLUSIVE_BYTES)
-            secret = base / "secret.txt"
-            secret.write_text("original-secret\n", encoding="utf-8")
-            dest = base / _FROZEN_NAME
-            dest.symlink_to(secret)
-            subprocess.run(
-                ["cp", "--remove-destination", str(source), str(dest)],
-                check=True,
-            )
-            self.assertFalse(dest.is_symlink())
-            self.assertEqual(dest.read_bytes(), _CONCLUSIVE_BYTES)
-            self.assertEqual(secret.read_text(encoding="utf-8"), "original-secret\n")
-
-    def test_malformed_json_with_matching_digest_is_inconclusive(self) -> None:
-        payload = b"{not-json"
+    def test_matching_malformed_report_is_inconclusive(self) -> None:
+        payload = b"not-json\n"
         with tempfile.TemporaryDirectory() as tmp:
             proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(payload).hexdigest())
             self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
@@ -272,165 +243,23 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
             self.assertNotIn("**Verdict: benign**", written["result"])
 
-    def test_missing_frozen_report_exits(self) -> None:
+    def test_digest_mismatch_exits(self) -> None:
+        payload = (json.dumps(_INCONCLUSIVE_REPORT) + "\n").encode()
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(b"other").hexdigest())
+            self._assert_combine_failed(proc, workspace)
+            self.assertIn("digest mismatch", proc.stderr)
+
+
+    def test_missing_scan_report_exits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            runner = base / "runner-temp"
-            runner.mkdir()
             workspace = _workspace(base)
-            proc = _run_combine(
-                workspace,
-                {
-                    "RUNNER_TEMP": str(runner),
-                    "MALWARE_SCAN_REPORT_SHA256": hashlib.sha256(_CONCLUSIVE_BYTES).hexdigest(),
-                },
-            )
+            env = _seal_env(workspace, _CONCLUSIVE_BYTES)
+            env["DCR_SCAN_REPORT"] = str(base / "missing-scan-report.json")
+            proc = _run_combine(workspace, env)
             self._assert_combine_failed(proc, workspace)
             self.assertIn("missing", proc.stderr)
-
-    def test_replaced_post_comment_helper_is_refused(self) -> None:
-        workflow = _WORKFLOW.read_text(encoding="utf-8")
-        script = _script_block(workflow, "Post or update PR comment")
-        self.assertIn("Module.wrap", script)
-        self.assertIn("dependency-cursor-review-dependabot-context.js", script)
-        self.assertNotIn("require(helperPath)", script)
-        self.assertNotIn(
-            "require(`${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`)",
-            script,
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = Path(tmp)
-            helper_dir = runner / "trusted-dcr-helper"
-            helper_dir.mkdir()
-            for name in (
-                "dependency-cursor-review-post-comment.js",
-                "dependency-cursor-review-dependabot-context.js",
-            ):
-                shutil.copy2(_SCRIPTS / name, helper_dir / name)
-            target = helper_dir / "dependency-cursor-review-post-comment.js"
-            context_path = helper_dir / "dependency-cursor-review-dependabot-context.js"
-            digest = hashlib.sha256(target.read_bytes()).hexdigest()
-            context_digest = hashlib.sha256(context_path.read_bytes()).hexdigest()
-            loaded = _run_post_script(script, runner, digest, context_digest)
-            self.assertEqual(loaded.returncode, 0, msg=loaded.stderr or loaded.stdout)
-            self.assertIn("Posted dependency review comment", loaded.stdout)
-            target.write_text(
-                "module.exports = async () => { console.log('tampered-helper'); };\n",
-                encoding="utf-8",
-            )
-            refused = _run_post_script(script, runner, digest, context_digest)
-            self.assertNotEqual(refused.returncode, 0, msg=refused.stdout)
-            self.assertIn("digest mismatch", refused.stderr)
-            self.assertNotIn("tampered-helper", refused.stdout)
-            self.assertNotIn("Posted dependency review comment", refused.stdout)
-
-    def test_replaced_context_sibling_is_refused(self) -> None:
-        workflow = _WORKFLOW.read_text(encoding="utf-8")
-        script = _script_block(workflow, "Post or update PR comment")
-        forged = "<!-- cursor-dependabot-review patch-id:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->"
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = Path(tmp)
-            helper_dir = runner / "trusted-dcr-helper"
-            helper_dir.mkdir()
-            for name in (
-                "dependency-cursor-review-post-comment.js",
-                "dependency-cursor-review-dependabot-context.js",
-            ):
-                shutil.copy2(_SCRIPTS / name, helper_dir / name)
-            helper = helper_dir / "dependency-cursor-review-post-comment.js"
-            context_path = helper_dir / "dependency-cursor-review-dependabot-context.js"
-            helper_digest = hashlib.sha256(helper.read_bytes()).hexdigest()
-            context_digest = hashlib.sha256(context_path.read_bytes()).hexdigest()
-            context_path.write_text(
-                "module.exports = async () => {};\n"
-                f"module.exports.LEGACY_REVIEW_MARKER = {forged!r};\n"
-                "module.exports.isActionsBotMarkerComment = () => false;\n",
-                encoding="utf-8",
-            )
-            refused = _run_post_script(script, runner, helper_digest, context_digest)
-            self.assertNotEqual(refused.returncode, 0, msg=refused.stdout)
-            self.assertIn("dependabot-context.js", refused.stderr)
-            self.assertIn("digest mismatch", refused.stderr)
-            self.assertNotIn(forged, refused.stdout)
-            self.assertNotIn("Posted dependency review comment", refused.stdout)
-
-    def test_combine_runs_snapshotted_bytes_after_disk_change(self) -> None:
-        workflow = _WORKFLOW.read_text(encoding="utf-8")
-        run = _run_block(workflow, "Run Cursor analysis")
-        loop_start = run.index('combine_digest=""')
-        loop_end = run.index('done <<< "$trusted_hash_snapshot"')
-        loop_end += len('done <<< "$trusted_hash_snapshot"')
-        loop = run[loop_start:loop_end]
-        capture = 'combine_b64="$(/usr/bin/base64 -w0 "$combine_path")"'
-        exec_line = next(line for line in run.splitlines() if line.startswith("printf '%s' \"$combine_b64\""))
-        self.assertIn(capture, run)
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            trusted = base / "trusted-dcr-scripts"
-            scripts = trusted / ".github" / "scripts"
-            scripts.mkdir(parents=True)
-            for name in _BUNDLE_STEMS:
-                shutil.copy2(_SCRIPTS / name, scripts / name)
-            combine_path = scripts / "dependency_cursor_review_combine_outputs.py"
-            original = combine_path.read_bytes()
-            workspace = _workspace(base)
-            runner = base / "runner-temp"
-            runner.mkdir()
-            (runner / _FROZEN_NAME).write_bytes(_CONCLUSIVE_BYTES)
-            env = os.environ.copy()
-            env.update(
-                {
-                    "RUNNER_TEMP": str(runner),
-                    "MALWARE_SCAN_REPORT_SHA256": hashlib.sha256(_CONCLUSIVE_BYTES).hexdigest(),
-                }
-            )
-            shell = "\n".join(
-                [
-                    "set -euo pipefail",
-                    'trusted_root="$TRUSTED_ROOT"',
-                    "trusted_hash_snapshot=\"$(/usr/bin/find \"$trusted_root\" -type f -print0 | LC_ALL=C /usr/bin/sort -z | /usr/bin/xargs -0 -r /usr/bin/sha256sum)\"",
-                    'combine_path="$COMBINE_PATH"',
-                    loop,
-                    capture,
-                    "printf '%s\\n' 'import sys' 'sys.stderr.write(\"TAMPERED\\n\")' 'sys.exit(9)' > \"$combine_path\"",
-                    exec_line,
-                ]
-            )
-            env["TRUSTED_ROOT"] = str(trusted)
-            env["COMBINE_PATH"] = str(combine_path)
-            proc = subprocess.run(
-                ["bash", "-c", shell],
-                cwd=workspace,
-                env=env,
-                capture_output=True,
-            )
-            self.assertEqual(proc.returncode, 0, msg=proc.stderr.decode() or proc.stdout.decode())
-            self.assertNotIn(b"TAMPERED", proc.stderr)
-            written = json.loads((workspace / "cursor_output.json").read_text(encoding="utf-8"))
-            self.assertIn("Supply-Chain Malware Review", written["result"])
-            self.assertNotEqual(combine_path.read_bytes(), original)
-
-    def test_upload_check_deletes_replaced_frozen_report(self) -> None:
-        workflow = _WORKFLOW.read_text(encoding="utf-8")
-        run = _run_block(workflow, "Check frozen malware scan report")
-        upload = workflow.split("- name: Upload malware scan artifacts\n", 1)[1].split("\n      - name:", 1)[0]
-        self.assertNotIn("upstream_changed_files.txt", upload)
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = Path(tmp)
-            frozen = runner / _FROZEN_NAME
-            frozen.write_bytes(b"replaced\n")
-            env = os.environ.copy()
-            env["RUNNER_TEMP"] = str(runner)
-            env["REPORT_SHA256"] = hashlib.sha256(b"original\n").hexdigest()
-            proc = subprocess.run(
-                ["bash", "-c", run],
-                env=env,
-                capture_output=True,
-                text=True,
-            )
-            self.assertNotEqual(proc.returncode, 0, msg=proc.stdout)
-            self.assertFalse(frozen.exists())
-            self.assertIn("digest mismatch", proc.stderr)
 
     def _assert_combine_failed(
         self,
@@ -442,11 +271,13 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
 
 
 def _seal_env(parent: Path, payload: bytes, digest: str | None = None) -> dict[str, str]:
-    runner = parent / "runner-temp"
-    runner.mkdir(exist_ok=True)
-    (runner / _FROZEN_NAME).write_bytes(payload)
+    report = parent / "sealed-scan-report.json"
+    report.write_bytes(payload)
     env = os.environ.copy()
-    env["RUNNER_TEMP"] = str(runner)
+    env["DCR_SCAN_REPORT"] = str(report)
+    env["DCR_MALWARE_JSON"] = str(parent / "cursor_output_malware.json")
+    env["DCR_COMPAT_JSON"] = str(parent / "cursor_output_compatibility.json")
+    env["DCR_COMBINED_JSON"] = str(parent / "cursor_output.json")
     if digest is None:
         env["MALWARE_SCAN_REPORT_SHA256"] = hashlib.sha256(payload).hexdigest()
     else:
@@ -480,86 +311,9 @@ def _combine_in(
     payload: bytes,
     digest: str,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
-    runner = base / "runner-temp"
-    runner.mkdir()
-    (runner / _FROZEN_NAME).write_bytes(payload)
     workspace = _workspace(base)
-    proc = _run_combine(
-        workspace,
-        {"RUNNER_TEMP": str(runner), "MALWARE_SCAN_REPORT_SHA256": digest},
-    )
+    proc = _run_combine(workspace, _seal_env(workspace, payload, digest))
     return proc, workspace
-
-
-def _run_block(workflow: str, step_name: str) -> str:
-    section = workflow.split(f"- name: {step_name}\n", 1)[1]
-    section = section.split("\n      - name:", 1)[0]
-    body = section.split("run: |\n", 1)[1]
-    lines = body.splitlines()
-    indents = [len(line) - len(line.lstrip(" ")) for line in lines if line.strip()]
-    base = min(indents) if indents else 0
-    dedented = [(line[base:] if line.startswith(" " * base) else line) for line in lines]
-    return "\n".join(dedented).strip() + "\n"
-
-
-def _script_block(workflow: str, step_name: str) -> str:
-    section = workflow.split(f"- name: {step_name}\n", 1)[1]
-    body = section.split("script: |\n", 1)[1]
-    lines: list[str] = []
-    for line in body.splitlines():
-        if line.startswith("            "):
-            lines.append(line[12:])
-        elif line.strip() == "":
-            lines.append("")
-        else:
-            break
-    return "\n".join(lines).strip() + "\n"
-
-
-def _run_post_script(
-    script: str,
-    runner_temp: Path,
-    helper_digest: str,
-    context_digest: str,
-) -> subprocess.CompletedProcess[str]:
-    wrapper = """
-const core = {
-  info(message) { console.log(message); },
-  setFailed(message) { console.error(message); process.exitCode = 1; },
-};
-const github = {
-  paginate: async () => [],
-  rest: {
-    issues: {
-      listComments: async () => [],
-      createComment: async () => ({}),
-      updateComment: async () => ({}),
-    },
-  },
-};
-const context = { repo: { owner: 'acme', repo: 'widgets' } };
-(async () => {
-__SCRIPT__
-})().catch((err) => {
-  console.error(err && err.message ? err.message : String(err));
-  process.exitCode = 1;
-});
-"""
-    env = os.environ.copy()
-    env["RUNNER_TEMP"] = str(runner_temp)
-    env["POST_COMMENT_SHA256"] = helper_digest
-    env["POST_COMMENT_CONTEXT_SHA256"] = context_digest
-    env["PR_NUMBER"] = "1"
-    env["REVIEW_MARKER"] = ""
-    env["MALWARE_SCAN_STATUS"] = "clean"
-    env["MALWARE_SCAN_CHANGED_COUNT"] = "0"
-    env["MALWARE_SCAN_SUMMARY"] = "summary"
-    return subprocess.run(
-        ["node", "-e", wrapper.replace("__SCRIPT__", script)],
-        env=env,
-        capture_output=True,
-        text=True,
-    )
 
 
 if __name__ == "__main__":

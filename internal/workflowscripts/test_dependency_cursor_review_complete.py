@@ -49,11 +49,13 @@ class CombineCompleteTest(unittest.TestCase):
                     "verdict_token_in_tree": False,
                 }
             payload = (json.dumps(report) + "\n").encode()
-            runner = root / "runner-temp"
-            runner.mkdir()
-            (runner / "frozen-malware-scan-report.json").write_bytes(payload)
+            report_path = root / "sealed-scan-report.json"
+            report_path.write_bytes(payload)
             env = os.environ.copy()
-            env["RUNNER_TEMP"] = str(runner)
+            env["DCR_SCAN_REPORT"] = str(report_path)
+            env["DCR_MALWARE_JSON"] = str(root / "cursor_output_malware.json")
+            env["DCR_COMPAT_JSON"] = str(root / "cursor_output_compatibility.json")
+            env["DCR_COMBINED_JSON"] = str(root / "cursor_output.json")
             env["MALWARE_SCAN_REPORT_SHA256"] = hashlib.sha256(payload).hexdigest()
             proc = subprocess.run(
                 [sys.executable, "-I", str(_COMBINE)],
@@ -99,6 +101,10 @@ class CombineCompleteTest(unittest.TestCase):
             '{"error": "model failed"}',
         )
         self.assertIs(written["complete"], False)
+
+    def test_skipped_api_key_is_incomplete(self) -> None:
+        payload = '{"result":"CURSOR_API_KEY is not set; analysis was skipped.","complete":false}'
+        self.assertIs(self._run(payload, payload)["complete"], False)
 
     def test_both_good(self) -> None:
         written = self._run(

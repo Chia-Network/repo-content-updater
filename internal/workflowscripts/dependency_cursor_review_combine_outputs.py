@@ -1,13 +1,12 @@
 """Merge Cursor malware + compatibility JSON outputs; format malware verdict via trusted loader.
 
-The scan step seals frozen-malware-scan-report.json under RUNNER_TEMP and its
-sha256 as a step output before the agents start. Combine reads those bytes and
-exits unless hashlib.sha256 matches MALWARE_SCAN_REPORT_SHA256.
+The verdict job passes DCR_SCAN_REPORT and MALWARE_SCAN_REPORT_SHA256 from the
+scan job. Combine reads that report and exits unless hashlib.sha256 matches.
+Agent JSON is untrusted data read from DCR_MALWARE_JSON and DCR_COMPAT_JSON.
 """
 
 from __future__ import annotations
 
-import errno
 import hashlib
 import json
 import os
@@ -82,10 +81,12 @@ def _successful_analysis_text(path: str) -> str:
         return ""
     if not isinstance(payload, dict) or payload.get("error") or payload.get("is_error") is True:
         return ""
+    if payload.get("complete") is False:
+        return ""
     for key in ("result", "output", "text", "message"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip() and not value.startswith("Missing output file:"):
-            if value.startswith("Error: agent exited"):
+            if value.startswith(("Error: agent exited", "CURSOR_API_KEY is not set", "No Cursor output generated")):
                 return ""
             return value.strip()
     return ""
@@ -113,7 +114,6 @@ _KNOWN_VERDICT_HEADERS = (
     "**Verdict: malicious**",
     _INCONCLUSIVE_HEADER,
 )
-_FROZEN_REPORT_NAME = "frozen-malware-scan-report.json"
 _REPORT_SHA256_ENV = "MALWARE_SCAN_REPORT_SHA256"
 
 
@@ -150,33 +150,25 @@ def _digest_is_sha256(value: str) -> bool:
     return value == value.lower()
 
 
-def _read_frozen_report(path: Path) -> bytes:
-    """Read the sealed report without following a symlink planted at that path."""
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(path, flags)
-    except OSError as exc:
-        if exc.errno == errno.ELOOP:
-            _fail_closed("Frozen malware scan report is a symlink.")
-        _fail_closed("Frozen malware scan report is missing.")
-    try:
-        with os.fdopen(fd, "rb") as handle:
-            return handle.read()
-    except OSError:
-        _fail_closed("Frozen malware scan report is missing.")
+def _env_path(name: str) -> Path:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        _fail_closed(f"{name} is missing.")
+    return Path(value)
 
 
 def _scan_gate_forces_inconclusive() -> bool:
-    """Fail closed unless the sealed scan-step digest matches the frozen bytes."""
+    """Fail closed unless the scan-job digest matches DCR_SCAN_REPORT."""
     expected = os.environ.get(_REPORT_SHA256_ENV, "").strip()
     if not _digest_is_sha256(expected):
         _fail_closed("Malware scan report digest is missing.")
-    runner_temp = os.environ.get("RUNNER_TEMP", "")
-    if not runner_temp:
-        _fail_closed("Frozen malware scan report path is missing.")
-    data = _read_frozen_report(Path(runner_temp) / _FROZEN_REPORT_NAME)
+    path = _env_path("DCR_SCAN_REPORT")
+    try:
+        data = path.read_bytes()
+    except OSError:
+        _fail_closed("Malware scan report is missing.")
     if hashlib.sha256(data).hexdigest() != expected:
-        _fail_closed("Frozen malware scan report digest mismatch.")
+        _fail_closed("Malware scan report digest mismatch.")
     return _bytes_force_inconclusive(data)
 
 
@@ -194,13 +186,16 @@ def main() -> None:
     _drop_pr_head_scripts_from_sys_path()
     # Check the sealed report before loading any sibling module.
     force_inconclusive = _scan_gate_forces_inconclusive()
+    malware_path = str(_env_path("DCR_MALWARE_JSON"))
+    compatibility_path = str(_env_path("DCR_COMPAT_JSON"))
+    combined_path = _env_path("DCR_COMBINED_JSON")
     ns = _host_namespace()
     resolve_loader_bundle = ns["resolve_loader_bundle"]
     loader, script_dir = resolve_loader_bundle(_SCRIPT_CANDIDATES)
     format_malware_review_verdict = loader.find_and_load_format_malware_review_verdict(script_dir)
 
-    malware_payload = _load_any("cursor_output_malware.json")
-    compatibility_payload = _load_any("cursor_output_compatibility.json")
+    malware_payload = _load_any(malware_path)
+    compatibility_payload = _load_any(compatibility_path)
     malware_text = format_malware_review_verdict(_extract_text(malware_payload))
     if force_inconclusive:
         malware_text = _force_inconclusive_header(malware_text)
@@ -214,12 +209,12 @@ def main() -> None:
     # was written (complete, both section headings) and analysis succeeded.
     combined = {
         "result": combined_text,
-        "complete": bool(_successful_analysis_text("cursor_output_malware.json"))
-        and bool(_successful_analysis_text("cursor_output_compatibility.json")),
+        "complete": bool(_successful_analysis_text(malware_path))
+        and bool(_successful_analysis_text(compatibility_path)),
         "malware_review": malware_payload,
         "compatibility_review": compatibility_payload,
     }
-    Path("cursor_output.json").write_text(json.dumps(combined, indent=2), encoding="utf-8")
+    combined_path.write_text(json.dumps(combined, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":

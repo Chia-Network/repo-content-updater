@@ -616,6 +616,10 @@ test('skip marker requires both agent files and a genuine combined review', asyn
     ['{"result":"Error: agent exited with code 1"}', good],
     [good, undefined],
     ['{"type":"result","duration_ms":1}', '{"type":"result","duration_ms":1}'],
+    [
+      '{"result":"CURSOR_API_KEY is not set; analysis was skipped.","complete":false}',
+      '{"result":"CURSOR_API_KEY is not set; analysis was skipped.","complete":false}',
+    ],
   ];
   for (const [malware, compatibility] of badAgents) {
     await withWorkspace(async (directory) => {

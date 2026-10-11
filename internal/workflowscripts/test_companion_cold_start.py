@@ -68,17 +68,20 @@ class CompanionColdStartTest(unittest.TestCase):
             (root / "cursor_output_compatibility.json").write_text(
                 '{"result":"compat ok"}', encoding="utf-8"
             )
-            # The scan gate runs before the formatter. Seal a conclusive
-            # report so this still proves python -I cold start, not an early exit.
+            # The scan gate runs before the formatter. Pass a conclusive
+            # report through the verdict job's env-path contract so this still
+            # proves python -I cold start, not an early exit.
             payload = (
                 b'{"status":"clean","scan_conclusive":true,'
                 b'"verdict_token_in_tree":false}\n'
             )
-            runner = root / "runner-temp"
-            runner.mkdir()
-            (runner / "frozen-malware-scan-report.json").write_bytes(payload)
+            report = root / "sealed-scan-report.json"
+            report.write_bytes(payload)
             env = os.environ.copy()
-            env["RUNNER_TEMP"] = str(runner)
+            env["DCR_SCAN_REPORT"] = str(report)
+            env["DCR_MALWARE_JSON"] = str(root / "cursor_output_malware.json")
+            env["DCR_COMPAT_JSON"] = str(root / "cursor_output_compatibility.json")
+            env["DCR_COMBINED_JSON"] = str(root / "cursor_output.json")
             env["MALWARE_SCAN_REPORT_SHA256"] = hashlib.sha256(payload).hexdigest()
             proc = subprocess.run(
                 [

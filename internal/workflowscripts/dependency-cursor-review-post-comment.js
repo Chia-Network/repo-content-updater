@@ -40,10 +40,17 @@ function successfulAnalysisText(filePath) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.error || payload.is_error === true) {
     return '';
   }
+  if (payload.complete === false) return '';
   for (const key of ['result', 'output', 'text', 'message']) {
     const value = payload[key];
     if (typeof value !== 'string' || !value.trim() || value.startsWith('Missing output file:')) continue;
-    if (value.startsWith('Error: agent exited')) return '';
+    if (
+      value.startsWith('Error: agent exited') ||
+      value.startsWith('CURSOR_API_KEY is not set') ||
+      value.startsWith('No Cursor output generated')
+    ) {
+      return '';
+    }
     return value.trim();
   }
   return '';
