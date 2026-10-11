@@ -43,7 +43,9 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             '/usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_prompts.py"',
             workflow,
         )
-        self.assertIn(
+        self.assertIn("/usr/bin/python3 -I -c", workflow)
+        self.assertIn('exec(compile(data, path, "exec")', workflow)
+        self.assertNotIn(
             '/usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"',
             workflow,
         )
@@ -270,6 +272,134 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
             self.assertNotIn("**Verdict: benign**", written["result"])
 
+    def test_missing_frozen_report_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            runner = base / "runner-temp"
+            runner.mkdir()
+            workspace = _workspace(base)
+            proc = _run_combine(
+                workspace,
+                {
+                    "RUNNER_TEMP": str(runner),
+                    "MALWARE_SCAN_REPORT_SHA256": hashlib.sha256(_CONCLUSIVE_BYTES).hexdigest(),
+                },
+            )
+            self._assert_combine_failed(proc, workspace)
+            self.assertIn("missing", proc.stderr)
+
+    def test_replaced_post_comment_helper_is_refused(self) -> None:
+        workflow = _WORKFLOW.read_text(encoding="utf-8")
+        script = _script_block(workflow, "Post or update PR comment")
+        self.assertIn("helperModule._compile", script)
+        self.assertNotIn("require(helperPath)", script)
+        self.assertNotIn(
+            "require(`${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`)",
+            script,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = Path(tmp)
+            helper_dir = runner / "trusted-dcr-helper"
+            helper_dir.mkdir()
+            for name in (
+                "dependency-cursor-review-post-comment.js",
+                "dependency-cursor-review-dependabot-context.js",
+            ):
+                shutil.copy2(_SCRIPTS / name, helper_dir / name)
+            target = helper_dir / "dependency-cursor-review-post-comment.js"
+            original = target.read_bytes()
+            digest = hashlib.sha256(original).hexdigest()
+            loaded = _run_post_script(script, runner, digest)
+            self.assertEqual(loaded.returncode, 0, msg=loaded.stderr or loaded.stdout)
+            self.assertIn("Posted dependency review comment", loaded.stdout)
+            target.write_text(
+                "module.exports = async () => { console.log('tampered-helper'); };\n",
+                encoding="utf-8",
+            )
+            refused = _run_post_script(script, runner, digest)
+            self.assertNotEqual(refused.returncode, 0, msg=refused.stdout)
+            self.assertIn("digest mismatch", refused.stderr)
+            self.assertNotIn("tampered-helper", refused.stdout)
+            self.assertNotIn("Posted dependency review comment", refused.stdout)
+
+    def test_combine_runs_snapshotted_bytes_after_disk_change(self) -> None:
+        workflow = _WORKFLOW.read_text(encoding="utf-8")
+        run = _run_block(workflow, "Run Cursor analysis")
+        loop_start = run.index('combine_digest=""')
+        loop_end = run.index('done <<< "$trusted_hash_snapshot"')
+        loop_end += len('done <<< "$trusted_hash_snapshot"')
+        loop = run[loop_start:loop_end]
+        capture = 'combine_b64="$(/usr/bin/base64 -w0 "$combine_path")"'
+        exec_line = next(line for line in run.splitlines() if line.startswith("printf '%s' \"$combine_b64\""))
+        self.assertIn(capture, run)
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            trusted = base / "trusted-dcr-scripts"
+            scripts = trusted / ".github" / "scripts"
+            scripts.mkdir(parents=True)
+            for name in _BUNDLE_STEMS:
+                shutil.copy2(_SCRIPTS / name, scripts / name)
+            combine_path = scripts / "dependency_cursor_review_combine_outputs.py"
+            original = combine_path.read_bytes()
+            workspace = _workspace(base)
+            runner = base / "runner-temp"
+            runner.mkdir()
+            (runner / _FROZEN_NAME).write_bytes(_CONCLUSIVE_BYTES)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "RUNNER_TEMP": str(runner),
+                    "MALWARE_SCAN_REPORT_SHA256": hashlib.sha256(_CONCLUSIVE_BYTES).hexdigest(),
+                }
+            )
+            shell = "\n".join(
+                [
+                    "set -euo pipefail",
+                    'trusted_root="$TRUSTED_ROOT"',
+                    "trusted_hash_snapshot=\"$(/usr/bin/find \"$trusted_root\" -type f -print0 | LC_ALL=C /usr/bin/sort -z | /usr/bin/xargs -0 -r /usr/bin/sha256sum)\"",
+                    'combine_path="$COMBINE_PATH"',
+                    loop,
+                    capture,
+                    "printf '%s\\n' 'import sys' 'sys.stderr.write(\"TAMPERED\\n\")' 'sys.exit(9)' > \"$combine_path\"",
+                    exec_line,
+                ]
+            )
+            env["TRUSTED_ROOT"] = str(trusted)
+            env["COMBINE_PATH"] = str(combine_path)
+            proc = subprocess.run(
+                ["bash", "-c", shell],
+                cwd=workspace,
+                env=env,
+                capture_output=True,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr.decode() or proc.stdout.decode())
+            self.assertNotIn(b"TAMPERED", proc.stderr)
+            written = json.loads((workspace / "cursor_output.json").read_text(encoding="utf-8"))
+            self.assertIn("Supply-Chain Malware Review", written["result"])
+            self.assertNotEqual(combine_path.read_bytes(), original)
+
+    def test_upload_check_deletes_replaced_frozen_report(self) -> None:
+        workflow = _WORKFLOW.read_text(encoding="utf-8")
+        run = _run_block(workflow, "Check frozen malware scan report")
+        upload = workflow.split("- name: Upload malware scan artifacts\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertNotIn("upstream_changed_files.txt", upload)
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = Path(tmp)
+            frozen = runner / _FROZEN_NAME
+            frozen.write_bytes(b"replaced\n")
+            env = os.environ.copy()
+            env["RUNNER_TEMP"] = str(runner)
+            env["REPORT_SHA256"] = hashlib.sha256(b"original\n").hexdigest()
+            proc = subprocess.run(
+                ["bash", "-c", run],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(proc.returncode, 0, msg=proc.stdout)
+            self.assertFalse(frozen.exists())
+            self.assertIn("digest mismatch", proc.stderr)
+
     def _assert_combine_failed(
         self,
         proc: subprocess.CompletedProcess[str],
@@ -327,6 +457,71 @@ def _combine_in(
         {"RUNNER_TEMP": str(runner), "MALWARE_SCAN_REPORT_SHA256": digest},
     )
     return proc, workspace
+
+
+def _run_block(workflow: str, step_name: str) -> str:
+    section = workflow.split(f"- name: {step_name}\n", 1)[1]
+    section = section.split("\n      - name:", 1)[0]
+    body = section.split("run: |\n", 1)[1]
+    lines = body.splitlines()
+    indents = [len(line) - len(line.lstrip(" ")) for line in lines if line.strip()]
+    base = min(indents) if indents else 0
+    dedented = [(line[base:] if line.startswith(" " * base) else line) for line in lines]
+    return "\n".join(dedented).strip() + "\n"
+
+
+def _script_block(workflow: str, step_name: str) -> str:
+    section = workflow.split(f"- name: {step_name}\n", 1)[1]
+    body = section.split("script: |\n", 1)[1]
+    lines: list[str] = []
+    for line in body.splitlines():
+        if line.startswith("            "):
+            lines.append(line[12:])
+        elif line.strip() == "":
+            lines.append("")
+        else:
+            break
+    return "\n".join(lines).strip() + "\n"
+
+
+def _run_post_script(script: str, runner_temp: Path, digest: str) -> subprocess.CompletedProcess[str]:
+    wrapper = """
+const core = {
+  info(message) { console.log(message); },
+  setFailed(message) { console.error(message); process.exitCode = 1; },
+};
+const github = {
+  paginate: async () => [],
+  rest: {
+    issues: {
+      listComments: async () => [],
+      createComment: async () => ({}),
+      updateComment: async () => ({}),
+    },
+  },
+};
+const context = { repo: { owner: 'acme', repo: 'widgets' } };
+(async () => {
+__SCRIPT__
+})().catch((err) => {
+  console.error(err && err.message ? err.message : String(err));
+  process.exitCode = 1;
+});
+"""
+    env = os.environ.copy()
+    env["RUNNER_TEMP"] = str(runner_temp)
+    env["POST_COMMENT_SHA256"] = digest
+    env["PR_NUMBER"] = "1"
+    env["REVIEW_MARKER"] = ""
+    env["MALWARE_SCAN_STATUS"] = "clean"
+    env["MALWARE_SCAN_CHANGED_COUNT"] = "0"
+    env["MALWARE_SCAN_SUMMARY"] = "summary"
+    return subprocess.run(
+        ["node", "-e", wrapper.replace("__SCRIPT__", script)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
 
 
 if __name__ == "__main__":

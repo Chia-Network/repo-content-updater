@@ -56,6 +56,7 @@ jobs:
           persist-credentials: false
 
       - name: Copy trusted helper out of the workspace
+        id: trusted_helper
         shell: bash
         run: |
           set -euo pipefail
@@ -66,6 +67,14 @@ jobs:
           test -s "${dest}/dependency-cursor-review-target-pr.js"
           test -s "${dest}/dependency-cursor-review-dependabot-context.js"
           test -s "${dest}/dependency-cursor-review-post-comment.js"
+          helper="${dest}/dependency-cursor-review-post-comment.js"
+          helper_line="$(/usr/bin/sha256sum "$helper")"
+          helper_sha256="${helper_line%% *}"
+          if [ -z "$helper_sha256" ]; then
+            echo "Post-comment helper digest was empty." >&2
+            exit 1
+          fi
+          echo "post_comment_sha256=${helper_sha256}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve target PR context
         id: target_pr
@@ -283,16 +292,53 @@ jobs:
             echo "Trusted review scripts changed before combine." >&2
             exit 1
           fi
-          /usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"
-      - name: Upload malware scan artifacts
+          combine_path="${trusted_root}/.github/scripts/dependency_cursor_review_combine_outputs.py"
+          combine_digest=""
+          while IFS= read -r line || [ -n "$line" ]; do
+            digest="${line%% *}"
+            name="${line#* }"
+            name="${name# }"
+            if [ "$name" = "$combine_path" ]; then
+              combine_digest="$digest"
+              break
+            fi
+          done <<< "$trusted_hash_snapshot"
+          if [ -z "$combine_digest" ]; then
+            echo "Combine script digest missing from the trusted snapshot." >&2
+            exit 1
+          fi
+          if [ -L "$combine_path" ]; then
+            echo "Combine script is a symlink." >&2
+            exit 1
+          fi
+          combine_b64="$(/usr/bin/base64 -w0 "$combine_path")"
+          if [ -z "$combine_b64" ]; then
+            echo "Combine script snapshot was empty." >&2
+            exit 1
+          fi
+          printf '%s' "$combine_b64" | /usr/bin/base64 -d | /usr/bin/python3 -I -c 'import hashlib, sys; expected, path = sys.argv[1], sys.argv[2]; data = sys.stdin.buffer.read(); digest = hashlib.sha256(data).hexdigest(); sys.exit("Combine script digest mismatch.") if len(expected) != 64 or expected != expected.lower() or digest != expected else exec(compile(data, path, "exec"), {"__name__": "__main__", "__file__": path})' "$combine_digest" "$combine_path"
+      - name: Check frozen malware scan report
+        id: frozen_report
         if: always() && steps.target_pr.outputs.already_reviewed != 'true'
+        shell: bash
+        env:
+          REPORT_SHA256: ${{`{{ steps.malware_scan.outputs.report_sha256 }}`}}
+        run: |
+          set -euo pipefail
+          frozen="${RUNNER_TEMP}/frozen-malware-scan-report.json"
+          if [ -L "$frozen" ] || ! printf '%s  %s\n' "${REPORT_SHA256}" "$frozen" | /usr/bin/sha256sum -c -; then
+            /usr/bin/rm -f "$frozen"
+            echo "Frozen malware scan report digest mismatch." >&2
+            exit 1
+          fi
+      - name: Upload malware scan artifacts
+        if: always() && steps.target_pr.outputs.already_reviewed != 'true' && steps.frozen_report.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: dependabot-malware-scan-${{`{{ steps.target_pr.outputs.number }}`}}
           if-no-files-found: warn
           path: |
             ${{`{{ runner.temp }}`}}/frozen-malware-scan-report.json
-            upstream_changed_files.txt
 
       # The patch-id marker is posted only after this analysis step succeeds.
       # A failed combine or formatter leaves the PR eligible for re-review.
@@ -305,7 +351,22 @@ jobs:
           MALWARE_SCAN_STATUS: ${{`{{ steps.malware_scan.outputs.status }}`}}
           MALWARE_SCAN_CHANGED_COUNT: ${{`{{ steps.malware_scan.outputs.changed_files_count }}`}}
           MALWARE_SCAN_SUMMARY: ${{`{{ steps.malware_scan.outputs.summary }}`}}
+          POST_COMMENT_SHA256: ${{`{{ steps.trusted_helper.outputs.post_comment_sha256 }}`}}
         with:
           script: |
-            const run = require(`${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`);
-            await run({ github, context, core });
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const path = require('path');
+            const Module = require('module');
+            const helperPath = `${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`;
+            const expected = process.env.POST_COMMENT_SHA256 || '';
+            const bytes = fs.readFileSync(helperPath);
+            const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+            if (!/^[0-9a-f]{64}$/.test(expected) || digest !== expected) {
+              throw new Error('Post-comment helper digest mismatch.');
+            }
+            const helperModule = new Module(helperPath);
+            helperModule.filename = helperPath;
+            helperModule.paths = Module._nodeModulePaths(path.dirname(helperPath));
+            helperModule._compile(bytes.toString('utf8'), helperPath);
+            await helperModule.exports({ github, context, core });

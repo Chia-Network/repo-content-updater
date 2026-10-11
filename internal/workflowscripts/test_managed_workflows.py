@@ -70,7 +70,10 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
 
     def test_malware_formatter_imported_from_trusted_companion_not_inline(self) -> None:
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
-        self.assertIn(
+        self.assertIn("/usr/bin/python3 -I -c", workflow)
+        self.assertIn('exec(compile(data, path, "exec")', workflow)
+        self.assertIn('combine_b64="$(/usr/bin/base64 -w0 "$combine_path")"', workflow)
+        self.assertNotIn(
             '/usr/bin/python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"',
             workflow,
         )
@@ -132,6 +135,28 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn(
             '/usr/bin/find "$trusted_root" -type f -print0 | LC_ALL=C /usr/bin/sort -z | /usr/bin/xargs -0 -r /usr/bin/sha256sum',
             workflow,
+        )
+        self.assertIn("post_comment_sha256=", workflow)
+        self.assertIn("steps.trusted_helper.outputs.post_comment_sha256", workflow)
+        self.assertLess(
+            workflow.index("post_comment_sha256="),
+            workflow.index("- name: Run Cursor analysis"),
+        )
+        analysis = workflow.split("- name: Run Cursor analysis\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertNotIn("GITHUB_OUTPUT", analysis)
+        self.assertNotIn("post_comment_sha256", analysis)
+        self.assertIn("/usr/bin/sha256sum -c -", workflow)
+        self.assertIn("helperModule._compile", workflow)
+        self.assertNotIn(
+            "require(`${process.env.RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-post-comment.js`)",
+            workflow,
+        )
+        upload = workflow.split("- name: Upload malware scan artifacts\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("frozen-malware-scan-report.json", upload)
+        self.assertNotIn("upstream_changed_files.txt", upload)
+        self.assertLess(
+            workflow.index("/usr/bin/sha256sum -c -"),
+            workflow.index("actions/upload-artifact@v7"),
         )
 
     def test_5dd16704_target_pr_sparse_helper_does_not_shrink_pr_checkout(self) -> None:
