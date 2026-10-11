@@ -135,6 +135,15 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
             self.assertEqual((repo / "AGENTS.md").read_text(encoding="utf-8"), "main agents\n")
             self.assertEqual(_git(repo, "rev-parse", "--abbrev-ref", "HEAD"), "main")
 
+    def test_resolved_to_env_detaches_without_scan_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work, repo, release = self._tree(Path(tmp))
+            proc = self._script(work, extra_env={"RESOLVED_TO": release})
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertFalse((work / "malware_scan_report.json").exists())
+            self.assertEqual(_git(repo, "rev-parse", "HEAD"), release)
+            self.assertFalse((repo / "AGENTS.md").exists())
+
     def test_empty_resolved_to_removes_checkout_and_scan_dir(self) -> None:
         payloads = ({"resolved_to": ""}, {"resolved_to": None}, {})
         for payload in payloads:

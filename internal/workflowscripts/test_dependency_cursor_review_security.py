@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -20,6 +23,16 @@ _BUNDLE_STEMS = (
     *_runtime.FORMATTER_RUNTIME_FILENAMES,
     *_runtime.DCR_COMBINE_EXTRA_FILENAMES,
 )
+_BENIGN_AGENT = '{"result":"MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs."}'
+_COMPAT_AGENT = '{"result":"compat ok"}'
+_INCONCLUSIVE_REPORT = {
+    "status": "not_scanned",
+    "scan_conclusive": False,
+    "verdict_token_in_tree": False,
+}
+_CONCLUSIVE_BYTES = (
+    b'{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false}\n'
+)
 
 
 class DependencyCursorReviewSecurityTest(unittest.TestCase):
@@ -30,11 +43,40 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             workflow,
         )
         self.assertIn(
-            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_combine_outputs.py"',
+            "python3 -I .github/scripts/dependency_cursor_review_combine_outputs.py",
             workflow,
         )
+        self.assertIn("report_sha256=", workflow)
+        self.assertNotIn("malware_scan_summary.md", (_SCRIPTS / "dependency-cursor-review-post-comment.js").read_text())
         self.assertNotIn("sys.path", workflow)
         self.assertIn("trusted-dcr-scripts", workflow)
+        self.assertNotIn("cp --remove-destination", workflow)
+        self.assertNotIn("O_NOFOLLOW", (_SCRIPTS / "dependency_cursor_review_combine_outputs.py").read_text())
+        prompts = (_SCRIPTS / "dependency_cursor_review_prompts.py").read_text(encoding="utf-8")
+        self.assertIn("the from and to commits are checked out", prompts)
+        self.assertNotIn("full git history is available", prompts)
+
+    def test_agent_job_is_isolated_from_the_verdict(self) -> None:
+        workflow = _WORKFLOW.read_text(encoding="utf-8")
+        agent = workflow.split("\n  dependency-review-agent:\n", 1)[1].split("\n  dependency-review:\n", 1)[0]
+        verdict = workflow.split("\n  dependency-review:\n", 1)[1]
+        self.assertNotIn("pull-requests:", agent)
+        self.assertNotIn("fetch-depth: 0", agent)
+        self.assertNotIn("dependency_cursor_review_combine_outputs.py", agent)
+        self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
+        self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
+        self.assertNotIn("secrets.CURSOR_API_KEY", agent.split("- name: Run Cursor agent\n", 1)[0])
+        self.assertEqual(workflow.count("secrets.CURSOR_API_KEY"), 1)
+        verdict_if = verdict.split("\n    steps:\n", 1)[0]
+        self.assertIn("always()", verdict_if)
+        self.assertNotIn("already_reviewed", verdict_if)
+        self.assertIn("pull-requests: write", verdict)
+        self.assertNotIn("CURSOR_API_KEY", verdict)
+        self.assertIn(
+            "require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-post-comment.js`)",
+            verdict,
+        )
+        self.assertIn("needs.dependency-review-scan.outputs.report_sha256", verdict)
 
     def test_a46061b8_combine_resists_importlib_shadow_on_scripts_dir(self) -> None:
         """Scripts-dir shadow must not run when bootstrap/companion load scrubs sys.path."""
@@ -92,6 +134,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
                     str(scripts / "dependency_cursor_review_combine_outputs.py"),
                 ],
                 cwd=root,
+                env=_seal_env(root, _CONCLUSIVE_BYTES),
                 capture_output=True,
                 text=True,
             )
@@ -124,10 +167,6 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             trusted.mkdir()
             for name in _BUNDLE_STEMS:
                 shutil.copy2(_SCRIPTS / name, trusted / name)
-            (root / "malware_scan_report.json").write_text(
-                '{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false}',
-                encoding="utf-8",
-            )
             (root / "cursor_output_malware.json").write_text(
                 '{"result":"MALWARE_REVIEW_VERDICT: benign\\n\\nOK"}',
                 encoding="utf-8",
@@ -143,6 +182,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
                     str(trusted / "dependency_cursor_review_combine_outputs.py"),
                 ],
                 cwd=root,
+                env=_seal_env(root, _CONCLUSIVE_BYTES),
                 capture_output=True,
                 text=True,
             )
@@ -184,6 +224,96 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
                         sys.modules.pop(name, None)
                     else:
                         sys.modules[name] = module
+
+    def test_matching_inconclusive_report_ignores_workspace_fake(self) -> None:
+        payload = (json.dumps(_INCONCLUSIVE_REPORT) + "\n").encode()
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(payload).hexdigest())
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            written = json.loads((workspace / "cursor_output.json").read_text(encoding="utf-8"))
+            self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
+            self.assertNotIn("**Verdict: benign**", written["result"])
+
+    def test_matching_malformed_report_is_inconclusive(self) -> None:
+        payload = b"not-json\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(payload).hexdigest())
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            written = json.loads((workspace / "cursor_output.json").read_text(encoding="utf-8"))
+            self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
+            self.assertNotIn("**Verdict: benign**", written["result"])
+
+    def test_digest_mismatch_exits(self) -> None:
+        payload = (json.dumps(_INCONCLUSIVE_REPORT) + "\n").encode()
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(b"other").hexdigest())
+            self._assert_combine_failed(proc, workspace)
+            self.assertIn("digest mismatch", proc.stderr)
+
+
+    def test_missing_scan_report_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            workspace = _workspace(base)
+            env = _seal_env(workspace, _CONCLUSIVE_BYTES)
+            env["DCR_SCAN_REPORT"] = str(base / "missing-scan-report.json")
+            proc = _run_combine(workspace, env)
+            self._assert_combine_failed(proc, workspace)
+            self.assertIn("missing", proc.stderr)
+
+    def _assert_combine_failed(
+        self,
+        proc: subprocess.CompletedProcess[str],
+        workspace: Path,
+    ) -> None:
+        self.assertNotEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+        self.assertFalse((workspace / "cursor_output.json").exists())
+
+
+def _seal_env(parent: Path, payload: bytes, digest: str | None = None) -> dict[str, str]:
+    report = parent / "sealed-scan-report.json"
+    report.write_bytes(payload)
+    env = os.environ.copy()
+    env["DCR_SCAN_REPORT"] = str(report)
+    env["DCR_MALWARE_JSON"] = str(parent / "cursor_output_malware.json")
+    env["DCR_COMPAT_JSON"] = str(parent / "cursor_output_compatibility.json")
+    env["DCR_COMBINED_JSON"] = str(parent / "cursor_output.json")
+    if digest is None:
+        env["MALWARE_SCAN_REPORT_SHA256"] = hashlib.sha256(payload).hexdigest()
+    else:
+        env["MALWARE_SCAN_REPORT_SHA256"] = digest
+    return env
+
+
+def _workspace(base: Path) -> Path:
+    workspace = base / "workspace"
+    workspace.mkdir()
+    (workspace / "cursor_output_malware.json").write_text(_BENIGN_AGENT, encoding="utf-8")
+    (workspace / "cursor_output_compatibility.json").write_text(_COMPAT_AGENT, encoding="utf-8")
+    (workspace / "malware_scan_report.json").write_bytes(_CONCLUSIVE_BYTES)
+    return workspace
+
+
+def _run_combine(workspace: Path, updates: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.update(updates)
+    return subprocess.run(
+        [sys.executable, "-I", str(_SCRIPTS / "dependency_cursor_review_combine_outputs.py")],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _combine_in(
+    base: Path,
+    payload: bytes,
+    digest: str,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    workspace = _workspace(base)
+    proc = _run_combine(workspace, _seal_env(workspace, payload, digest))
+    return proc, workspace
 
 
 if __name__ == "__main__":
