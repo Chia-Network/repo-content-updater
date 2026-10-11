@@ -115,7 +115,7 @@ class CombineCompleteTest(unittest.TestCase):
 
     def test_not_scanned_report_forces_inconclusive_over_benign_line(self) -> None:
         written = self._run(
-            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs."}',
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs.\\n\\n**Verdict: benign**"}',
             '{"result": "compat ok"}',
             report={
                 "status": "not_scanned",
@@ -125,6 +125,25 @@ class CombineCompleteTest(unittest.TestCase):
         )
         self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
+        self.assertNotIn("No IOCs.", written["result"])
+        self.assertIn("compat ok", written["result"])
+        self.assertIs(written["complete"], False)
+
+    def test_findings_drop_agent_benign_verdict(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\n**Verdict: benign**"}',
+            '{"result": "compat essay"}',
+            report={
+                "status": "warn",
+                "scan_conclusive": True,
+                "verdict_token_in_tree": False,
+                "findings": {"ioc": [{"file": "pkg/index.js"}]},
+            },
+        )
+        self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
+        self.assertNotIn("**Verdict: benign**", written["result"])
+        self.assertIn("compat essay", written["result"])
+        self.assertIs(written["complete"], False)
 
 
 if __name__ == "__main__":

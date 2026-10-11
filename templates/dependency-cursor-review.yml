@@ -400,6 +400,7 @@ jobs:
         run: echo "This dependency upgrade was already reviewed."
 
       - name: Checkout default-branch helpers
+        id: helpers
         if: ${{`{{ success() && needs.dependency-review-scan.result == 'success' && needs.dependency-review-scan.outputs.already_reviewed != 'true' && needs.dependency-review-agent.result == 'success' }}`}}
         uses: actions/checkout@v7
         with:
@@ -407,21 +408,21 @@ jobs:
           persist-credentials: false
 
       - name: Download scan inputs
-        if: ${{`{{ success() && needs.dependency-review-scan.result == 'success' && needs.dependency-review-scan.outputs.already_reviewed != 'true' && needs.dependency-review-agent.result == 'success' }}`}}
+        if: ${{`{{ success() && steps.helpers.outcome == 'success' }}`}}
         uses: actions/download-artifact@v7
         with:
           name: dcr-scan-${{`{{ github.run_id }}`}}
           path: dcr-scan-input
 
       - name: Download agent outputs
-        if: ${{`{{ success() && needs.dependency-review-scan.result == 'success' && needs.dependency-review-scan.outputs.already_reviewed != 'true' && needs.dependency-review-agent.result == 'success' }}`}}
+        if: ${{`{{ success() && steps.helpers.outcome == 'success' }}`}}
         uses: actions/download-artifact@v7
         with:
           name: dcr-agent-${{`{{ github.run_id }}`}}
           path: dcr-agent-output
 
       - name: Combine review
-        if: ${{`{{ success() && needs.dependency-review-scan.result == 'success' && needs.dependency-review-scan.outputs.already_reviewed != 'true' && needs.dependency-review-agent.result == 'success' }}`}}
+        if: ${{`{{ success() && steps.helpers.outcome == 'success' }}`}}
         shell: bash
         env:
           MALWARE_SCAN_REPORT_SHA256: ${{`{{ needs.dependency-review-scan.outputs.report_sha256 }}`}}
@@ -437,7 +438,7 @@ jobs:
       # The patch-id marker is posted only after combine writes a complete review.
       # selectPostedMarker in the default-branch helper drops it otherwise.
       - name: Post or update PR comment
-        if: ${{`{{ success() && needs.dependency-review-scan.result == 'success' && needs.dependency-review-scan.outputs.already_reviewed != 'true' && needs.dependency-review-agent.result == 'success' }}`}}
+        if: ${{`{{ success() && steps.helpers.outcome == 'success' }}`}}
         uses: actions/github-script@v9
         env:
           PR_NUMBER: ${{`{{ needs.dependency-review-scan.outputs.number }}`}}

@@ -108,31 +108,30 @@ def _extract_text(payload) -> str:
         return str(payload)
 
 
-_INCONCLUSIVE_HEADER = "**Verdict: inconclusive (needs human review)**"
-_KNOWN_VERDICT_HEADERS = (
-    "**Verdict: benign**",
-    "**Verdict: malicious**",
-    _INCONCLUSIVE_HEADER,
-)
+# Fixed text. The agent body is not appended, so it cannot carry a benign banner.
+_TRUSTED_INCONCLUSIVE = "**Verdict: inconclusive (needs human review)**"
 _REPORT_SHA256_ENV = "MALWARE_SCAN_REPORT_SHA256"
 
 
-def _report_forces_inconclusive(report: object) -> bool:
-    if not isinstance(report, dict):
-        return True
-    if report.get("status") == "not_scanned":
-        return True
-    if report.get("scan_conclusive") is not True:
-        return True
-    return report.get("verdict_token_in_tree") is True
-
-
-def _bytes_force_inconclusive(data: bytes) -> bool:
+def _report_blocks_agent(data: bytes) -> bool:
+    """Sealed report decides. Malformed, inconclusive, or any finding blocks the agent."""
     try:
         report = json.loads(data.decode("utf-8"))
     except Exception:
         return True
-    return _report_forces_inconclusive(report)
+    if not isinstance(report, dict):
+        return True
+    findings = report.get("findings")
+    if isinstance(findings, dict):
+        findings_present = any(findings.values())
+    else:
+        findings_present = bool(findings)
+    return (
+        report.get("status") == "not_scanned"
+        or report.get("scan_conclusive") is not True
+        or report.get("verdict_token_in_tree") is True
+        or findings_present
+    )
 
 
 def _fail_closed(message: str) -> None:
@@ -157,7 +156,7 @@ def _env_path(name: str) -> Path:
     return Path(value)
 
 
-def _scan_gate_forces_inconclusive() -> bool:
+def _scan_blocks_agent() -> bool:
     """Fail closed unless the scan-job digest matches DCR_SCAN_REPORT."""
     expected = os.environ.get(_REPORT_SHA256_ENV, "").strip()
     if not _digest_is_sha256(expected):
@@ -169,48 +168,36 @@ def _scan_gate_forces_inconclusive() -> bool:
         _fail_closed("Malware scan report is missing.")
     if hashlib.sha256(data).hexdigest() != expected:
         _fail_closed("Malware scan report digest mismatch.")
-    return _bytes_force_inconclusive(data)
-
-
-def _force_inconclusive_header(text: str) -> str:
-    body = text
-    for header in _KNOWN_VERDICT_HEADERS:
-        prefix = header + "\n\n"
-        if body.startswith(prefix):
-            body = body[len(prefix) :]
-            break
-    return f"{_INCONCLUSIVE_HEADER}\n\n{body}"
+    return _report_blocks_agent(data)
 
 
 def main() -> None:
     _drop_pr_head_scripts_from_sys_path()
     # Check the sealed report before loading any sibling module.
-    force_inconclusive = _scan_gate_forces_inconclusive()
+    blocked = _scan_blocks_agent()
     malware_path = str(_env_path("DCR_MALWARE_JSON"))
     compatibility_path = str(_env_path("DCR_COMPAT_JSON"))
     combined_path = _env_path("DCR_COMBINED_JSON")
-    ns = _host_namespace()
-    resolve_loader_bundle = ns["resolve_loader_bundle"]
-    loader, script_dir = resolve_loader_bundle(_SCRIPT_CANDIDATES)
-    format_malware_review_verdict = loader.find_and_load_format_malware_review_verdict(script_dir)
-
     malware_payload = _load_any(malware_path)
     compatibility_payload = _load_any(compatibility_path)
-    malware_text = format_malware_review_verdict(_extract_text(malware_payload))
-    if force_inconclusive:
-        malware_text = _force_inconclusive_header(malware_text)
     compatibility_text = _extract_text(compatibility_payload)
+    if blocked:
+        malware_text = _TRUSTED_INCONCLUSIVE
+        complete = False
+    else:
+        ns = _host_namespace()
+        resolve_loader_bundle = ns["resolve_loader_bundle"]
+        loader, script_dir = resolve_loader_bundle(_SCRIPT_CANDIDATES)
+        format_malware_review_verdict = loader.find_and_load_format_malware_review_verdict(script_dir)
+        malware_text = format_malware_review_verdict(_extract_text(malware_payload))
+        complete = bool(_successful_analysis_text(malware_path)) and bool(_successful_analysis_text(compatibility_path))
 
     combined_text = (
         f"## Supply-Chain Malware Review\n\n{malware_text}\n\n## Compatibility Analysis\n\n{compatibility_text}"
     )
-    # complete is true only when both agent files were real analyses.
-    # The post step stamps the skip marker only if this combined review
-    # was written (complete, both section headings) and analysis succeeded.
     combined = {
         "result": combined_text,
-        "complete": bool(_successful_analysis_text(malware_path))
-        and bool(_successful_analysis_text(compatibility_path)),
+        "complete": complete,
         "malware_review": malware_payload,
         "compatibility_review": compatibility_payload,
     }

@@ -67,11 +67,17 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
     def test_post_step_requires_successful_analysis(self) -> None:
         workflow = _WORKFLOW.read_text(encoding="utf-8")
         agent = workflow.split("\n  dependency-review-agent:\n", 1)[1].split("\n  dependency-review:\n", 1)[0]
-        post = workflow.split("- name: Post or update PR comment\n", 1)[1]
+        verdict = workflow.split("\n  dependency-review:\n", 1)[1]
+        gate = (
+            "needs.dependency-review-scan.result == 'success' && "
+            "needs.dependency-review-scan.outputs.already_reviewed != 'true' && "
+            "needs.dependency-review-agent.result == 'success'"
+        )
+        self.assertEqual(verdict.count(gate), 1)
+        post = verdict.split("- name: Post or update PR comment\n", 1)[1]
         self.assertIn("- name: Run Cursor agent\n", agent)
-        self.assertIn("needs.dependency-review-agent.result == 'success'", post)
-        self.assertIn("needs.dependency-review-scan.outputs.already_reviewed != 'true'", post)
-        self.assertIn("success()", post)
+        self.assertIn("steps.helpers.outcome == 'success'", post)
+        self.assertNotIn(gate, post)
         self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
         self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
 
