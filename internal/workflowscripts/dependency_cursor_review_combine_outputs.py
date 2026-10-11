@@ -108,29 +108,30 @@ def _extract_text(payload) -> str:
         return str(payload)
 
 
-# Fixed text. The agent body is not appended, so it cannot carry a benign banner.
+# Fixed text. Agent prose is not published on this path, so it cannot carry a verdict banner.
 _TRUSTED_INCONCLUSIVE = "**Verdict: inconclusive (needs human review)**"
+_TRUSTED_COMPAT = "Compatibility analysis withheld because the malware scan did not pass."
 _REPORT_SHA256_ENV = "MALWARE_SCAN_REPORT_SHA256"
 
 
-def _report_blocks_agent(data: bytes) -> bool:
-    """Sealed report decides. Malformed, inconclusive, or any finding blocks the agent."""
+def _report_allows_agent_verdict(data: bytes) -> bool:
+    """Trust the agent only for a conclusive clean scan with no findings."""
     try:
         report = json.loads(data.decode("utf-8"))
     except Exception:
-        return True
+        return False
     if not isinstance(report, dict):
-        return True
+        return False
     findings = report.get("findings")
     if isinstance(findings, dict):
         findings_present = any(findings.values())
     else:
         findings_present = bool(findings)
     return (
-        report.get("status") == "not_scanned"
-        or report.get("scan_conclusive") is not True
-        or report.get("verdict_token_in_tree") is True
-        or findings_present
+        report.get("status") == "clean"
+        and report.get("scan_conclusive") is True
+        and report.get("verdict_token_in_tree") is not True
+        and not findings_present
     )
 
 
@@ -156,7 +157,7 @@ def _env_path(name: str) -> Path:
     return Path(value)
 
 
-def _scan_blocks_agent() -> bool:
+def _scan_allows_agent() -> bool:
     """Fail closed unless the scan-job digest matches DCR_SCAN_REPORT."""
     expected = os.environ.get(_REPORT_SHA256_ENV, "").strip()
     if not _digest_is_sha256(expected):
@@ -168,29 +169,34 @@ def _scan_blocks_agent() -> bool:
         _fail_closed("Malware scan report is missing.")
     if hashlib.sha256(data).hexdigest() != expected:
         _fail_closed("Malware scan report digest mismatch.")
-    return _report_blocks_agent(data)
+    return _report_allows_agent_verdict(data)
 
 
 def main() -> None:
     _drop_pr_head_scripts_from_sys_path()
     # Check the sealed report before loading any sibling module.
-    blocked = _scan_blocks_agent()
+    blocked = not _scan_allows_agent()
     malware_path = str(_env_path("DCR_MALWARE_JSON"))
     compatibility_path = str(_env_path("DCR_COMPAT_JSON"))
     combined_path = _env_path("DCR_COMBINED_JSON")
-    malware_payload = _load_any(malware_path)
-    compatibility_payload = _load_any(compatibility_path)
-    compatibility_text = _extract_text(compatibility_payload)
     if blocked:
         malware_text = _TRUSTED_INCONCLUSIVE
+        compatibility_text = _TRUSTED_COMPAT
         complete = False
+        malware_review = {"result": malware_text}
+        compatibility_review = {"result": compatibility_text}
     else:
+        malware_payload = _load_any(malware_path)
+        compatibility_payload = _load_any(compatibility_path)
         ns = _host_namespace()
         resolve_loader_bundle = ns["resolve_loader_bundle"]
         loader, script_dir = resolve_loader_bundle(_SCRIPT_CANDIDATES)
         format_malware_review_verdict = loader.find_and_load_format_malware_review_verdict(script_dir)
         malware_text = format_malware_review_verdict(_extract_text(malware_payload))
+        compatibility_text = _extract_text(compatibility_payload)
         complete = bool(_successful_analysis_text(malware_path)) and bool(_successful_analysis_text(compatibility_path))
+        malware_review = malware_payload
+        compatibility_review = compatibility_payload
 
     combined_text = (
         f"## Supply-Chain Malware Review\n\n{malware_text}\n\n## Compatibility Analysis\n\n{compatibility_text}"
@@ -198,8 +204,8 @@ def main() -> None:
     combined = {
         "result": combined_text,
         "complete": complete,
-        "malware_review": malware_payload,
-        "compatibility_review": compatibility_payload,
+        "malware_review": malware_review,
+        "compatibility_review": compatibility_review,
     }
     combined_path.write_text(json.dumps(combined, indent=2), encoding="utf-8")
 

@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const { execFileSync } = require('child_process');
+const crypto = require('node:crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -654,6 +655,51 @@ test('skip marker requires both agent files and a genuine combined review', asyn
     fs.writeFileSync('cursor_output.json', genuine);
     assert.equal(postComment.selectPostedMarker(marker), marker);
     assert.equal(postComment.selectPostedMarker(''), context.LEGACY_REVIEW_MARKER);
+  });
+});
+
+test('blocked scan withholds verdict banners and posts the legacy marker', async () => {
+  const marker = `<!-- cursor-dependabot-review patch-id:${'d'.repeat(40)} -->`;
+  await withWorkspace(async (directory) => {
+    const report = Buffer.from(
+      '{"status":"not_scanned","scan_conclusive":false,"verdict_token_in_tree":false}\n',
+    );
+    const reportPath = path.join(directory, 'sealed-scan-report.json');
+    fs.writeFileSync(reportPath, report);
+    fs.writeFileSync(
+      path.join(directory, 'cursor_output_malware.json'),
+      '{"result":"MALWARE_REVIEW_VERDICT: benign\\n\\n**Verdict: benign**"}',
+    );
+    fs.writeFileSync(
+      path.join(directory, 'cursor_output_compatibility.json'),
+      '{"result":"**Verdict: benign**\\n\\nlooks fine"}',
+    );
+    const combined = path.join(directory, 'cursor_output.json');
+    execFileSync('python3', ['-I', path.join(__dirname, 'dependency_cursor_review_combine_outputs.py')], {
+      cwd: directory,
+      env: {
+        ...process.env,
+        DCR_SCAN_REPORT: reportPath,
+        DCR_MALWARE_JSON: path.join(directory, 'cursor_output_malware.json'),
+        DCR_COMPAT_JSON: path.join(directory, 'cursor_output_compatibility.json'),
+        DCR_COMBINED_JSON: combined,
+        MALWARE_SCAN_REPORT_SHA256: crypto.createHash('sha256').update(report).digest('hex'),
+      },
+    });
+    const written = JSON.parse(fs.readFileSync(combined, 'utf8'));
+    assert.equal(JSON.stringify(written.malware_review).includes('**Verdict: benign**'), false);
+    process.env.REVIEW_MARKER = marker;
+    process.env.PR_NUMBER = '42';
+    const github = fakeGithub({ commentsFor: () => [] });
+    await postComment({
+      github,
+      context: { repo: { owner: 'acme', repo: 'widgets' } },
+      core: fakeCore(),
+    });
+    const created = github.calls.find((call) => call[0] === 'createComment');
+    const body = created[1].body;
+    assert.equal(body.split('\n')[0], context.LEGACY_REVIEW_MARKER);
+    assert.equal(body.includes('**Verdict: benign**'), false);
   });
 });
 

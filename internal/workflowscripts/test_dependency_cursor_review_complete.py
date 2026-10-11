@@ -126,8 +126,10 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertNotIn("No IOCs.", written["result"])
-        self.assertIn("compat ok", written["result"])
+        self.assertNotIn("compat ok", written["result"])
+        self.assertIn("Compatibility analysis withheld", written["result"])
         self.assertIs(written["complete"], False)
+        self.assertNotIn("**Verdict: benign**", json.dumps(written["malware_review"]))
 
     def test_findings_drop_agent_benign_verdict(self) -> None:
         written = self._run(
@@ -142,7 +144,21 @@ class CombineCompleteTest(unittest.TestCase):
         )
         self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
-        self.assertIn("compat essay", written["result"])
+        self.assertNotIn("compat essay", written["result"])
+        self.assertIs(written["complete"], False)
+
+    def test_warn_with_empty_findings_blocks_agent(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\n**Verdict: benign**"}',
+            '{"result": "**Verdict: benign**"}',
+            report={
+                "status": "warn",
+                "scan_conclusive": True,
+                "verdict_token_in_tree": False,
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            },
+        )
+        self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertIs(written["complete"], False)
 
 
