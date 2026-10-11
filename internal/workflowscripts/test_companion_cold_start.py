@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import runpy
 import shutil
 import subprocess
@@ -66,6 +68,18 @@ class CompanionColdStartTest(unittest.TestCase):
             (root / "cursor_output_compatibility.json").write_text(
                 '{"result":"compat ok"}', encoding="utf-8"
             )
+            # The scan gate runs before the formatter. Seal a conclusive
+            # report so this still proves python -I cold start, not an early exit.
+            payload = (
+                b'{"status":"clean","scan_conclusive":true,'
+                b'"verdict_token_in_tree":false}\n'
+            )
+            runner = root / "runner-temp"
+            runner.mkdir()
+            (runner / "frozen-malware-scan-report.json").write_bytes(payload)
+            env = os.environ.copy()
+            env["RUNNER_TEMP"] = str(runner)
+            env["MALWARE_SCAN_REPORT_SHA256"] = hashlib.sha256(payload).hexdigest()
             proc = subprocess.run(
                 [
                     sys.executable,
@@ -73,10 +87,13 @@ class CompanionColdStartTest(unittest.TestCase):
                     str(scripts / "dependency_cursor_review_combine_outputs.py"),
                 ],
                 cwd=root,
+                env=env,
                 capture_output=True,
                 text=True,
             )
             self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            written = (root / "cursor_output.json").read_text(encoding="utf-8")
+            self.assertIn("Supply-Chain Malware Review", written)
 
 
 if __name__ == "__main__":
