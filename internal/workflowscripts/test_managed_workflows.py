@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-import re
+import os
+import subprocess
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -150,7 +153,8 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn("contents: read", agent)
         self.assertNotIn("pull-requests:", agent)
         self.assertNotIn("fetch-depth: 0", agent)
-        self.assertIn("--shallow-exclude=", agent)
+        self.assertNotIn("--shallow-exclude", agent)
+        self.assertIn("merge-base --is-ancestor", agent)
         self.assertNotIn("dependency_cursor_review_combine_outputs.py", agent)
         self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
         self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
@@ -193,6 +197,79 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn("require('./dependency-cursor-review-dependabot-context.js')", post_js)
         self.assertNotIn("RUNNER_TEMP", post_js)
         self.assertIn("function selectPostedMarker", post_js)
+
+    def test_tag_range_fetch_uses_peeled_shas(self) -> None:
+        """Annotated tags peel to SHAs. The agent fetch must still connect that range."""
+        workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
+        agent = self._job(workflow, "dependency-review-agent")
+        block = agent.split("- name: Fetch upstream release range\n", 1)[1].split("\n      - name:", 1)[0]
+        script = textwrap.dedent(block.split("run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            origin = root / "origin"
+            self._git(origin, "init", "-b", "main")
+            self._git_config(origin)
+            for name in ("base", "released", "middle", "head"):
+                (origin / "pkg.txt").write_text(name + "\n", encoding="utf-8")
+                self._git(origin, "add", "pkg.txt")
+                self._git(origin, "commit", "-m", name)
+            self._git(origin, "tag", "-a", "v1.0.0", "-m", "v1.0.0", "HEAD~2")
+            self._git(origin, "tag", "-a", "v1.2.0", "-m", "v1.2.0", "HEAD")
+            resolved_from = self._git(origin, "rev-parse", "v1.0.0^{commit}")
+            resolved_to = self._git(origin, "rev-parse", "v1.2.0^{commit}")
+            self.assertNotEqual(resolved_from, self._git(origin, "rev-parse", "v1.0.0"))
+            work = root / "work"
+            upstream = work / ".upstream-dependency"
+            upstream.mkdir(parents=True)
+            self._git(upstream, "init", "-b", "main")
+            self._git(upstream, "remote", "add", "origin", str(origin))
+            self._git(upstream, "fetch", "--depth=1", "origin", resolved_to)
+            self._git(upstream, "checkout", "--detach", "FETCH_HEAD")
+            env = os.environ.copy()
+            env.update(GH_TOKEN="x", RESOLVED_FROM=resolved_from, RESOLVED_TO=resolved_to)
+            proc = subprocess.run(
+                ["bash", "-c", script],
+                cwd=work,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            self.assertEqual(self._git(upstream, "rev-parse", "HEAD"), resolved_to)
+            self.assertEqual(self._git(upstream, "merge-base", "--is-ancestor", resolved_from, resolved_to), "")
+            log = self._git(upstream, "log", "--format=%s", f"{resolved_from}..{resolved_to}")
+            self.assertEqual(log.splitlines(), ["head", "middle"])
+            diff = self._git(upstream, "diff", resolved_from, resolved_to)
+            self.assertIn("-released", diff)
+            self.assertIn("+head", diff)
+
+    def _git(self, repo: Path, *args: str) -> str:
+        repo.mkdir(parents=True, exist_ok=True)
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            env=self._git_env(),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, msg=f"git {args}\n{proc.stderr}")
+        return proc.stdout.strip()
+
+    def _git_config(self, repo: Path) -> None:
+        self._git(repo, "config", "user.email", "range-test@example.com")
+        self._git(repo, "config", "user.name", "range-test")
+        self._git(repo, "config", "commit.gpgsign", "false")
+
+    @staticmethod
+    def _git_env() -> dict[str, str]:
+        env = os.environ.copy()
+        env.update(
+            GIT_AUTHOR_NAME="range-test",
+            GIT_AUTHOR_EMAIL="range-test@example.com",
+            GIT_COMMITTER_NAME="range-test",
+            GIT_COMMITTER_EMAIL="range-test@example.com",
+        )
+        return env
 
     def test_5dd16704_target_pr_sparse_helper_does_not_shrink_pr_checkout(self) -> None:
         """Bugbot 5dd16704: sparse helper checkout must not leave GITHUB_WORKSPACE sparse for PR head."""

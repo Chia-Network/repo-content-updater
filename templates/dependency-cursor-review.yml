@@ -277,12 +277,18 @@ jobs:
         run: |
           set -euo pipefail
           auth_basic="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
-          git -C .upstream-dependency \
-            -c "http.extraheader=AUTHORIZATION: basic ${auth_basic}" \
-            fetch --no-tags --shallow-exclude="${RESOLVED_FROM}" origin "${RESOLVED_TO}"
-          git -C .upstream-dependency \
-            -c "http.extraheader=AUTHORIZATION: basic ${auth_basic}" \
-            fetch --no-tags --depth=1 origin "${RESOLVED_FROM}"
+          git_fetch() {
+            git -C .upstream-dependency \
+              -c "http.extraheader=AUTHORIZATION: basic ${auth_basic}" \
+              fetch --no-tags "$@"
+          }
+          git_fetch --depth=1 origin "${RESOLVED_FROM}"
+          fetched=0
+          until git -C .upstream-dependency merge-base --is-ancestor "${RESOLVED_FROM}" "${RESOLVED_TO}"; do
+            [ "$fetched" -lt 6400 ]
+            git_fetch --deepen=100 origin "${RESOLVED_TO}"
+            fetched=$((fetched + 100))
+          done
 
       - name: Drop agent instructions
         if: ${{`{{ needs.dependency-review-scan.outputs.resolved_to != '' }}`}}
