@@ -7,8 +7,6 @@ import re
 from pathlib import Path
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
-# Same allowlist as tag_name_ok in upstream_malware_scan.sh and the agent tag fetch.
-_TAG_CHARS = re.compile(r"^[A-Za-z0-9._+/-]+\Z")
 
 
 def _read_file(path: str) -> str:
@@ -18,22 +16,9 @@ def _read_file(path: str) -> str:
         return ""
 
 
-def _tag_ok(value: str) -> bool:
-    if not _TAG_CHARS.fullmatch(value):
-        return False
-    if value[0] in "-./":
-        return False
-    return ".." not in value and "@{" not in value and value.count("/") <= 1
-
-
 def _shown_sha(value: str) -> str:
     text = value.strip()
     return text if _SHA_RE.fullmatch(text) else "(unresolved)"
-
-
-def _shown_tag(value: str) -> str:
-    text = value.strip()
-    return text if _tag_ok(text) else "(none)"
 
 
 def _shown_version(value: str) -> str:
@@ -53,10 +38,11 @@ def _upstream_layout() -> str:
         "- Only those two commits and the version tags named below are fetched.",
         "- Intermediate commits were not fetched. Compare the trees with git diff, not git log.",
         f"- from version: {_shown_version(os.getenv('FROM_VERSION', ''))}",
-        f"- from tag: {_shown_tag(os.getenv('FROM_TAG', ''))}",
+        # The agent fetch replaces "(none)" only after the tag peels to this SHA.
+        "- from tag: (none)",
         f"- from commit: {from_sha}",
         f"- to version: {_shown_version(os.getenv('TO_VERSION', ''))}",
-        f"- to tag: {_shown_tag(os.getenv('TO_TAG', ''))}",
+        "- to tag: (none)",
         f"- to commit: {to_sha}",
     ]
     if from_sha != "(unresolved)" and to_sha != "(unresolved)":

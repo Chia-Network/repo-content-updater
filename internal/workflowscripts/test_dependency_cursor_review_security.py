@@ -55,12 +55,17 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         prompts = (_SCRIPTS / "dependency_cursor_review_prompts.py").read_text(encoding="utf-8")
         self.assertIn("refs/dcr/from", prompts)
         self.assertIn("refs/dcr/to", prompts)
+        self.assertIn("- from tag: (none)", prompts)
         self.assertIn("Intermediate commits were not fetched", prompts)
+        self.assertNotIn("_tag_ok", prompts)
+        self.assertNotIn("FROM_TAG", prompts)
         self.assertNotIn("the from and to commits are checked out", prompts)
         self.assertNotIn("full git history is available", prompts)
         prompt_step = workflow.split("- name: Build Cursor prompts\n", 1)[1].split("\n      - name:", 1)[0]
-        for key in ("RESOLVED_FROM:", "RESOLVED_TO:", "FROM_TAG:", "TO_TAG:"):
+        for key in ("RESOLVED_FROM:", "RESOLVED_TO:"):
             self.assertIn(key, prompt_step)
+        self.assertNotIn("FROM_TAG:", prompt_step)
+        self.assertNotIn("TO_TAG:", prompt_step)
         scan_outputs = workflow.split("outputs:", 1)[1].split("steps:", 1)[0]
         self.assertIn("from_tag:", scan_outputs)
         self.assertIn("to_tag:", scan_outputs)
@@ -77,6 +82,12 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         for key in ("RESOLVED_FROM:", "RESOLVED_TO:", "FROM_TAG:", "TO_TAG:"):
             self.assertIn(key, fetch)
         self.assertNotIn("fetch --tags", fetch)
+        self.assertIn('refs/tags/${name}^{commit}', fetch)
+        self.assertIn('update-ref -d "refs/tags/${name}"', fetch)
+        self.assertLess(
+            agent.index("- name: Download scan prompts\n"),
+            agent.index("- name: Fetch upstream commits and version tags\n"),
+        )
         self.assertNotIn("dependency_cursor_review_combine_outputs.py", agent)
         self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
         self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
@@ -108,8 +119,10 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             body = text[name]
             self.assertIn(from_sha, body)
             self.assertIn(to_sha, body)
-            self.assertIn("v1.0.0", body)
-            self.assertIn("v1.2.0", body)
+            self.assertIn("- from tag: (none)", body)
+            self.assertIn("- to tag: (none)", body)
+            self.assertNotIn("v1.0.0", body)
+            self.assertNotIn("v1.2.0", body)
             self.assertIn("refs/dcr/from", body)
             self.assertIn("refs/dcr/to", body)
             self.assertIn(f"git -C .upstream-dependency diff {from_sha} {to_sha}", body)

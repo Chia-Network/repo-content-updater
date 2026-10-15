@@ -98,6 +98,38 @@ func TestExpandYAMLSafeActions(t *testing.T) {
 	}
 }
 
+func TestExpandYAMLSafeActionsLeavesUnrelatedText(t *testing.T) {
+	inputs := []string{
+		"key: \"{{ eq .X \"}}\" }}\"\n",
+		"s := `\"{{ .NotARealField }}\"`\n",
+		"# {{ .Name }}\n",
+		"# \"{{ .Name }}\"\n",
+		"echo \"{{ .Name }}\"\n",
+		"key: \"{{ .Name }}\" trailing\n",
+		"# {{- include .Name }}\n",
+	}
+	for _, src := range inputs {
+		if got := expandYAMLSafeActions(src); got != src {
+			t.Errorf("expand changed %q\ninto %q", src, got)
+		}
+	}
+
+	comment, err := ProcessTemplate([]byte("# {{ .Name }}\n"), map[string]string{"Name": "hello"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(comment) != "# hello\n" {
+		t.Fatalf("comment became a live action: %q", comment)
+	}
+	echo, err := ProcessTemplate([]byte("echo \"{{ .Name }}\"\n"), map[string]string{"Name": "hello"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(echo) != "echo \"hello\"\n" {
+		t.Fatalf("echo quotes were stripped: %q", echo)
+	}
+}
+
 func TestExpandLeavesUnmarkedTemplates(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join("..", "..", "templates"))
 	if err != nil {

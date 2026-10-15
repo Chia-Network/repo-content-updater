@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -12,11 +13,11 @@ import (
 
 // ProcessTemplate renders the given template file.
 //
-// Plain Go actions still render as before. Two extra spellings keep a
+// Plain Go actions still render as before. Two whole-line spellings keep a
 // template valid YAML before rendering, and they render to the same bytes:
 //
-//	"{{ .Name }}"    a quoted action, rendered without the quotes
-//	# {{- if ... }}  a comment whose body is one action, rendered as that action
+//	key: "{{ .Name }}"     the entire value is one quoted field
+//	# {{- if ... }}        the entire line is a comment-wrapped action
 func ProcessTemplate(templateContent []byte, defaultVars map[string]string, overrides map[string]string) ([]byte, error) {
 	// Compute the SHA256 hash of the template content
 	hash := sha256.Sum256(templateContent)
@@ -56,58 +57,26 @@ func ProcessTemplate(templateContent []byte, defaultVars map[string]string, over
 	return processedTemplate.Bytes(), nil
 }
 
-// expandYAMLSafeActions lowers YAML-legal template spellings to plain Go actions.
+// A YAML key whose whole value is one quoted field, or a comment line whose
+// whole body is one trim-marked control action. Nothing else is rewritten.
+var (
+	yamlQuotedField   = regexp.MustCompile(`^([ \t]*)([A-Za-z0-9_-]+)(:[ \t]*)"\{\{ \.([A-Za-z_][A-Za-z0-9_]*) \}\}"$`)
+	yamlCommentAction = regexp.MustCompile(`^([ \t]*)#([ \t]*)(\{\{- (?:if|else|end|range|with)(?: [^}]*)?\}\})$`)
+)
+
+// expandYAMLSafeActions lowers those two line spellings to plain Go actions.
 func expandYAMLSafeActions(src string) string {
-	return expandCommentTemplateActions(expandQuotedTemplateActions(src))
-}
-
-func expandQuotedTemplateActions(src string) string {
-	var b strings.Builder
-	b.Grow(len(src))
-	for i := 0; i < len(src); {
-		action, next, ok := quotedActionAt(src, i)
-		if !ok {
-			b.WriteByte(src[i])
-			i++
-			continue
-		}
-		b.WriteString(action)
-		i = next
-	}
-	return b.String()
-}
-
-func quotedActionAt(src string, i int) (string, int, bool) {
-	if i >= len(src) || src[i] != '"' {
-		return "", 0, false
-	}
-	rest := src[i+1:]
-	if !strings.HasPrefix(rest, "{{") {
-		return "", 0, false
-	}
-	rel := strings.Index(rest, "}}\"")
-	if rel < 0 {
-		return "", 0, false
-	}
-	action := rest[:rel+2]
-	if !singleTemplateAction(action) {
-		return "", 0, false
-	}
-	return action, i + 1 + rel + 3, true
-}
-
-func expandCommentTemplateActions(src string) string {
-	if !strings.Contains(src, "#") {
+	if !strings.Contains(src, "{{") {
 		return src
 	}
 	lines := strings.Split(src, "\n")
 	changed := false
 	for i, line := range lines {
-		action, ok := commentTemplateAction(line)
+		rewritten, ok := yamlSafeActionLine(line)
 		if !ok {
 			continue
 		}
-		lines[i] = action
+		lines[i] = rewritten
 		changed = true
 	}
 	if !changed {
@@ -116,22 +85,12 @@ func expandCommentTemplateActions(src string) string {
 	return strings.Join(lines, "\n")
 }
 
-func commentTemplateAction(line string) (string, bool) {
-	trimmed := strings.TrimSpace(line)
-	if !strings.HasPrefix(trimmed, "#") {
-		return "", false
+func yamlSafeActionLine(line string) (string, bool) {
+	if m := yamlQuotedField.FindStringSubmatch(line); m != nil {
+		return m[1] + m[2] + m[3] + "{{ ." + m[4] + " }}", true
 	}
-	body := strings.TrimSpace(strings.TrimPrefix(trimmed, "#"))
-	if !singleTemplateAction(body) {
-		return "", false
+	if m := yamlCommentAction.FindStringSubmatch(line); m != nil {
+		return m[3], true
 	}
-	return body, true
-}
-
-func singleTemplateAction(s string) bool {
-	if len(s) < 4 || !strings.HasPrefix(s, "{{") || !strings.HasSuffix(s, "}}") {
-		return false
-	}
-	inner := s[2 : len(s)-2]
-	return !strings.Contains(inner, "{{") && !strings.Contains(inner, "}}")
+	return "", false
 }
