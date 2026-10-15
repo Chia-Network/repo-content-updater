@@ -311,11 +311,12 @@ jobs:
             git -C .upstream-dependency update-ref "$refname" "$sha"
           }
           # One allowlist, next to the fetch and the peel check.
+          # Slashes stay; the refspec stores that one tag.
           tag_name_ok() {
             local name="$1"
             [ -n "$name" ] || return 1
             case "$name" in
-            *[!A-Za-z0-9._+/-]* | -* | .* | /* | *..* | *'@{'* | */*/*) return 1 ;;
+            *[!A-Za-z0-9._+/-]* | -* | .* | /* | *..* | *'@{'*) return 1 ;;
             esac
             return 0
           }
@@ -333,40 +334,62 @@ jobs:
             # The refspec still stores the named tag.
             git -C .upstream-dependency \
               -c "http.extraheader=AUTHORIZATION: basic ${auth_basic}" \
-              fetch --no-tags --depth=1 origin "refs/tags/${name}:refs/tags/${name}"
+              fetch --no-tags --depth=1 origin "refs/tags/${name}:refs/tags/${name}" || return 1
             got="$(git -C .upstream-dependency rev-parse --verify --end-of-options "refs/tags/${name}^{commit}")" || return 1
             want="$(git -C .upstream-dependency rev-parse --verify --end-of-options "${sha}^{commit}")" || return 1
             if [ "$got" != "$want" ]; then
-              git -C .upstream-dependency update-ref -d "refs/tags/${name}"
+              # This function runs in a substitution, so errexit is off.
+              git -C .upstream-dependency update-ref -d "refs/tags/${name}" || return 1
               return 0
             fi
             printf '%s\n' "$name"
           }
+          # The compatibility prompt's last slot line is the layout placeholder.
+          slot_token() {
+            local file="dcr-scan-input/cursor_prompt_compatibility.txt"
+            local line token=""
+            local slot_re='^- (from|to) tag: \(none\) dcr-slot-([0-9a-f]{32})$'
+            [ -f "$file" ] || return 1
+            while IFS= read -r line || [ -n "$line" ]; do
+              if [[ "$line" =~ $slot_re ]]; then
+                token="${BASH_REMATCH[2]}"
+              fi
+            done <"$file"
+            [ -n "$token" ] || return 1
+            printf '%s\n' "$token"
+          }
           note_tag() {
             local label="$1"
             local name="$2"
-            local file line tmp seen
+            local token="$3"
+            local file tmp i changed
+            local slot_re="^- ${label}: \\(none\\) dcr-slot-${token}$"
+            local -a lines
             [ -n "$name" ] || return 0
+            [[ "$token" =~ ^[0-9a-f]{32}$ ]] || return 1
             for file in dcr-scan-input/cursor_prompt_malware.txt dcr-scan-input/cursor_prompt_compatibility.txt; do
               [ -f "$file" ] || continue
-              tmp="$(mktemp)"
-              seen=0
-              while IFS= read -r line || [ -n "$line" ]; do
-                if [ "$seen" -eq 0 ] && [ "$line" = "- ${label}: (none)" ]; then
-                  line="- ${label}: ${name}"
-                  seen=1
+              mapfile -t lines <"$file"
+              changed=0
+              for i in "${!lines[@]}"; do
+                if [[ "${lines[$i]}" =~ $slot_re ]]; then
+                  lines[i]="- ${label}: ${name}"
+                  changed=1
                 fi
-                printf '%s\n' "$line"
-              done <"$file" >"$tmp"
+              done
+              [ "$changed" -eq 1 ] || continue
+              tmp="$(mktemp)"
+              printf '%s\n' "${lines[@]}" >"$tmp"
               mv "$tmp" "$file"
             done
           }
           fetch_sha "${RESOLVED_TO}" refs/dcr/to
           fetch_sha "${RESOLVED_FROM}" refs/dcr/from
-          verified_to="$(fetch_tag "${TO_TAG:-}" "${RESOLVED_TO}")" || exit 1
-          verified_from="$(fetch_tag "${FROM_TAG:-}" "${RESOLVED_FROM}")" || exit 1
-          note_tag "from tag" "$verified_from"
-          note_tag "to tag" "$verified_to"
+          verified_to="$(fetch_tag "${TO_TAG:-}" "${RESOLVED_TO}")"
+          verified_from="$(fetch_tag "${FROM_TAG:-}" "${RESOLVED_FROM}")"
+          token="$(slot_token)"
+          note_tag "from tag" "$verified_from" "$token"
+          note_tag "to tag" "$verified_to" "$token"
 
       - name: Drop agent instructions
         if: ${{`{{ needs.dependency-review-scan.outputs.resolved_to != '' }}`}}

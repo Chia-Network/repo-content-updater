@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 from pathlib import Path
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
@@ -26,7 +27,11 @@ def _shown_version(value: str) -> str:
     return text if text else "(none)"
 
 
-def _upstream_layout() -> str:
+def _layout_tag_line(label: str, token: str) -> str:
+    return f"- {label}: (none) dcr-slot-{token}"
+
+
+def _upstream_layout(token: str) -> str:
     from_sha = _shown_sha(os.getenv("RESOLVED_FROM", ""))
     to_sha = _shown_sha(os.getenv("RESOLVED_TO", ""))
     lines = [
@@ -38,11 +43,10 @@ def _upstream_layout() -> str:
         "- Only those two commits and the version tags named below are fetched.",
         "- Intermediate commits were not fetched. Compare the trees with git diff, not git log.",
         f"- from version: {_shown_version(os.getenv('FROM_VERSION', ''))}",
-        # The agent fetch replaces "(none)" only after the tag peels to this SHA.
-        "- from tag: (none)",
+        _layout_tag_line("from tag", token),
         f"- from commit: {from_sha}",
         f"- to version: {_shown_version(os.getenv('TO_VERSION', ''))}",
-        "- to tag: (none)",
+        _layout_tag_line("to tag", token),
         f"- to commit: {to_sha}",
     ]
     if from_sha != "(unresolved)" and to_sha != "(unresolved)":
@@ -55,7 +59,7 @@ def _upstream_layout() -> str:
     return "\n".join(lines)
 
 
-def _base_context() -> str:
+def _base_context(token: str) -> str:
     return f"""
 This is a dependency bot PR review request.
 
@@ -82,7 +86,7 @@ Commits:
 Local usage hints (non-authoritative rg hits):
 {_read_file("package_usage.txt")[:12000]}
 
-{_upstream_layout()}
+{_upstream_layout(token)}
 """.strip()
 
 
@@ -156,7 +160,7 @@ Keep it concise and actionable.
 
 
 def main() -> None:
-    base = _base_context()
+    base = _base_context(secrets.token_hex(16))
     malware_context = f"""
 {base}
 

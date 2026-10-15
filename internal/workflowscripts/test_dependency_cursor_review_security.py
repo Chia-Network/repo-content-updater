@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -55,7 +56,8 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         prompts = (_SCRIPTS / "dependency_cursor_review_prompts.py").read_text(encoding="utf-8")
         self.assertIn("refs/dcr/from", prompts)
         self.assertIn("refs/dcr/to", prompts)
-        self.assertIn("- from tag: (none)", prompts)
+        self.assertIn('_layout_tag_line("from tag", token)', prompts)
+        self.assertIn('dcr-slot-{token}', prompts)
         self.assertIn("Intermediate commits were not fetched", prompts)
         self.assertNotIn("_tag_ok", prompts)
         self.assertNotIn("FROM_TAG", prompts)
@@ -130,6 +132,54 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             self.assertNotIn("the from and to commits are checked out", body)
             self.assertNotIn("full git history is available", body)
         self.assertIn("Use the git diff of those two SHAs", text["cursor_prompt_compatibility.txt"])
+
+    def test_release_notes_keep_their_tag_lines(self) -> None:
+        """Release-note tag lines stay above the layout slot, which is its own line."""
+        other = "cd" * 16
+        notes = (
+            "- from tag: (none)\n"
+            "- to tag: (none)\n"
+            f"- from tag: (none) dcr-slot-{other}\n"
+            f"- to tag: (none) dcr-slot-{other}\n"
+        )
+        report = (
+            f"- from tag: (none) dcr-slot-{other}\n"
+            f"- to tag: (none) dcr-slot-{other}\n"
+        )
+        text = _render_prompts(
+            files={
+                "dependabot_release_notes.md": notes,
+                "malware_scan_report.json": report,
+            },
+            RESOLVED_FROM="a" * 40,
+            RESOLVED_TO="b" * 40,
+        )
+        slot_re = re.compile(r"^- (from tag|to tag): \(none\) dcr-slot-([0-9a-f]{32})$")
+        layout_tokens: dict[str, str] = {}
+        for name, body in text.items():
+            notes_at = body.index("Release notes:")
+            layout_at = body.index("Repository layout:")
+            self.assertLess(notes_at, layout_at)
+            before = body[:layout_at].splitlines()
+            self.assertEqual(before.count("- from tag: (none)"), 1)
+            self.assertEqual(before.count("- to tag: (none)"), 1)
+            self.assertIn(f"- from tag: (none) dcr-slot-{other}", before)
+            self.assertIn(f"- to tag: (none) dcr-slot-{other}", before)
+            layout_head = body[layout_at:].split("\nMalware scan", 1)[0].split("\nTask ", 1)[0]
+            found = [slot_re.fullmatch(line) for line in layout_head.splitlines()]
+            found = [match for match in found if match]
+            self.assertEqual([match.group(1) for match in found], ["from tag", "to tag"])
+            tokens = {match.group(1): match.group(2) for match in found}
+            self.assertEqual(tokens["from tag"], tokens["to tag"])
+            self.assertNotEqual(tokens["from tag"], other)
+            layout_tokens[name] = tokens["from tag"]
+            if name == "cursor_prompt_malware.txt":
+                after = body.split("Malware scan report JSON:", 1)[1].splitlines()
+                self.assertIn(f"- from tag: (none) dcr-slot-{other}", after)
+                self.assertIn(f"- to tag: (none) dcr-slot-{other}", after)
+                self.assertNotIn(f"dcr-slot-{tokens['from tag']}", "\n".join(after))
+        self.assertEqual(len(layout_tokens), 2)
+        self.assertEqual(len(set(layout_tokens.values())), 1)
 
     def test_prompts_omit_diff_when_refs_are_missing_or_unsafe(self) -> None:
         text = _render_prompts(
@@ -352,8 +402,14 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         self.assertFalse((workspace / "cursor_output.json").exists())
 
 
-def _render_prompts(**env_updates: str) -> dict[str, str]:
+def _render_prompts(
+    files: dict[str, str] | None = None,
+    **env_updates: str,
+) -> dict[str, str]:
     with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for name, body in (files or {}).items():
+            (root / name).write_text(body, encoding="utf-8")
         env = os.environ.copy()
         env.update(
             PR_TITLE="title",
@@ -376,7 +432,6 @@ def _render_prompts(**env_updates: str) -> dict[str, str]:
         )
         if proc.returncode != 0:
             raise AssertionError(proc.stderr or proc.stdout)
-        root = Path(tmp)
         return {
             name: (root / name).read_text(encoding="utf-8")
             for name in ("cursor_prompt_malware.txt", "cursor_prompt_compatibility.txt")
