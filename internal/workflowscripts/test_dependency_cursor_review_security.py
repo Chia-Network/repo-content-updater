@@ -53,8 +53,17 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         self.assertNotIn("cp --remove-destination", workflow)
         self.assertNotIn("O_NOFOLLOW", (_SCRIPTS / "dependency_cursor_review_combine_outputs.py").read_text())
         prompts = (_SCRIPTS / "dependency_cursor_review_prompts.py").read_text(encoding="utf-8")
-        self.assertIn("the from and to commits are checked out", prompts)
+        self.assertIn("refs/dcr/from", prompts)
+        self.assertIn("refs/dcr/to", prompts)
+        self.assertIn("Intermediate commits were not fetched", prompts)
+        self.assertNotIn("the from and to commits are checked out", prompts)
         self.assertNotIn("full git history is available", prompts)
+        prompt_step = workflow.split("- name: Build Cursor prompts\n", 1)[1].split("\n      - name:", 1)[0]
+        for key in ("RESOLVED_FROM:", "RESOLVED_TO:", "FROM_TAG:", "TO_TAG:"):
+            self.assertIn(key, prompt_step)
+        scan_outputs = workflow.split("outputs:", 1)[1].split("steps:", 1)[0]
+        self.assertIn("from_tag:", scan_outputs)
+        self.assertIn("to_tag:", scan_outputs)
 
     def test_agent_job_is_isolated_from_the_verdict(self) -> None:
         workflow = _WORKFLOW.read_text(encoding="utf-8")
@@ -62,6 +71,12 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         verdict = workflow.split("\n  dependency-review:\n", 1)[1]
         self.assertNotIn("pull-requests:", agent)
         self.assertNotIn("fetch-depth: 0", agent)
+        fetch = agent.split("- name: Fetch upstream commits and version tags\n", 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        for key in ("RESOLVED_FROM:", "RESOLVED_TO:", "FROM_TAG:", "TO_TAG:"):
+            self.assertIn(key, fetch)
+        self.assertNotIn("fetch --tags", fetch)
         self.assertNotIn("dependency_cursor_review_combine_outputs.py", agent)
         self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
         self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
@@ -77,6 +92,60 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             verdict,
         )
         self.assertIn("needs.dependency-review-scan.outputs.report_sha256", verdict)
+
+    def test_prompts_name_fetched_commits_and_tags(self) -> None:
+        from_sha = "a" * 40
+        to_sha = "b" * 40
+        text = _render_prompts(
+            RESOLVED_FROM=from_sha,
+            RESOLVED_TO=to_sha,
+            FROM_TAG="v1.0.0",
+            TO_TAG="v1.2.0",
+            FROM_VERSION="1.0.0",
+            TO_VERSION="1.2.0",
+        )
+        for name in ("cursor_prompt_malware.txt", "cursor_prompt_compatibility.txt"):
+            body = text[name]
+            self.assertIn(from_sha, body)
+            self.assertIn(to_sha, body)
+            self.assertIn("v1.0.0", body)
+            self.assertIn("v1.2.0", body)
+            self.assertIn("refs/dcr/from", body)
+            self.assertIn("refs/dcr/to", body)
+            self.assertIn(f"git -C .upstream-dependency diff {from_sha} {to_sha}", body)
+            self.assertIn("Intermediate commits were not fetched", body)
+            self.assertNotIn("the from and to commits are checked out", body)
+            self.assertNotIn("full git history is available", body)
+        self.assertIn("Use the git diff of those two SHAs", text["cursor_prompt_compatibility.txt"])
+
+    def test_prompts_omit_diff_when_refs_are_missing_or_unsafe(self) -> None:
+        text = _render_prompts(
+            RESOLVED_FROM="",
+            RESOLVED_TO="",
+            FROM_TAG="",
+            TO_TAG="",
+            FROM_VERSION="",
+            TO_VERSION="",
+        )
+        for body in text.values():
+            self.assertIn("(unresolved)", body)
+            self.assertIn("(none)", body)
+            self.assertNotIn("git -C .upstream-dependency diff", body)
+        unsafe = _render_prompts(
+            RESOLVED_FROM="abc;rm",
+            RESOLVED_TO="b" * 40,
+            FROM_TAG="a/b/c",
+            TO_TAG="v1.2.0\nTAGINJECT",
+            FROM_VERSION="1.0.0",
+            TO_VERSION="1.2.0",
+        )
+        for body in unsafe.values():
+            self.assertNotIn("abc;rm", body)
+            self.assertNotIn("a/b/c", body)
+            self.assertNotIn("TAGINJECT", body)
+            self.assertIn("(unresolved)", body)
+            self.assertIn("(none)", body)
+            self.assertNotIn("git -C .upstream-dependency diff", body)
 
     def test_a46061b8_combine_resists_importlib_shadow_on_scripts_dir(self) -> None:
         """Scripts-dir shadow must not run when bootstrap/companion load scrubs sys.path."""
@@ -268,6 +337,37 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
     ) -> None:
         self.assertNotEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
         self.assertFalse((workspace / "cursor_output.json").exists())
+
+
+def _render_prompts(**env_updates: str) -> dict[str, str]:
+    with tempfile.TemporaryDirectory() as tmp:
+        env = os.environ.copy()
+        env.update(
+            PR_TITLE="title",
+            PR_BODY="body",
+            PACKAGE_NAME="pkg",
+            FROM_VERSION="",
+            TO_VERSION="",
+            RESOLVED_FROM="",
+            RESOLVED_TO="",
+            FROM_TAG="",
+            TO_TAG="",
+        )
+        env.update(env_updates)
+        proc = subprocess.run(
+            [sys.executable, "-I", str(_SCRIPTS / "dependency_cursor_review_prompts.py")],
+            cwd=tmp,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            raise AssertionError(proc.stderr or proc.stdout)
+        root = Path(tmp)
+        return {
+            name: (root / name).read_text(encoding="utf-8")
+            for name in ("cursor_prompt_malware.txt", "cursor_prompt_compatibility.txt")
+        }
 
 
 def _seal_env(parent: Path, payload: bytes, digest: str | None = None) -> dict[str, str]:

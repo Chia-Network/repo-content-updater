@@ -155,7 +155,11 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("fetch-depth: 0", agent)
         self.assertNotIn("--shallow-exclude", agent)
         self.assertNotIn("merge-base --is-ancestor", agent)
-        self.assertIn('fetch --no-tags --depth=1 origin "${RESOLVED_FROM}"', agent)
+        self.assertNotIn("fetch --tags", agent)
+        self.assertIn('fetch --no-tags --depth=1 origin "$sha"', agent)
+        self.assertIn('refs/tags/${name}:refs/tags/${name}', agent)
+        self.assertIn("refs/dcr/from", agent)
+        self.assertIn("refs/dcr/to", agent)
         self.assertNotIn("dependency_cursor_review_combine_outputs.py", agent)
         self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
         self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
@@ -200,10 +204,12 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn("function selectPostedMarker", post_js)
 
     def test_tag_range_fetch_uses_peeled_shas(self) -> None:
-        """Peeled tag SHAs and a non-ancestor pair both diff after one depth-1 fetch."""
+        """Peeled commits and their version tags are inspectable after depth-1 fetches."""
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
         agent = self._job(workflow, "dependency-review-agent")
-        block = agent.split("- name: Fetch upstream from commit\n", 1)[1].split("\n      - name:", 1)[0]
+        block = agent.split("- name: Fetch upstream commits and version tags\n", 1)[1].split(
+            "\n      - name:", 1
+        )[0]
         script = textwrap.dedent(block.split("run: |\n", 1)[1])
         with tempfile.TemporaryDirectory() as tmp:
             origin = Path(tmp) / "origin"
@@ -215,10 +221,21 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
                 self._git(origin, "commit", "-m", name)
             self._git(origin, "tag", "-a", "v1.0.0", "-m", "v1.0.0", "HEAD~2")
             self._git(origin, "tag", "-a", "v1.2.0", "-m", "v1.2.0", "HEAD")
+            self._git(origin, "tag", "-a", "extra", "-m", "extra", "HEAD")
             resolved_from = self._git(origin, "rev-parse", "v1.0.0^{commit}")
             resolved_to = self._git(origin, "rev-parse", "v1.2.0^{commit}")
             self.assertNotEqual(resolved_from, self._git(origin, "rev-parse", "v1.0.0"))
-            self._assert_tree_diff(script, origin, resolved_from, resolved_to, "-released", "+head")
+            self._assert_tree_diff(
+                script,
+                origin,
+                resolved_from,
+                resolved_to,
+                "-released",
+                "+head",
+                from_tag="v1.0.0",
+                to_tag="v1.2.0",
+                from_blob="released",
+            )
 
             self._git(origin, "checkout", "--orphan", "rewritten")
             self._git(origin, "rm", "-rf", ".")
@@ -235,7 +252,15 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
                 text=True,
             )
             self.assertNotEqual(ancestry.returncode, 0)
-            self._assert_tree_diff(script, origin, orphan, head, "-orphan", "+head")
+            self._assert_tree_diff(
+                script,
+                origin,
+                orphan,
+                head,
+                "-orphan",
+                "+head",
+                from_blob="orphan",
+            )
 
     def _assert_tree_diff(
         self,
@@ -245,6 +270,9 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         resolved_to: str,
         removed: str,
         added: str,
+        from_blob: str,
+        from_tag: str = "",
+        to_tag: str = "",
     ) -> None:
         work = origin.parent / f"work-{resolved_from[:8]}"
         upstream = work / ".upstream-dependency"
@@ -252,20 +280,85 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self._git(upstream, "remote", "add", "origin", str(origin))
         self._git(upstream, "fetch", "--depth=1", "origin", resolved_to)
         self._git(upstream, "checkout", "--detach", "FETCH_HEAD")
+        proc = self._run_fetch(
+            script,
+            work,
+            RESOLVED_FROM=resolved_from,
+            RESOLVED_TO=resolved_to,
+            FROM_TAG=from_tag,
+            TO_TAG=to_tag,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+        self.assertEqual(self._git(upstream, "rev-parse", "HEAD"), resolved_to)
+        self.assertEqual(self._git(upstream, "rev-parse", "refs/dcr/from"), resolved_from)
+        self.assertEqual(self._git(upstream, "rev-parse", "refs/dcr/to"), resolved_to)
+        diff = self._git(upstream, "diff", resolved_from, resolved_to)
+        self.assertIn(removed, diff)
+        self.assertIn(added, diff)
+        self.assertEqual(self._git(upstream, "show", f"{resolved_from}:pkg.txt"), from_blob)
+        to_blob = self._git(upstream, "show", f"{resolved_to}:pkg.txt")
+        expected_tags = {tag for tag in (from_tag, to_tag) if tag}
+        listed = self._git(upstream, "tag", "--list")
+        self.assertEqual(set(listed.splitlines()) if listed else set(), expected_tags)
+        for tag, sha, blob in (
+            (from_tag, resolved_from, from_blob),
+            (to_tag, resolved_to, to_blob),
+        ):
+            if not tag:
+                continue
+            self.assertEqual(self._git(upstream, "cat-file", "-t", tag), "tag")
+            self.assertEqual(self._git(upstream, "rev-parse", f"{tag}^{{commit}}"), sha)
+            self.assertEqual(self._git(upstream, "show", f"{tag}:pkg.txt"), blob)
+        if from_tag:
+            log = self._git(upstream, "log", "--oneline", f"{resolved_from}..{resolved_to}")
+            self.assertNotIn("middle", log)
+        checkout = subprocess.run(
+            ["bash", str(_REPO_ROOT / "internal/workflowscripts/upstream_release_checkout.sh")],
+            cwd=work,
+            env={**self._git_env(), "RESOLVED_TO": resolved_to},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(checkout.returncode, 0, msg=checkout.stderr or checkout.stdout)
+        self.assertEqual(self._git(upstream, "rev-parse", "HEAD"), resolved_to)
+        self.assertEqual(self._git(upstream, "rev-parse", "refs/dcr/from"), resolved_from)
+        if not from_tag:
+            return
+        for bad in ("not a sha", "abcdef", "a" * 65):
+            refused = self._run_fetch(
+                script,
+                work,
+                RESOLVED_FROM=bad,
+                RESOLVED_TO=resolved_to,
+                FROM_TAG=from_tag,
+                TO_TAG=to_tag,
+            )
+            self.assertNotEqual(refused.returncode, 0, msg=bad)
+            self.assertIn("Refusing non-SHA ref.", refused.stderr)
+        for bad in ("a/b/c", "foo@{bar", "v1..2", "-v1", ".hidden"):
+            refused = self._run_fetch(
+                script,
+                work,
+                RESOLVED_FROM=resolved_from,
+                RESOLVED_TO=resolved_to,
+                FROM_TAG=bad,
+                TO_TAG=to_tag,
+            )
+            self.assertNotEqual(refused.returncode, 0, msg=bad)
+            self.assertIn("Refusing tag name.", refused.stderr)
+        self.assertEqual(self._git(upstream, "rev-parse", "refs/dcr/from"), resolved_from)
+
+    def _run_fetch(self, script: str, work: Path, **updates: str) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
-        env.update(GH_TOKEN="x", RESOLVED_FROM=resolved_from)
-        proc = subprocess.run(
+        env.update(GH_TOKEN="x", RESOLVED_FROM="", RESOLVED_TO="", FROM_TAG="", TO_TAG="")
+        env.update(updates)
+        return subprocess.run(
             ["bash", "-c", script],
             cwd=work,
             env=env,
             capture_output=True,
             text=True,
         )
-        self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
-        self.assertEqual(self._git(upstream, "rev-parse", "HEAD"), resolved_to)
-        diff = self._git(upstream, "diff", resolved_from, resolved_to)
-        self.assertIn(removed, diff)
-        self.assertIn(added, diff)
 
     def _git(self, repo: Path, *args: str) -> str:
         repo.mkdir(parents=True, exist_ok=True)

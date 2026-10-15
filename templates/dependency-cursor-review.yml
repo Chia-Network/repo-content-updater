@@ -48,6 +48,8 @@ jobs:
       upstream_repo: ${{`{{ steps.dependabot_context.outputs.upstream_repo }}`}}
       resolved_from: ${{`{{ steps.malware_scan.outputs.resolved_from }}`}}
       resolved_to: ${{`{{ steps.malware_scan.outputs.resolved_to }}`}}
+      from_tag: ${{`{{ steps.malware_scan.outputs.from_tag }}`}}
+      to_tag: ${{`{{ steps.malware_scan.outputs.to_tag }}`}}
       status: ${{`{{ steps.malware_scan.outputs.status }}`}}
       changed_files_count: ${{`{{ steps.malware_scan.outputs.changed_files_count }}`}}
       report_sha256: ${{`{{ steps.malware_scan.outputs.report_sha256 }}`}}
@@ -213,6 +215,10 @@ jobs:
           PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
           FROM_VERSION: ${{`{{ steps.dependabot_context.outputs.from_version }}`}}
           TO_VERSION: ${{`{{ steps.dependabot_context.outputs.to_version }}`}}
+          RESOLVED_FROM: ${{`{{ steps.malware_scan.outputs.resolved_from }}`}}
+          RESOLVED_TO: ${{`{{ steps.malware_scan.outputs.resolved_to }}`}}
+          FROM_TAG: ${{`{{ steps.malware_scan.outputs.from_tag }}`}}
+          TO_TAG: ${{`{{ steps.malware_scan.outputs.to_tag }}`}}
         run: |
           python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_prompts.py"
           if [ ! -f upstream_changed_files.txt ]; then
@@ -267,18 +273,59 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Fetch upstream from commit
-        if: ${{`{{ needs.dependency-review-scan.outputs.resolved_from != '' && needs.dependency-review-scan.outputs.resolved_to != '' }}`}}
+      - name: Fetch upstream commits and version tags
+        if: ${{`{{ needs.dependency-review-scan.outputs.resolved_to != '' }}`}}
         shell: bash
         env:
           GH_TOKEN: ${{`{{ github.token }}`}}
           RESOLVED_FROM: ${{`{{ needs.dependency-review-scan.outputs.resolved_from }}`}}
+          RESOLVED_TO: ${{`{{ needs.dependency-review-scan.outputs.resolved_to }}`}}
+          FROM_TAG: ${{`{{ needs.dependency-review-scan.outputs.from_tag }}`}}
+          TO_TAG: ${{`{{ needs.dependency-review-scan.outputs.to_tag }}`}}
         run: |
           set -euo pipefail
           auth_basic="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
-          git -C .upstream-dependency \
-            -c "http.extraheader=AUTHORIZATION: basic ${auth_basic}" \
-            fetch --no-tags --depth=1 origin "${RESOLVED_FROM}"
+          # Pin both commits, then fetch only the named version tags.
+          # Depth 1 does not include intermediate commits.
+          fetch_sha() {
+            local sha="$1"
+            local refname="$2"
+            [ -n "$sha" ] || return 0
+            case "$sha" in
+            *[!0-9a-fA-F]*)
+              echo "Refusing non-SHA ref." >&2
+              return 1
+              ;;
+            esac
+            if [ "${#sha}" -lt 7 ] || [ "${#sha}" -gt 64 ]; then
+              echo "Refusing non-SHA ref." >&2
+              return 1
+            fi
+            git -C .upstream-dependency \
+              -c "http.extraheader=AUTHORIZATION: basic ${auth_basic}" \
+              fetch --no-tags --depth=1 origin "$sha"
+            git -C .upstream-dependency update-ref "$refname" "$sha"
+          }
+          fetch_tag() {
+            local name="$1"
+            [ -n "$name" ] || return 0
+            # Same allowlist as tag_name_ok in upstream_malware_scan.sh.
+            case "$name" in
+            *[!A-Za-z0-9._+/-]* | -* | .* | /* | *..* | *'@{'* | */*/*)
+              echo "Refusing tag name." >&2
+              return 1
+              ;;
+            esac
+            # Tag following would also download every other tag on this commit.
+            # The refspec still stores the named tag.
+            git -C .upstream-dependency \
+              -c "http.extraheader=AUTHORIZATION: basic ${auth_basic}" \
+              fetch --no-tags --depth=1 origin "refs/tags/${name}:refs/tags/${name}"
+          }
+          fetch_sha "${RESOLVED_TO}" refs/dcr/to
+          fetch_sha "${RESOLVED_FROM}" refs/dcr/from
+          fetch_tag "${TO_TAG:-}"
+          fetch_tag "${FROM_TAG:-}"
 
       - name: Drop agent instructions
         if: ${{`{{ needs.dependency-review-scan.outputs.resolved_to != '' }}`}}
