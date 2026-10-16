@@ -44,10 +44,10 @@ jobs:
       number: ${{`{{ steps.target_pr.outputs.number }}`}}
       title: ${{`{{ steps.target_pr.outputs.title }}`}}
       head_sha: ${{`{{ steps.target_pr.outputs.head_sha }}`}}
-      package_name: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
-      from_version: ${{`{{ steps.dependabot_context.outputs.from_version }}`}}
-      to_version: ${{`{{ steps.dependabot_context.outputs.to_version }}`}}
-      upstream_repo: ${{`{{ steps.dependabot_context.outputs.upstream_repo }}`}}
+      package_name: ${{`{{ steps.malware_scan.outputs.package_name }}`}}
+      from_version: ${{`{{ steps.malware_scan.outputs.from_version }}`}}
+      to_version: ${{`{{ steps.malware_scan.outputs.to_version }}`}}
+      upstream_repo: ${{`{{ steps.malware_scan.outputs.upstream_repo }}`}}
       resolved_from: ${{`{{ steps.malware_scan.outputs.resolved_from }}`}}
       resolved_to: ${{`{{ steps.malware_scan.outputs.resolved_to }}`}}
       from_tag: ${{`{{ steps.malware_scan.outputs.from_tag }}`}}
@@ -143,9 +143,6 @@ jobs:
         id: malware_scan
         shell: bash
         env:
-          PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
-          FROM_VERSION: ${{`{{ steps.dependabot_context.outputs.from_version }}`}}
-          TO_VERSION: ${{`{{ steps.dependabot_context.outputs.to_version }}`}}
           VERSION_RANGE_FROM_BODY: ${{`{{ steps.dependabot_context.outputs.version_range_from_body }}`}}
           MALWARE_WARN_ONLY: >-
             {{ .DEPENDABOT_CURSOR_MALWARE_WARN_ONLY }}
@@ -185,7 +182,7 @@ jobs:
         if: steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         env:
-          PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
+          PACKAGE_NAME: ${{`{{ steps.malware_scan.outputs.package_name }}`}}
         run: |
           if [ -z "$PACKAGE_NAME" ]; then
             echo "No package detected from PR metadata." > package_usage.txt
@@ -203,9 +200,9 @@ jobs:
         env:
           PR_TITLE: ${{`{{ steps.target_pr.outputs.title }}`}}
           PR_BODY: ${{`{{ steps.target_pr.outputs.body }}`}}
-          PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
-          FROM_VERSION: ${{`{{ steps.dependabot_context.outputs.from_version }}`}}
-          TO_VERSION: ${{`{{ steps.dependabot_context.outputs.to_version }}`}}
+          PACKAGE_NAME: ${{`{{ steps.malware_scan.outputs.package_name }}`}}
+          FROM_VERSION: ${{`{{ steps.malware_scan.outputs.from_version }}`}}
+          TO_VERSION: ${{`{{ steps.malware_scan.outputs.to_version }}`}}
           RESOLVED_FROM: ${{`{{ steps.malware_scan.outputs.resolved_from }}`}}
           RESOLVED_TO: ${{`{{ steps.malware_scan.outputs.resolved_to }}`}}
         run: |

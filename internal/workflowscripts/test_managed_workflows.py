@@ -98,6 +98,11 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_update_coverage.py"',
             scan,
         )
+        prompts = scan.split("- name: Build Cursor prompts\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("steps.malware_scan.outputs.package_name", prompts)
+        self.assertIn("steps.malware_scan.outputs.from_version", prompts)
+        self.assertIn("steps.malware_scan.outputs.to_version", prompts)
+        self.assertNotIn("steps.dependabot_context.outputs", prompts)
         coverage = (
             _REPO_ROOT / "internal/workflowscripts/dependency_update_coverage.py"
         ).read_text(encoding="utf-8")
