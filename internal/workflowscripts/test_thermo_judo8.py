@@ -18,7 +18,7 @@ _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("scripts_dir_path_scrub.py", 130),
     ("formatter_runtime_bundle.py", 40),
     ("formatter_bundle_inventory.py", 220),
-    ("malware_verdict_formatter.py", 310),
+    ("malware_verdict_formatter.py", 280),
     ("isolated_module_exec.py", 100),
     ("trusted_formatter_loader_cold_start.py", 78),
 )

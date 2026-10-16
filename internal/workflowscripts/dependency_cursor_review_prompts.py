@@ -135,9 +135,8 @@ poetry.lock, Pipfile.lock, requirements.txt, requirements-dev.txt, requirements/
 
 IOC matches and Unicode or confusable-character findings are blocking. Do not clear them.
 You may only agree with them or escalate them.
-Generic exec, spawn, child_process, base64, and eval hits are context, as are other heuristic
-hits inside compiled action bundles. Bundles are files named by action.yml runs.main, runs.pre,
-or runs.post, and files under dist/ or lib/. Use those hits as context and make the call yourself.
+Generic exec, spawn, child_process, base64, and eval hits are context, including inside compiled
+bundles. Other heuristic hits stay blocking in every path, including dist/ and lib/.
 status clean with scan_conclusive true means release blobs were read and no findings were produced.
 status warn or fail means findings were produced from blobs that were read. Incorporate them.
 If scan_conclusive is false, coverage was incomplete, so do not treat the absence of further findings as a clean result.
