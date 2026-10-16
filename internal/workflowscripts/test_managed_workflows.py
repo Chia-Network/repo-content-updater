@@ -128,6 +128,16 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             'bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_release_checkout.sh"',
             scan,
         )
+        checkout_step = scan.split("- name: Check out upstream release and drop agent instructions\n", 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn("steps.malware_scan.outputs.resolved_to", checkout_step)
+        self.assertIn("github.event.pull_request.base.sha", scan)
+        checkout_sh = (
+            _REPO_ROOT / "internal/workflowscripts/upstream_release_checkout.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("agent_target", checkout_sh)
+        self.assertNotIn("jq ", checkout_sh)
         self.assertNotIn("git -C .upstream-dependency checkout --detach", workflow)
         self.assertNotIn("hash_trusted_scripts", workflow)
         self.assertNotIn("trusted_hash_snapshot", workflow)

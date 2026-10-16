@@ -309,6 +309,85 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             self.assertIn(f"resolved_to={'c' * 40}", emitted)
             self.assertIn("scan_conclusive=false", emitted)
 
+    def test_conclusive_without_tags_is_not_covered(self) -> None:
+        report = _clean("lodash", "lodash/lodash")
+        report["from_tag"] = ""
+        report["to_tag"] = ""
+        report["resolved_from"] = "a" * 40
+        report["resolved_to"] = "a" * 40
+        report["materialized_count"] = 0
+        aggregated = coverage.aggregate([report])
+        self.assertIs(aggregated["scan_conclusive"], False)
+        self.assertEqual(aggregated["not_scanned_reason"], "incomplete_coverage")
+        self.assertIsNone(coverage.agent_target([report]))
+        self.assertIsNone(aggregated["agent_target"])
+
+    def test_manifest_bump_missing_from_the_parsed_list_is_unresolved(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _git(root, "init", "-b", "main")
+            _git(root, "config", "user.email", "coverage-test@example.com")
+            _git(root, "config", "user.name", "coverage-test")
+            _commit(root, "package.json", "{}\n", "base")
+            _git(root, "checkout", "-b", "pr")
+            _commit(
+                root,
+                "package.json",
+                json.dumps({"dependencies": {"lodash": "4.17.21", "left-pad": "1.3.0"}}) + "\n",
+                "bump package.json",
+            )
+            _commit(
+                root,
+                "package-lock.json",
+                json.dumps(
+                    {
+                        "lockfileVersion": 3,
+                        "packages": {"node_modules/minimist": {"version": "1.2.8"}},
+                    }
+                )
+                + "\n",
+                "bump lock",
+            )
+            _commit(
+                root,
+                "go.mod",
+                "module example.com/app\n\ngo 1.22\n\nrequire github.com/evil/mod v1.2.3\n",
+                "bump go.mod",
+            )
+            _commit(root, "requirements.txt", "requests==2.32.3\n", "bump requirements")
+            updates = [
+                {
+                    "packageName": "lodash",
+                    "fromVersion": "4.17.20",
+                    "toVersion": "4.17.21",
+                    "upstreamRepo": "lodash/lodash",
+                }
+            ]
+            (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
+            output = root / "github_output.txt"
+            previous = os.getcwd()
+            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT")}
+            os.chdir(root)
+            os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
+            os.environ.pop("GITHUB_BASE_REF", None)
+            os.environ["GITHUB_OUTPUT"] = str(output)
+            try:
+                with patch.object(coverage, "_clone", lambda *_args, **_kwargs: False):
+                    coverage.main()
+            finally:
+                os.chdir(previous)
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
+            self.assertIs(report["scan_conclusive"], False)
+            summary = (root / "malware_scan_summary.md").read_text(encoding="utf-8")
+            for name in ("left-pad", "minimist", "github.com/evil/mod", "requests"):
+                self.assertIn(name, summary, msg=summary)
+            self.assertIn("scan_conclusive=false", output.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

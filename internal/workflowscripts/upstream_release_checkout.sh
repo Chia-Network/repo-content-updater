@@ -5,17 +5,6 @@
 set -euo pipefail
 
 resolved_to="${RESOLVED_TO:-}"
-if [ -z "$resolved_to" ] && [ -f malware_scan_report.json ]; then
-  # agent_target is the one (package, repo, commit) selection. When the report
-  # has that key, its commit is the checkout, including when the value is empty.
-  resolved_to="$(jq -r '
-    if has("agent_target") then
-      if (.agent_target | type) == "array" then .agent_target[2] // empty else empty end
-    else
-      .resolved_to // empty
-    end
-  ' malware_scan_report.json)"
-fi
 if [ -z "$resolved_to" ]; then
   rm -rf .upstream-dependency .malware-scan
   exit 0

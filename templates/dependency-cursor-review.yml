@@ -143,6 +143,7 @@ jobs:
         id: malware_scan
         shell: bash
         env:
+          PR_BASE_SHA: ${{`{{ github.event.pull_request.base.sha }}`}}
           VERSION_RANGE_FROM_BODY: ${{`{{ steps.dependabot_context.outputs.version_range_from_body }}`}}
           MALWARE_WARN_ONLY: >-
             {{ .DEPENDABOT_CURSOR_MALWARE_WARN_ONLY }}
@@ -175,6 +176,8 @@ jobs:
       - name: Check out upstream release and drop agent instructions
         if: steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
+        env:
+          RESOLVED_TO: ${{`{{ steps.malware_scan.outputs.resolved_to }}`}}
         run: |
           bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_release_checkout.sh"
 

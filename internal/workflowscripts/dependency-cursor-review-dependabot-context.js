@@ -68,32 +68,71 @@ function packageCell(cell) {
   };
 }
 
+function agree(record, key, incoming) {
+  if (record.disputed[key]) return '';
+  if (!incoming) return record[key];
+  if (!record[key]) return incoming;
+  if (record[key] === incoming) return record[key];
+  record.disputed[key] = true;
+  return '';
+}
+
 function rememberUpdate(byName, name, fromVersion, toVersion, repo) {
   const packageName = String(name || '').trim();
   if (!packageName || packageName.toLowerCase() === 'package') return;
   const from = stripLeadingV(fromVersion);
   const to = stripLeadingV(toVersion);
+  const repoName = String(repo || '')
+    .trim()
+    .replace(/\.git$/i, '');
   const existing = byName.get(packageName);
   if (!existing) {
     byName.set(packageName, {
       packageName,
       fromVersion: from,
       toVersion: to,
-      upstreamRepo: repo || '',
+      upstreamRepo: repoName,
+      disputed: {},
     });
     return;
   }
-  if (existing.fromVersion !== from || existing.toVersion !== to) {
-    existing.fromVersion = '';
-    existing.toVersion = '';
-  }
-  if (!existing.upstreamRepo && repo) existing.upstreamRepo = repo;
+  existing.fromVersion = agree(existing, 'fromVersion', from);
+  existing.toVersion = agree(existing, 'toVersion', to);
+  existing.upstreamRepo = agree(existing, 'upstreamRepo', repoName);
 }
 
-// Grouped Dependabot bodies list each bump in a table and in `Updates` lines.
-// One row with no GitHub repo stays in the list so coverage can fail closed.
-function parseGroupedUpdates(body) {
+function groupPreamble(body) {
+  if (/^(?:Updates |<details|\|)/i.test(body)) return '';
+  const marks = ['\nUpdates ', '\n|', '\n<details', '\n### '];
+  let cut = body.length;
+  for (const mark of marks) {
+    const index = body.indexOf(mark);
+    if (index >= 0 && index < cut) cut = index;
+  }
+  return body.slice(0, cut);
+}
+
+// One map. Intro links, table rows, Updates lines, and the title all write it.
+// A second non-empty repository or version that differs clears that field.
+function collectPackageUpdates(title, body) {
   const byName = new Map();
+  const preamble = groupPreamble(body);
+  const linkRe = /\[([^\]]+)\]\(\s*(https?:\/\/[^)\s]+)[^)]*\)/gi;
+  let link;
+  while ((link = linkRe.exec(preamble)) !== null) {
+    rememberUpdate(byName, link[1], '', '', githubRepoFromText(link[2]));
+  }
+  const bumpsRe = /\[([^\]]+)\]\(\s*(https?:\/\/[^)\s]+)[^)]*\)\s+from\s+(\S+)\s+to\s+(\S+)/gi;
+  let bumps;
+  while ((bumps = bumpsRe.exec(preamble)) !== null) {
+    rememberUpdate(
+      byName,
+      bumps[1],
+      bumps[3].replace(/[.,;:]+$/, ''),
+      bumps[4].replace(/[.,;:]+$/, ''),
+      githubRepoFromText(bumps[2]),
+    );
+  }
   const tableRe = /^\|\s*([^|\n]+?)\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|/gm;
   let row;
   while ((row = tableRe.exec(body)) !== null) {
@@ -103,12 +142,38 @@ function parseGroupedUpdates(body) {
   const lineRe = /^Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+)/gm;
   let line;
   while ((line = lineRe.exec(body)) !== null) {
-    const name = line[1].trim();
-    const from = line[2].replace(/[.,;:]+$/, '');
-    const to = line[3].replace(/[.,;:]+$/, '');
-    rememberUpdate(byName, name, from, to, githubRepoFromText(name));
+    rememberUpdate(
+      byName,
+      line[1].trim(),
+      line[2].replace(/[.,;:]+$/, ''),
+      line[3].replace(/[.,;:]+$/, ''),
+      githubRepoFromText(line[1]),
+    );
   }
-  return [...byName.values()];
+
+  const titleMatch =
+    title.match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
+    title.match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
+    title.match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
+  const renovateTitleMatch =
+    !titleMatch &&
+    (title.match(/(?:update|pin)\s+dependency\s+(.+?)\s+to\s+v?([^\s]+)/i) ||
+      title.match(/(?:update|pin)\s+(.+?)\s+(?:action|digest|docker\s+tag)\s+to\s+v?([^\s]+)/i) ||
+      title.match(/(?:update|pin)\s+(.+?)\s+to\s+v?([^\s]+)/i));
+  if (titleMatch) {
+    rememberUpdate(byName, titleMatch[1], titleMatch[2], titleMatch[3], '');
+  } else if (renovateTitleMatch) {
+    rememberUpdate(byName, renovateTitleMatch[1], '', renovateTitleMatch[2], '');
+  }
+
+  if (byName.size === 1) {
+    const arrow = body.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
+    if (arrow) {
+      const only = [...byName.values()][0];
+      rememberUpdate(byName, only.packageName, arrow[1], arrow[2], '');
+    }
+  }
+  return [...byName.values()].map(({ disputed, ...item }) => item);
 }
 
 function parseDependencyUpdate(title, body) {
@@ -135,63 +200,16 @@ function parseDependencyUpdate(title, body) {
     if (shaMatches && shaMatches.length > 0) commits = shaMatches.join('\n');
   }
 
-  const titleMatch =
-    title.match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-    title.match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-    title.match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
-  const renovateTitleMatch =
-    !titleMatch &&
-    (title.match(/(?:update|pin)\s+dependency\s+(.+?)\s+to\s+v?([^\s]+)/i) ||
-      title.match(/(?:update|pin)\s+(.+?)\s+(?:action|digest|docker\s+tag)\s+to\s+v?([^\s]+)/i) ||
-      title.match(/(?:update|pin)\s+(.+?)\s+to\s+v?([^\s]+)/i));
-
-  let packageName;
-  let fromVersion;
-  let toVersion;
-  if (titleMatch) {
-    packageName = titleMatch[1].trim();
-    fromVersion = titleMatch[2].trim();
-    toVersion = titleMatch[3].trim();
-  } else if (renovateTitleMatch) {
-    packageName = renovateTitleMatch[1].trim();
-    fromVersion = '';
-    toVersion = renovateTitleMatch[2].trim();
-  } else {
-    packageName = '';
-    fromVersion = '';
-    toVersion = '';
-  }
-
-  if (!fromVersion || !toVersion) {
-    const bodyVersionMatch = body.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
-    if (bodyVersionMatch) {
-      if (!fromVersion) fromVersion = bodyVersionMatch[1].replace(/^v/i, '');
-      if (!toVersion) toVersion = bodyVersionMatch[2].replace(/^v/i, '');
-    }
-  }
-
-  const grouped = parseGroupedUpdates(body);
-  if (grouped.length > 0) {
-    // The package the agent checks out is chosen after each scan. Parsing does not pick one.
-    return {
-      upstreamRepo: '',
-      packageName: '',
-      fromVersion: '',
-      toVersion: '',
-      releaseNotes,
-      commits,
-      updates: grouped,
-    };
-  }
-
+  const updates = collectPackageUpdates(title, body);
+  const sole = updates.length === 1 ? updates[0] : null;
   return {
-    upstreamRepo,
-    packageName,
-    fromVersion,
-    toVersion,
+    upstreamRepo: sole ? sole.upstreamRepo : '',
+    packageName: sole ? sole.packageName : '',
+    fromVersion: sole ? sole.fromVersion : '',
+    toVersion: sole ? sole.toVersion : '',
     releaseNotes,
     commits,
-    updates: [{ upstreamRepo, packageName, fromVersion, toVersion }],
+    updates,
   };
 }
 

@@ -1,7 +1,7 @@
-"""Scan every Dependabot update. Covered means that update's scan_conclusive is true.
+"""Scan every Dependabot update.
 
-Anything else — missing repo, missing versions, clone failure, or a scan that is
-not conclusive — makes the group inconclusive. One report is passed through.
+A dependency is covered only when its scan is conclusive and both from_tag and
+to_tag are set. Anything else makes the group inconclusive.
 """
 
 from __future__ import annotations
@@ -74,12 +74,26 @@ def _tag(update: dict, report: dict) -> dict:
     return tagged
 
 
+def _tagged(report: dict) -> bool:
+    return bool(str(report.get("from_tag") or "").strip()) and bool(str(report.get("to_tag") or "").strip())
+
+
 def _covered(report: dict) -> bool:
-    return report.get("scan_conclusive") is True
+    """Conclusive tag-to-tag scan. A branch, raw SHA, or HEAD does not count."""
+    return report.get("scan_conclusive") is True and _tagged(report)
+
+
+def _apply_coverage(report: dict) -> dict:
+    covered = _covered(report)
+    stamped = dict(report)
+    stamped["scan_conclusive"] = covered
+    if not covered and not str(stamped.get("not_scanned_reason") or "").strip():
+        stamped["not_scanned_reason"] = "incomplete_coverage"
+    return stamped
 
 
 def agent_target(records: list[dict]) -> tuple[str, str, str] | None:
-    """The one (package, repository, resolved commit) shared by the prompt and the checkout."""
+    """Pure (package, repository, resolved commit) selection. Does not clone."""
     for record in records:
         repo = str(record.get("upstream_repo") or "")
         resolved_to = str(record.get("resolved_to") or "")
@@ -147,7 +161,7 @@ def aggregate(records: list[dict]) -> dict:
     """Covered only when every record was scanned conclusively."""
     target = agent_target(records)
     if len(records) == 1:
-        return _stamp(dict(records[0]), records, target)
+        return _stamp(_apply_coverage(records[0]), records, target)
     if not records:
         return _stamp(uncovered({}, "incomplete_coverage"), records, None)
 
@@ -247,6 +261,229 @@ def render_summary(report: dict, records: list[dict]) -> str:
 
 def any_read(report: dict) -> bool:
     return int(report.get("materialized_count") or 0) > 0
+
+
+_BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
+_GO_MOD_RE = re.compile(
+    r"^\s*(?:require\s+)?([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)\s+(v\S+)",
+    re.M,
+)
+_GO_SUM_RE = re.compile(r"^(\S+)\s+(v\S+)\s+", re.M)
+_REQ_RE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:==|>=|<=|~=|!=|===)\s*([^\s#;]+)",
+    re.M,
+)
+_YARN_HEADER_RE = re.compile(r'"?(@?[^@"\s]+)@[^:]*:')
+_YARN_VERSION_RE = re.compile(r'^\s+version\s+"([^"]+)"')
+_OPAQUE_LOCKS = {
+    "pnpm-lock.yaml",
+    "Cargo.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "Gemfile.lock",
+    "composer.lock",
+}
+
+
+def _json_dep_map(doc: object) -> dict[str, str]:
+    found: dict[str, str] = {}
+    if not isinstance(doc, dict):
+        return found
+    for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+        block = doc.get(section)
+        if not isinstance(block, dict):
+            continue
+        for name, spec in block.items():
+            if isinstance(spec, str):
+                found[str(name)] = spec
+            elif isinstance(spec, dict) and spec.get("version"):
+                found[str(name)] = str(spec["version"])
+    packages = doc.get("packages")
+    if isinstance(packages, dict):
+        for key, meta in packages.items():
+            if not isinstance(key, str) or not isinstance(meta, dict):
+                continue
+            if not key.startswith("node_modules/") or "/node_modules/" in key[len("node_modules/") :]:
+                continue
+            version = meta.get("version")
+            if version:
+                found[key[len("node_modules/") :]] = str(version)
+    return found
+
+
+def _load_json_map(text: str) -> dict[str, str] | None:
+    try:
+        return _json_dep_map(json.loads(text))
+    except json.JSONDecodeError:
+        return None
+
+
+def _go_mod_map(text: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for line in text.splitlines():
+        code = line.split("//", 1)[0]
+        match = _GO_MOD_RE.match(code)
+        if match:
+            found[match.group(1)] = match.group(2)
+    return found
+
+
+def _go_sum_map(text: str) -> dict[str, str]:
+    found: dict[str, set[str]] = {}
+    for match in _GO_SUM_RE.finditer(text):
+        found.setdefault(match.group(1), set()).add(match.group(2))
+    return {name: " ".join(sorted(versions)) for name, versions in found.items()}
+
+
+def _requirements_map(text: str) -> dict[str, str]:
+    return {match.group(1).lower(): match.group(2) for match in _REQ_RE.finditer(text)}
+
+
+def _yarn_map(text: str) -> dict[str, str]:
+    found: dict[str, set[str]] = {}
+    names: list[str] = []
+    for line in text.splitlines():
+        if line and not line.startswith((" ", "\t")):
+            names = _YARN_HEADER_RE.findall(line)
+            continue
+        match = _YARN_VERSION_RE.match(line)
+        if match:
+            for name in names:
+                found.setdefault(name, set()).add(match.group(1))
+    return {name: " ".join(sorted(versions)) for name, versions in found.items()}
+
+
+def _manifest_kind(path: str) -> str:
+    name = Path(path).name
+    lowered = path.replace("\\", "/")
+    if name in {"package.json", "package-lock.json", "npm-shrinkwrap.json"}:
+        return "json"
+    if name == "go.mod":
+        return "go.mod"
+    if name == "go.sum":
+        return "go.sum"
+    if name == "yarn.lock":
+        return "yarn"
+    if name in _OPAQUE_LOCKS:
+        return "opaque"
+    if (name.startswith("requirements") or "/requirements/" in lowered) and name.endswith(".txt"):
+        return "requirements"
+    return ""
+
+
+def _versions_for(kind: str, text: str) -> dict[str, str] | None:
+    if kind == "opaque":
+        return None
+    if kind == "json":
+        if not text.strip():
+            return {}
+        return _load_json_map(text)
+    if kind == "go.mod":
+        return _go_mod_map(text)
+    if kind == "go.sum":
+        return _go_sum_map(text)
+    if kind == "yarn":
+        return _yarn_map(text)
+    if kind == "requirements":
+        return _requirements_map(text)
+    return {}
+
+
+def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
+    old = _versions_for(kind, before)
+    new = _versions_for(kind, after)
+    if old is None or new is None:
+        return None
+    return {name for name, version in new.items() if old.get(name) != version}
+
+
+def _git_text(rev: str, path: str) -> str:
+    proc = subprocess.run(
+        ["git", "show", f"{rev}:{path}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout
+
+
+def _verify_commit(rev: str) -> str:
+    proc = subprocess.run(
+        ["git", "rev-parse", "--verify", "--end-of-options", f"{rev}^{{commit}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.strip()
+
+
+def _fetch_commit(sha: str) -> str:
+    found = _verify_commit(sha)
+    if found:
+        return found
+    subprocess.run(
+        ["git", "fetch", "--no-tags", "--depth=1", "origin", sha],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return _verify_commit(sha)
+
+
+def _base_commit() -> str | None:
+    """Resolved base commit, '' when a named base cannot be read, None when unnamed."""
+    if not Path(".git").is_dir():
+        return None
+    sha = os.environ.get("PR_BASE_SHA", "").strip()
+    if sha:
+        if not re.fullmatch(r"[0-9a-fA-F]{7,64}", sha):
+            return ""
+        return _fetch_commit(sha)
+    ref = os.environ.get("GITHUB_BASE_REF", "").strip()
+    if not ref:
+        return None
+    if not _BASE_REF_RE.fullmatch(ref):
+        return ""
+    return _verify_commit(ref) or _verify_commit(f"origin/{ref}") or ""
+
+
+def manifest_gaps(updates: list[dict]) -> list[dict]:
+    """Direct manifest and lockfile bumps missing from the parsed list.
+
+    An unreadable base ref, when one was named, is itself unresolved.
+    """
+    base = _base_commit()
+    if base is None:
+        return []
+    if not base:
+        return [uncovered({"packageName": "manifest-diff"}, "unresolved")]
+    listed = {str(item.get("packageName") or "").strip() for item in updates}
+    diff = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=AM", base, "HEAD"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if diff.returncode != 0:
+        return [uncovered({"packageName": "manifest-diff"}, "unresolved")]
+    gaps: list[dict] = []
+    seen = set(listed)
+    for path in diff.stdout.splitlines():
+        kind = _manifest_kind(path)
+        if not kind:
+            continue
+        names = _changed_names(kind, _git_text(base, path), _git_text("HEAD", path))
+        labels = [path] if names is None else sorted(names)
+        for label in labels:
+            if label in seen:
+                continue
+            gaps.append(uncovered({"packageName": label}, "unresolved"))
+            seen.add(label)
+    return gaps
 
 
 def _load_updates(path: Path) -> list[dict]:
@@ -368,11 +605,12 @@ def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
 def main() -> None:
     scan_script = Path(__file__).resolve().parent / "upstream_malware_scan.sh"
     updates = _load_updates(Path("dependency_updates.json"))
+    gaps = manifest_gaps(updates)
     work = Path(".dcr-dependency-scans")
     if work.exists():
         shutil.rmtree(work)
     work.mkdir()
-    records: list[dict] = []
+    records: list[dict] = list(gaps)
     scans: list[tuple[dict, Path]] = []
     child_summary = ""
     commits_file = Path("dependabot_commits.md").resolve()
@@ -384,7 +622,7 @@ def main() -> None:
             records.append(record)
             scans.append((record, dest))
             summary_path = dest / "malware_scan_summary.md"
-            if len(updates) == 1 and summary_path.is_file():
+            if len(updates) == 1 and not gaps and summary_path.is_file():
                 child_summary = summary_path.read_text(encoding="utf-8")
         report = aggregate(records)
         summary = child_summary if len(records) == 1 and child_summary else render_summary(report, records)

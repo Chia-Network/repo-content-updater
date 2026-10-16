@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import runpy
 import secrets
 from pathlib import Path
 
@@ -33,21 +32,46 @@ def _layout_tag_line(label: str, token: str) -> str:
     return f"- {label}: (none) dcr-slot-{token}"
 
 
-def _agent_fields(records: list[dict]) -> dict[str, str]:
-    """Load agent_fields through the scripts-dir spine. Do not put that directory on sys.path."""
-    script_dir = Path(__file__).resolve().parent
-    scrub_ns = runpy.run_path(str(script_dir / "scripts_dir_path_scrub.py"))
-    scrub = scrub_ns["load_scrub_from_disk_under_dash_i"](script_dir)
-    module = scrub.bootstrap_module_from_scripts_dir(
-        script_dir,
-        "dependency_update_coverage.py",
-        "dependency_update_coverage",
-    )
-    return module.agent_fields(records)
+def _empty_fields() -> dict[str, str]:
+    return {
+        "package": "",
+        "from_version": "",
+        "to_version": "",
+        "resolved_from": "",
+        "resolved_to": "",
+    }
+
+
+def _fields_for_target(report: dict) -> dict[str, str]:
+    """Read the stored agent_target. Do not reselect a package."""
+    target = report.get("agent_target")
+    if not isinstance(target, list) or len(target) != 3:
+        return _empty_fields()
+    package, repo, resolved_to = (str(target[0]), str(target[1]), str(target[2]))
+    chosen: dict = {}
+    raw = report.get("agent_candidates")
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            if (
+                str(item.get("package_name") or "") == package
+                and str(item.get("upstream_repo") or "") == repo
+                and str(item.get("resolved_to") or "") == resolved_to
+            ):
+                chosen = item
+                break
+    return {
+        "package": package,
+        "from_version": str(chosen.get("from_version") or ""),
+        "to_version": str(chosen.get("to_version") or ""),
+        "resolved_from": str(chosen.get("resolved_from") or ""),
+        "resolved_to": resolved_to,
+    }
 
 
 def _prompt_fields() -> dict[str, str]:
-    """Package and commit come from agent_fields when the scan stored candidates."""
+    """Package and commit come from the scan's agent_target when that key is present."""
     env_fields = {
         "package": os.getenv("PACKAGE_NAME", ""),
         "from_version": os.getenv("FROM_VERSION", ""),
@@ -59,11 +83,9 @@ def _prompt_fields() -> dict[str, str]:
         report = json.loads(Path("malware_scan_report.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return env_fields
-    if not isinstance(report, dict) or "agent_candidates" not in report:
+    if not isinstance(report, dict) or "agent_target" not in report:
         return env_fields
-    raw = report.get("agent_candidates")
-    candidates = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
-    return _agent_fields(candidates)
+    return _fields_for_target(report)
 
 
 def _upstream_layout(token: str, fields: dict[str, str]) -> str:
