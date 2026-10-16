@@ -184,6 +184,35 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("**Merge**", written["result"])
         self.assertIs(written["complete"], False)
 
+    def test_tag_range_scan_error_is_not_called_a_resolution_gap(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nLooks clear.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Don\'t merge\\n\\nNeeds a pin.\\n"}',
+            report={
+                "status": "not_scanned",
+                "scan_conclusive": False,
+                "not_scanned_reason": "incomplete_coverage",
+                "resolution_strategy": "tag_range",
+                "verdict_token_in_tree": False,
+                "errors": [
+                    "rg exit 2",
+                    "filtered unsafe path",
+                    "fatal: path 'payload.bin' does not exist in 'HEAD'",
+                ],
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            },
+        )
+        self.assertIn("**Verdict: suspicious**", written["result"])
+        self.assertIn("`incomplete_coverage:1`", written["result"])
+        self.assertIn("rg exit 2", written["result"])
+        self.assertIn("filtered unsafe path", written["result"])
+        self.assertIn("does not exist in 'HEAD'", written["result"])
+        self.assertNotIn("resolution is not a tag range", written["result"])
+        self.assertNotIn("**Verdict: benign**", written["result"])
+        self.assertNotIn("Looks clear.", written["result"])
+        self.assertIn("**Don't merge**", written["result"])
+        self.assertIs(written["complete"], False)
+
     def test_incomplete_generic_hits_cannot_be_cleared(self) -> None:
         written = self._run(
             '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nBundle noise only.\\n"}',
