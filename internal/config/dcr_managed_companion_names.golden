@@ -8,6 +8,7 @@ isolated-module-exec
 trusted-formatter-loader
 trusted-formatter-loader-cold-start
 upstream-malware-scan
+dependency-update-coverage
 dependency-cursor-review-prompts
 dependency-cursor-review-combine-outputs
 dependency-cursor-review-dependabot-context

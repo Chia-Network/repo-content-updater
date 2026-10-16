@@ -35,6 +35,7 @@ groups:
       - trusted-formatter-loader
       - trusted-formatter-loader-cold-start
       - upstream-malware-scan
+      - dependency-update-coverage
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
       - dependency-cursor-review-dependabot-context
@@ -68,6 +69,7 @@ files:
       - trusted-formatter-loader
       - trusted-formatter-loader-cold-start
       - upstream-malware-scan
+      - dependency-update-coverage
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
       - dependency-cursor-review-dependabot-context
@@ -122,6 +124,10 @@ files:
   - name: upstream-malware-scan
     template_name: upstream-malware-scan.sh
     repo_path: .github/scripts/upstream_malware_scan.sh
+
+  - name: dependency-update-coverage
+    template_name: dependency-cursor-review-update-coverage.py
+    repo_path: .github/scripts/dependency_update_coverage.py
 
   - name: dependency-cursor-review-prompts
     template_name: dependency-cursor-review-prompts.py

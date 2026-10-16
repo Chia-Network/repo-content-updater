@@ -56,6 +56,7 @@ jobs:
       changed_files_count: ${{`{{ steps.malware_scan.outputs.changed_files_count }}`}}
       report_sha256: ${{`{{ steps.malware_scan.outputs.report_sha256 }}`}}
       summary: ${{`{{ steps.malware_scan.outputs.summary }}`}}
+      scan_conclusive: ${{`{{ steps.malware_scan.outputs.scan_conclusive }}`}}
     steps:
       - name: Checkout trusted target-PR helper
         uses: actions/checkout@v7
@@ -137,19 +138,6 @@ jobs:
             const run = require(`${process.env.RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency-cursor-review-dependabot-context.js`);
             await run({ github, context, core });
 
-      - name: Prepare upstream checkout directory
-        if: steps.target_pr.outputs.already_reviewed != 'true'
-        run: mkdir -p ".upstream-dependency"
-
-      - name: Checkout upstream repository
-        if: steps.target_pr.outputs.already_reviewed != 'true'
-        uses: actions/checkout@v7
-        with:
-          repository: ${{`{{ steps.dependabot_context.outputs.upstream_repo }}`}}
-          path: .upstream-dependency
-          fetch-depth: 0
-          persist-credentials: false
-
       - name: Run upstream malware scan
         if: steps.target_pr.outputs.already_reviewed != 'true'
         id: malware_scan
@@ -174,7 +162,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ripgrep jq
-          bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_malware_scan.sh"
+          python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_update_coverage.py"
           if [ ! -s malware_scan_report.json ]; then
             echo "Malware scan report missing." >&2
             exit 1

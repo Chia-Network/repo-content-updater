@@ -95,9 +95,14 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         agent = self._job(workflow, "dependency-review-agent")
         verdict = self._job(workflow, "dependency-review")
         self.assertIn(
-            'bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_malware_scan.sh"',
+            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_update_coverage.py"',
             scan,
         )
+        coverage = (
+            _REPO_ROOT / "internal/workflowscripts/dependency_update_coverage.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("upstream_malware_scan.sh", coverage)
+        self.assertIn("scan_conclusive", coverage)
         self.assertNotIn("bash .github/scripts/upstream_malware_scan.sh", workflow)
         combine = (
             _REPO_ROOT
@@ -200,6 +205,12 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         )
         self.assertNotIn("RUNNER_TEMP", post)
         self.assertLess(verdict.index("Checkout default-branch helpers"), verdict.index("Post or update PR comment"))
+        self.assertLess(
+            verdict.index("Post or update PR comment"),
+            verdict.index("Fail the check when scan coverage is incomplete"),
+        )
+        self.assertIn("needs.dependency-review-scan.outputs.scan_conclusive != 'true'", verdict)
+        self.assertIn("needs.dependency-review-scan.outputs.already_reviewed != 'true'", verdict)
         self.assertIn("DCR_SCAN_REPORT:", verdict)
         self.assertIn("DCR_MALWARE_JSON:", verdict)
         self.assertIn("DCR_COMPAT_JSON:", verdict)

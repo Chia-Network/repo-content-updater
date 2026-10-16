@@ -554,9 +554,59 @@ test('parseDependencyUpdate still extracts upstream notes and commits', () => {
   const parsed = parseDependencyUpdate('Bump lodash from 4.17.20 to 4.17.21', singleBody('deadbee'));
   assert.equal(parsed.upstreamRepo, 'lodash/lodash');
   assert.equal(parsed.packageName, 'lodash');
+  assert.equal(parsed.fromVersion, '4.17.20');
   assert.equal(parsed.toVersion, '4.17.21');
+  assert.equal(parsed.updates.length, 1);
+  assert.equal(parsed.updates[0].fromVersion, '4.17.20');
+  assert.equal(parsed.updates[0].toVersion, '4.17.21');
   assert.match(parsed.releaseNotes, /small patch/);
   assert.match(parsed.commits, /deadbee/);
+});
+
+test('parseDependencyUpdate reads a grouped npm table', () => {
+  const body = [
+    'Bumps the npm-dependencies group with 2 updates in the / directory:',
+    '| Package | From | To |',
+    '| --- | --- | --- |',
+    '| [lodash](https://github.com/lodash/lodash) | `4.17.20` | `4.17.21` |',
+    '| [semver](https://github.com/npm/node-semver) | `7.5.4` | `7.6.0` |',
+    '| [@rollup/plugin-commonjs](https://github.com/rollup/plugins/tree/HEAD/packages/commonjs) | `29.0.2` | `29.0.3` |',
+    'Updates `lodash` from 4.17.20 to 4.17.21',
+    'Updates `semver` from 7.5.4 to 7.6.0',
+    'Updates `@rollup/plugin-commonjs` from 29.0.2 to 29.0.3',
+  ].join('\n');
+  const parsed = parseDependencyUpdate('Bump the npm-dependencies group across 1 directory with 2 updates', body);
+  assert.deepEqual(
+    parsed.updates.map((item) => [item.packageName, item.fromVersion, item.toVersion, item.upstreamRepo]),
+    [
+      ['lodash', '4.17.20', '4.17.21', 'lodash/lodash'],
+      ['semver', '7.5.4', '7.6.0', 'npm/node-semver'],
+      ['@rollup/plugin-commonjs', '29.0.2', '29.0.3', 'rollup/plugins'],
+    ],
+  );
+  assert.equal(parsed.fromVersion, '4.17.20');
+  assert.equal(parsed.toVersion, '4.17.21');
+});
+
+test('parseDependencyUpdate reads a grouped gomod list and leaves an unresolvable entry', () => {
+  const body = [
+    'Bumps the gomod group with 2 updates in the / directory:',
+    '| Package | From | To |',
+    '| --- | --- | --- |',
+    '| [github.com/spf13/cobra](https://github.com/spf13/cobra) | `1.8.0` | `1.8.1` |',
+    '| k8s.io/api | `0.29.1` | `0.29.2` |',
+    'Updates `github.com/spf13/cobra` from 1.8.0 to 1.8.1',
+    'Updates `k8s.io/api` from 0.29.1 to 0.29.2',
+    'Updates `github.com/mattn/go-runewidth` from 0.0.15 to 0.0.16',
+  ].join('\n');
+  const parsed = parseDependencyUpdate('Bump the gomod group across 1 directory with 3 updates', body);
+  const byName = Object.fromEntries(parsed.updates.map((item) => [item.packageName, item]));
+  assert.equal(byName['github.com/spf13/cobra'].upstreamRepo, 'spf13/cobra');
+  assert.equal(byName['github.com/spf13/cobra'].toVersion, '1.8.1');
+  assert.equal(byName['k8s.io/api'].upstreamRepo, '');
+  assert.equal(byName['k8s.io/api'].fromVersion, '0.29.1');
+  assert.equal(byName['github.com/mattn/go-runewidth'].upstreamRepo, 'mattn/go-runewidth');
+  assert.equal(parsed.upstreamRepo, 'spf13/cobra');
 });
 
 test('context JSON stays limited to the prompt fields', async () => {
@@ -577,6 +627,12 @@ test('context JSON stays limited to the prompt fields', async () => {
       'commits',
     ]);
     assert.equal(core.failed, '');
+    const updates = JSON.parse(fs.readFileSync(path.join(directory, 'dependency_updates.json'), 'utf8'));
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].packageName, 'lodash');
+    assert.equal(updates[0].fromVersion, '4.17.20');
+    assert.equal(updates[0].toVersion, '4.17.21');
+    assert.equal(updates[0].upstreamRepo, 'lodash/lodash');
   });
 });
 

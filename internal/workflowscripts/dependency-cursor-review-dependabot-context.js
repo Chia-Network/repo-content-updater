@@ -44,6 +44,77 @@ function extractDetailsSection(text, summaryLabel) {
     .trim();
 }
 
+function stripLeadingV(version) {
+  return String(version || '')
+    .trim()
+    .replace(/^v/i, '');
+}
+
+function githubRepoFromText(text) {
+  const source = String(text || '');
+  const url = source.match(/https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/i);
+  if (url) return url[1].replace(/\.git$/i, '');
+  const moduleName = source.match(/^github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:\/|$)/i);
+  return moduleName ? moduleName[1] : '';
+}
+
+function packageCell(cell) {
+  const trimmed = cell.trim();
+  const link = trimmed.match(/^\[([^\]]*)\]\(([^)]*)\)$/);
+  if (!link) return { name: trimmed, repo: githubRepoFromText(trimmed) };
+  return {
+    name: link[1].trim(),
+    repo: githubRepoFromText(link[2]) || githubRepoFromText(link[1]),
+  };
+}
+
+function rememberUpdate(byName, name, fromVersion, toVersion, repo) {
+  const packageName = String(name || '').trim();
+  if (!packageName || packageName.toLowerCase() === 'package') return;
+  const from = stripLeadingV(fromVersion);
+  const to = stripLeadingV(toVersion);
+  const existing = byName.get(packageName);
+  if (!existing) {
+    byName.set(packageName, {
+      packageName,
+      fromVersion: from,
+      toVersion: to,
+      upstreamRepo: repo || '',
+    });
+    return;
+  }
+  if (existing.fromVersion !== from || existing.toVersion !== to) {
+    existing.fromVersion = '';
+    existing.toVersion = '';
+  }
+  if (!existing.upstreamRepo && repo) existing.upstreamRepo = repo;
+}
+
+// Grouped Dependabot bodies list each bump in a table and in `Updates` lines.
+// One row with no GitHub repo stays in the list so coverage can fail closed.
+function parseGroupedUpdates(body) {
+  const byName = new Map();
+  const tableRe = /^\|\s*([^|\n]+?)\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|/gm;
+  let row;
+  while ((row = tableRe.exec(body)) !== null) {
+    const cell = packageCell(row[1]);
+    rememberUpdate(byName, cell.name, row[2], row[3], cell.repo);
+  }
+  const lineRe = /^Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+)/gm;
+  let line;
+  while ((line = lineRe.exec(body)) !== null) {
+    const name = line[1].trim();
+    const from = line[2].replace(/[.,;:]+$/, '');
+    const to = line[3].replace(/[.,;:]+$/, '');
+    rememberUpdate(byName, name, from, to, githubRepoFromText(name));
+  }
+  return [...byName.values()];
+}
+
+function promptUpdate(updates) {
+  return updates.find((item) => item.upstreamRepo && item.fromVersion && item.toVersion) || updates[0] || null;
+}
+
 function parseDependencyUpdate(title, body) {
   const dependencyRepoMatch = body.match(
     /^\s*(?:Bumps|Update(?:s|d)?)\s+\[[^\]]+\]\(\s*https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:[\/#?][^)\s]*)?\s*\)/im,
@@ -103,6 +174,20 @@ function parseDependencyUpdate(title, body) {
     }
   }
 
+  const grouped = parseGroupedUpdates(body);
+  if (grouped.length > 0) {
+    const prompt = promptUpdate(grouped);
+    return {
+      upstreamRepo: prompt.upstreamRepo,
+      packageName: prompt.packageName,
+      fromVersion: prompt.fromVersion,
+      toVersion: prompt.toVersion,
+      releaseNotes,
+      commits,
+      updates: grouped,
+    };
+  }
+
   return {
     upstreamRepo,
     packageName,
@@ -110,6 +195,7 @@ function parseDependencyUpdate(title, body) {
     toVersion,
     releaseNotes,
     commits,
+    updates: [{ upstreamRepo, packageName, fromVersion, toVersion }],
   };
 }
 
@@ -187,6 +273,7 @@ async function runDependabotContext({ core }) {
   const title = process.env.PR_TITLE || '';
   const prNumber = Number(process.env.PR_NUMBER || '0');
   const parsed = parseDependencyUpdate(title, body);
+  fs.writeFileSync('dependency_updates.json', JSON.stringify(parsed.updates, null, 2));
 
   if (!parsed.upstreamRepo) {
     core.setFailed('PR body is missing an upstream GitHub repository link.');
