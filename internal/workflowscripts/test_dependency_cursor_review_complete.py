@@ -278,7 +278,53 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("Compatibility recommendation withheld", written["result"])
         self.assertIs(written["complete"], False)
 
-    def test_findings_drop_agent_benign_verdict(self) -> None:
+    def test_malicious_floor_still_names_unread_files(self) -> None:
+        unread = [{"file": "payload.bin", "cause": "blob over size cap"}]
+        reports = {
+            "ioc": {
+                "verdict_token_in_tree": False,
+                "findings": {
+                    "ioc": [
+                        {
+                            "kind": "ioc_match",
+                            "file": "pkg/index.js",
+                            "line": "4",
+                            "match": "known-bad.example",
+                        }
+                    ],
+                    "unicode": [],
+                    "confusable": [],
+                    "heuristic": [],
+                },
+            },
+            "verdict token": {
+                "verdict_token_in_tree": True,
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            },
+        }
+        for name, extra in reports.items():
+            with self.subTest(name=name):
+                written = self._run(
+                    '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nLooks fine.\\n"}',
+                    '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nAPI unchanged.\\n"}',
+                    report={
+                        "status": "warn",
+                        "scan_conclusive": False,
+                        "not_scanned_reason": "incomplete_coverage",
+                        "unread": unread,
+                        **extra,
+                    },
+                )
+                result = written["result"]
+                self.assertIn("**Verdict: malicious**", result)
+                self.assertIn("`payload.bin:1` blob over size cap", result)
+                if name == "ioc":
+                    self.assertLess(result.index("`payload.bin:1`"), result.index("`pkg/index.js:4`"))
+                self.assertNotIn("**Verdict: benign**", result)
+                self.assertNotIn("Looks fine.", result)
+                self.assertNotIn("**Merge**", result)
+                self.assertIn("Compatibility recommendation withheld", result)
+                self.assertIs(written["complete"], False)
         written = self._run(
             '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\n**Verdict: benign**"}',
             '{"result": "compat essay"}',
