@@ -138,9 +138,35 @@ function patchIdFromDiff(diffText) {
   return match ? match[1] : '';
 }
 
-function reviewMarkerFromPatchId(patchId) {
+function reviewMarkerFromPatchId(patchId, resolvedSha) {
   if (typeof patchId !== 'string' || !/^[0-9a-f]{40}$/.test(patchId)) return '';
-  return `<!-- cursor-dependabot-review patch-id:${patchId} -->`;
+  if (typeof resolvedSha !== 'string' || !/^[0-9a-f]{40}$/.test(resolvedSha)) return '';
+  return `<!-- cursor-dependabot-review patch-id:${patchId} resolved:${resolvedSha} -->`;
+}
+
+const RELEASE_REVIEW_MARKER_RE = /^<!-- cursor-dependabot-review patch-id:([0-9a-f]{40}) resolved:([0-9a-f]{40}) -->$/;
+
+function reviewedShasForPatch(comments, patchId) {
+  if (typeof patchId !== 'string' || !/^[0-9a-f]{40}$/.test(patchId)) return [];
+  if (!Array.isArray(comments)) return [];
+  const shas = [];
+  for (const comment of comments) {
+    if (comment?.user?.login !== ACTIONS_BOT_LOGIN) continue;
+    const match = RELEASE_REVIEW_MARKER_RE.exec(commentFirstLine(comment.body));
+    if (match && match[1] === patchId) shas.push(match[2]);
+  }
+  return shas;
+}
+
+function skipApplies(reviewedShas, resolvedSha) {
+  if (typeof resolvedSha !== 'string' || !/^[0-9a-f]{40}$/.test(resolvedSha)) return false;
+  return Array.isArray(reviewedShas) && reviewedShas.includes(resolvedSha);
+}
+
+function versionTextCameFromBody(title, body) {
+  const fromTitle = parseDependencyUpdate(title, '');
+  const parsed = parseDependencyUpdate(title, body);
+  return parsed.fromVersion !== fromTitle.fromVersion || parsed.toVersion !== fromTitle.toVersion;
 }
 
 function commentFirstLine(body) {
@@ -152,11 +178,8 @@ function commentFirstLine(body) {
 function isActionsBotMarkerComment(comment) {
   if (comment?.user?.login !== ACTIONS_BOT_LOGIN) return false;
   const line = commentFirstLine(comment.body);
-  return line === LEGACY_REVIEW_MARKER || /^<!-- cursor-dependabot-review \S+ -->$/.test(line);
-}
-
-function isActionsBotUpgradeReview(comment, marker) {
-  return Boolean(marker) && comment?.user?.login === ACTIONS_BOT_LOGIN && commentFirstLine(comment.body) === marker;
+  if (line === LEGACY_REVIEW_MARKER) return true;
+  return /^<!-- cursor-dependabot-review patch-id:[0-9a-f]{40}(?: resolved:[0-9a-f]{40})? -->$/.test(line);
 }
 
 async function runDependabotContext({ core }) {
@@ -189,6 +212,7 @@ async function runDependabotContext({ core }) {
   core.setOutput('package_name', parsed.packageName);
   core.setOutput('from_version', parsed.fromVersion);
   core.setOutput('to_version', parsed.toVersion);
+  core.setOutput('version_range_from_body', versionTextCameFromBody(title, body) ? '1' : '0');
 }
 
 module.exports = runDependabotContext;
@@ -196,6 +220,8 @@ module.exports.parseDependencyUpdate = parseDependencyUpdate;
 module.exports.MAX_DIFF_CHARS = MAX_DIFF_CHARS;
 module.exports.patchIdFromDiff = patchIdFromDiff;
 module.exports.reviewMarkerFromPatchId = reviewMarkerFromPatchId;
+module.exports.reviewedShasForPatch = reviewedShasForPatch;
+module.exports.skipApplies = skipApplies;
+module.exports.versionTextCameFromBody = versionTextCameFromBody;
 module.exports.isActionsBotMarkerComment = isActionsBotMarkerComment;
-module.exports.isActionsBotUpgradeReview = isActionsBotUpgradeReview;
 module.exports.LEGACY_REVIEW_MARKER = LEGACY_REVIEW_MARKER;
