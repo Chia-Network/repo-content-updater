@@ -9,7 +9,8 @@
 # marker is the stable patch id of the PR diff plus the peeled release commit.
 # A later run skips the agent when that tag still peels to the recorded commit.
 # The marker is stamped only when the combined review is complete. A skip
-# leaves this check green. The release tree is scanned on every run.
+# leaves this check green. A scan whose status is not clean fails this check
+# after the comment is posted. The release tree is scanned on every run.
 name: Dependency Cursor Review
 
 on:
@@ -576,3 +577,9 @@ jobs:
           script: |
             const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-post-comment.js`);
             await run({ github, context, core });
+
+      - name: Fail the check unless the scan is clean
+        if: ${{`{{ success() && needs.dependency-review-scan.outputs.already_reviewed != 'true' && needs.dependency-review-scan.outputs.status != 'clean' }}`}}
+        run: |
+          echo "dependency scan status=${{`{{ needs.dependency-review-scan.outputs.status }}`}}" >&2
+          exit 1

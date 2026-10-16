@@ -101,6 +101,28 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
         self.assertNotIn(gate, post)
         self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
         self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
+        fail_check = verdict.split(
+            "- name: Fail the check unless the scan is clean\n", 1
+        )
+        self.assertEqual(len(fail_check), 2)
+        self.assertLess(
+            verdict.index("Post or update PR comment"),
+            verdict.index("Fail the check unless the scan is clean"),
+        )
+        self.assertIn(
+            "needs.dependency-review-scan.outputs.status != 'clean'", fail_check[1]
+        )
+        self.assertIn(
+            "needs.dependency-review-scan.outputs.already_reviewed != 'true'",
+            fail_check[1],
+        )
+        self.assertIn("exit 1", fail_check[1])
+        self.assertNotIn("warn_only", fail_check[1])
+        self.assertNotIn("MALWARE_WARN_ONLY", fail_check[1])
+        scan_sh = (
+            _REPO_ROOT / "internal/workflowscripts/upstream_malware_scan.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("\n  exit 1\n", scan_sh)
 
 
 if __name__ == "__main__":
