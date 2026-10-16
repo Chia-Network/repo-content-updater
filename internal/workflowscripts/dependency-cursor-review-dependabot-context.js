@@ -167,10 +167,18 @@ function collectPackageUpdates(title, body) {
   }
 
   if (byName.size === 1) {
-    const arrow = body.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
-    if (arrow) {
-      const only = [...byName.values()][0];
-      rememberUpdate(byName, only.packageName, arrow[1], arrow[2], '');
+    const only = [...byName.values()][0];
+    if (!only.fromVersion || !only.toVersion) {
+      const arrow = body.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
+      if (arrow) {
+        rememberUpdate(
+          byName,
+          only.packageName,
+          only.fromVersion ? '' : arrow[1],
+          only.toVersion ? '' : arrow[2],
+          '',
+        );
+      }
     }
   }
   return [...byName.values()].map(({ disputed, ...item }) => item);

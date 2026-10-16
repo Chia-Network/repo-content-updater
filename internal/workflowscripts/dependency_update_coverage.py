@@ -500,7 +500,7 @@ def _clone(repo: str, dest: Path) -> bool:
     dest.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://github.com/{repo}.git"
     proc = subprocess.run(
-        ["git", "clone", "--filter=blob:none", "--", url, str(dest)],
+        ["git", "clone", "--", url, str(dest)],
         check=False,
         capture_output=True,
         text=True,
@@ -508,15 +508,13 @@ def _clone(repo: str, dest: Path) -> bool:
     return proc.returncode == 0 and dest.is_dir()
 
 
-def _scan_one(update: dict, dest: Path, scan_script: Path, commits_file: Path | None = None) -> dict:
+def _scan_one(update: dict, dest: Path, scan_script: Path) -> dict:
     if not scannable(update):
         return uncovered(update, "unresolved")
     checkout = dest / ".upstream-dependency"
     if not _clone(str(update["upstreamRepo"]), checkout):
         return uncovered(update, "unresolved")
     env = os.environ.copy()
-    if commits_file is not None and commits_file.is_file():
-        env["DEPENDABOT_COMMITS_FILE"] = str(commits_file.resolve())
     env["GITHUB_OUTPUT"] = str(dest / "github_output.txt")
     env["PACKAGE_NAME"] = str(update.get("packageName") or "")
     env["FROM_VERSION"] = str(update["fromVersion"])
@@ -613,12 +611,11 @@ def main() -> None:
     records: list[dict] = list(gaps)
     scans: list[tuple[dict, Path]] = []
     child_summary = ""
-    commits_file = Path("dependabot_commits.md").resolve()
     try:
         for index, update in enumerate(updates):
             dest = work / str(index)
             dest.mkdir()
-            record = _scan_one(update, dest, scan_script, commits_file)
+            record = _scan_one(update, dest, scan_script)
             records.append(record)
             scans.append((record, dest))
             summary_path = dest / "malware_scan_summary.md"

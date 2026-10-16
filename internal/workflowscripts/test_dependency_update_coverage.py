@@ -159,23 +159,20 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             self.assertIn("not covered", summary)
             self.assertIn("scan_conclusive=false", output.read_text(encoding="utf-8"))
 
-    def test_isolated_child_searches_listed_commit_blobs(self) -> None:
-        marker = "LISTED_COMMIT_IOC_9f3a"
+    def test_raw_sha_and_branch_are_not_conclusive(self) -> None:
+        marker = "RAW_SHA_IOC_9f3a"
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "upstream"
             _git_repo(repo)
             _commit(repo, "pkg/index.js", "module.exports = 1;\n", "clean")
             _git(repo, "tag", "v1.0.0")
-            _commit(repo, "pkg/index.js", f"const marker = '{marker}';\n", "listed")
+            _commit(repo, "pkg/index.js", f"const marker = '{marker}';\n", "payload")
             sha = _git(repo, "rev-parse", "HEAD")
-            _git(repo, "tag", "v1.1.0")
-            _commit(repo, "pkg/index.js", "module.exports = 1;\n", "cleaned on main")
-            commits = root / "dependabot_commits.md"
-            commits.write_text(f"update {sha}\n", encoding="utf-8")
+            _git(repo, "branch", "release-branch")
             child = root / "child"
             child.mkdir()
-            (child / "dependabot_commits.md").write_text("commit deadbeef\n", encoding="utf-8")
+            (child / "dependabot_commits.md").write_text(f"commit {sha}\n", encoding="utf-8")
 
             def use_local(_repo: str, dest: Path) -> bool:
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -192,27 +189,35 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                     "MALWARE_UNICODE_ALLOWLIST",
                     "MALWARE_CONFUSABLE_ALLOWLIST",
                     "MALWARE_HEURISTIC_ALLOWLIST",
+                    "VERSION_RANGE_FROM_BODY",
                 )
             }
             os.chdir(root)
             os.environ["MALWARE_IOC_PATTERNS"] = json.dumps([marker])
             os.environ["MALWARE_WARN_ONLY"] = "1"
+            os.environ["VERSION_RANGE_FROM_BODY"] = "0"
             for name in saved_env:
-                if name not in ("MALWARE_IOC_PATTERNS", "MALWARE_WARN_ONLY"):
+                if name not in ("MALWARE_IOC_PATTERNS", "MALWARE_WARN_ONLY", "VERSION_RANGE_FROM_BODY"):
                     os.environ[name] = "[]"
+
+            def scan(to_version: str) -> dict:
+                dest = child / to_version.replace("/", "-")
+                dest.mkdir()
+                return coverage._scan_one(
+                    {
+                        "packageName": "lodash",
+                        "fromVersion": "1.0.0",
+                        "toVersion": to_version,
+                        "upstreamRepo": "lodash/lodash",
+                    },
+                    dest,
+                    Path(__file__).resolve().parent / "upstream_malware_scan.sh",
+                )
+
             try:
                 with patch.object(coverage, "_clone", use_local):
-                    report = coverage._scan_one(
-                        {
-                            "packageName": "lodash",
-                            "fromVersion": "9.9.9",
-                            "toVersion": "1.1.0",
-                            "upstreamRepo": "lodash/lodash",
-                        },
-                        child,
-                        Path(__file__).resolve().parent / "upstream_malware_scan.sh",
-                        commits.resolve(),
-                    )
+                    by_sha = scan(sha)
+                    by_branch = scan("release-branch")
             finally:
                 os.chdir(previous)
                 for name, value in saved_env.items():
@@ -220,10 +225,12 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                         os.environ.pop(name, None)
                     else:
                         os.environ[name] = value
-            self.assertEqual((child / "dependabot_commits.md").read_text(encoding="utf-8"), "commit deadbeef\n")
-        self.assertEqual(report["resolution_strategy"], "commit_list", msg=report)
-        self.assertGreater(len(report["findings"]["ioc"]), 0)
-        self.assertIn(marker, json.dumps(report["findings"]["ioc"]))
+            self.assertEqual((child / "dependabot_commits.md").read_text(encoding="utf-8"), f"commit {sha}\n")
+        for report in (by_sha, by_branch):
+            self.assertIs(report["scan_conclusive"], False, msg=report)
+            self.assertEqual(report["not_scanned_reason"], "to_ref_unresolved")
+            self.assertEqual(report["to_tag"], "")
+            self.assertEqual(report["findings"]["ioc"], [])
 
     def test_checkout_keeps_the_conclusive_package(self) -> None:
         skipped = _clean("lodash", "lodash/lodash")
