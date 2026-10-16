@@ -12,7 +12,15 @@ const context = require('./dependency-cursor-review-dependabot-context.js');
 const { run, MAX_PR_COMMITS } = require('./dependency-cursor-review-target-pr.js');
 const postComment = require('./dependency-cursor-review-post-comment.js');
 
-const { parseDependencyUpdate, patchIdFromDiff, reviewMarkerFromPatchId, MAX_DIFF_CHARS } = context;
+const {
+  parseDependencyUpdate,
+  patchIdFromDiff,
+  reviewMarkerFromPatchId,
+  reviewedShasForPatch,
+  skipApplies,
+  versionTextCameFromBody,
+  MAX_DIFF_CHARS,
+} = context;
 
 function fakeCore() {
   return {
@@ -192,8 +200,8 @@ function dependabotPr(title) {
   };
 }
 
-function markerFor(diff) {
-  return reviewMarkerFromPatchId(patchIdFromDiff(diff));
+function markerFor(diff, resolvedSha = 'a'.repeat(40)) {
+  return reviewMarkerFromPatchId(patchIdFromDiff(diff), resolvedSha);
 }
 
 function realDiff() {
@@ -346,7 +354,10 @@ test('marker build fails open on an empty, huge, or non-diff input', () => {
   assert.equal(reviewMarkerFromPatchId(''), '');
   assert.equal(reviewMarkerFromPatchId('zzzz'), '');
   const id = 'a'.repeat(40);
-  assert.equal(reviewMarkerFromPatchId(id), `<!-- cursor-dependabot-review patch-id:${id} -->`);
+  const sha = 'b'.repeat(40);
+  assert.equal(reviewMarkerFromPatchId(id), '');
+  assert.equal(reviewMarkerFromPatchId(id, 'zzzz'), '');
+  assert.equal(reviewMarkerFromPatchId(id, sha), `<!-- cursor-dependabot-review patch-id:${id} resolved:${sha} -->`);
 });
 
 test('the same diff skips and a different diff or an old marker does not', async () => {
@@ -370,9 +381,12 @@ test('the same diff skips and a different diff or an old marker does not', async
       diff,
       commentsFor: () => [botComment(marker)],
     });
-    assert.equal(same.core.outputs.review_marker, marker);
-    assert.equal(same.core.outputs.already_reviewed, 'true');
-    assert.match(same.core.outputs.review_marker, /^<!-- cursor-dependabot-review patch-id:[0-9a-f]{40} -->$/);
+    const reviewedSha = 'a'.repeat(40);
+    assert.equal(same.core.outputs.review_marker, '');
+    assert.equal(same.core.outputs.already_reviewed, 'false');
+    assert.equal(same.core.outputs.reviewed_shas, reviewedSha);
+    assert.equal(skipApplies(same.core.outputs.reviewed_shas.split(','), reviewedSha), true);
+    assert.equal(skipApplies(same.core.outputs.reviewed_shas.split(','), 'b'.repeat(40)), false);
 
     const changed = await resolve('pull_request', pr, {
       commits: [dependabotCommit()],
@@ -380,6 +394,7 @@ test('the same diff skips and a different diff or an old marker does not', async
       commentsFor: () => [botComment(marker)],
     });
     assert.equal(changed.core.outputs.already_reviewed, 'false');
+    assert.equal(changed.core.outputs.reviewed_shas, '');
 
     const quoted = await resolve('pull_request', pr, {
       commits: [dependabotCommit()],
@@ -394,6 +409,7 @@ test('the same diff skips and a different diff or an old marker does not', async
       ],
     });
     assert.equal(quoted.core.outputs.already_reviewed, 'false');
+    assert.equal(quoted.core.outputs.reviewed_shas, '');
 
     const legacy = await resolve('pull_request', pr, {
       commits: [dependabotCommit()],
@@ -408,9 +424,73 @@ test('the same diff skips and a different diff or an old marker does not', async
       ],
     });
     assert.equal(legacy.core.outputs.already_reviewed, 'false');
+    assert.equal(legacy.core.outputs.reviewed_shas, '');
+
+    const patchOnly = `<!-- cursor-dependabot-review patch-id:${patchIdFromDiff(diff)} -->`;
+    const unmarked = await resolve('pull_request', pr, {
+      commits: [dependabotCommit()],
+      diff,
+      commentsFor: () => [botComment(patchOnly)],
+    });
+    assert.equal(unmarked.core.outputs.reviewed_shas, '');
+    assert.equal(skipApplies([], 'a'.repeat(40)), false);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
+});
+
+test('a rebased pull request with a moved tag is not already reviewed', async () => {
+  const repo = initRepo();
+  try {
+    fs.writeFileSync(path.join(repo, 'dep.txt'), 'base\n');
+    commitAll(repo, 'base');
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    fs.writeFileSync(path.join(repo, 'dep.txt'), 'package==1.2.3\n');
+    commitAll(repo, 'bump');
+    const diff = prDiff(repo);
+    const previous = 'a'.repeat(40);
+    const moved = 'b'.repeat(40);
+    const marker = markerFor(diff, previous);
+    git(repo, ['checkout', '-q', 'main']);
+    fs.writeFileSync(path.join(repo, 'other.txt'), 'unrelated\n');
+    commitAll(repo, 'move base');
+    git(repo, ['checkout', '-q', 'pr']);
+    git(repo, ['rebase', '-q', 'main']);
+    assert.equal(patchIdFromDiff(prDiff(repo)), patchIdFromDiff(diff));
+
+    const pr = dependabotPr('Bump example from 1.2.2 to 1.2.3');
+    const { core } = await resolve('pull_request', pr, {
+      commits: [dependabotCommit()],
+      diff: prDiff(repo),
+      commentsFor: () => [botComment(marker)],
+    });
+    const reviewed = core.outputs.reviewed_shas.split(',').filter(Boolean);
+    assert.deepEqual(reviewed, [previous]);
+    assert.equal(skipApplies(reviewed, previous), true);
+    assert.equal(skipApplies(reviewed, moved), false);
+    assert.equal(reviewedShasForPatch([{ user: { login: 'mallory' }, body: marker }], patchIdFromDiff(diff)).length, 0);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('release note versions are marked only when they supply a missing version', () => {
+  const titled = 'Bump example from 1.0.0 to 1.1.0';
+  const notes = '`9.9.9` -> `9.9.9`\nhttps://github.com/example/example';
+  const kept = parseDependencyUpdate(titled, notes);
+  assert.equal(kept.fromVersion, '1.0.0');
+  assert.equal(kept.toVersion, '1.1.0');
+  assert.equal(versionTextCameFromBody(titled, notes), false);
+
+  const renovate = 'Update dependency example to v1.2.3';
+  const same = '`1.2.3` -> `1.2.3`\nhttps://github.com/example/example';
+  const filled = parseDependencyUpdate(renovate, same);
+  assert.equal(filled.fromVersion, '1.2.3');
+  assert.equal(filled.toVersion, '1.2.3');
+  assert.equal(versionTextCameFromBody(renovate, same), true);
+
+  const open = 'Update dependency example to v1.2.3';
+  assert.equal(versionTextCameFromBody(open, 'https://github.com/example/example'), false);
 });
 
 test('a non-web-flow committer, unverified commit, or other author fails open', async () => {
@@ -573,7 +653,8 @@ test('Renovate and workflow_dispatch still review when a marker exists', async (
       inputs: { pr_number: '42' },
     });
     assert.equal(dispatched.core.outputs.already_reviewed, 'false');
-    assert.equal(dispatched.core.outputs.review_marker, marker);
+    assert.equal(dispatched.core.outputs.review_marker, '');
+    assert.equal(reviewMarkerFromPatchId(dispatched.core.outputs.patch_id, 'a'.repeat(40)), marker);
     assert.equal(
       dispatched.github.calls.some((call) => call[0] === 'listComments'),
       false,
@@ -661,9 +742,7 @@ test('skip marker requires both agent files and a genuine combined review', asyn
 test('blocked scan withholds verdict banners and posts the legacy marker', async () => {
   const marker = `<!-- cursor-dependabot-review patch-id:${'d'.repeat(40)} -->`;
   await withWorkspace(async (directory) => {
-    const report = Buffer.from(
-      '{"status":"not_scanned","scan_conclusive":false,"verdict_token_in_tree":false}\n',
-    );
+    const report = Buffer.from('{"status":"not_scanned","scan_conclusive":false,"verdict_token_in_tree":false}\n');
     const reportPath = path.join(directory, 'sealed-scan-report.json');
     fs.writeFileSync(reportPath, report);
     fs.writeFileSync(

@@ -6,9 +6,11 @@
 # verdict. The required check is the `dependency-review` job.
 #
 # Dependabot pull_request runs again on rebase, recreate, and rebuild. The
-# marker is the stable patch id of the PR diff. A later run skips when
-# github-actions[bot] has already commented that marker. The marker is stamped
-# only when the combined review is complete. A skip leaves this check green.
+# marker is the stable patch id of the PR diff plus the peeled release commit.
+# A later run skips the agent when that tag still peels to the recorded commit.
+# The marker is stamped only when the combined review is complete. The
+# release tree is scanned on every run, including a skip. A scan whose
+# status is not clean fails this check, including when the agent is skipped.
 name: Dependency Cursor Review
 
 on:
@@ -37,8 +39,8 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      already_reviewed: ${{`{{ steps.target_pr.outputs.already_reviewed }}`}}
-      review_marker: ${{`{{ steps.target_pr.outputs.review_marker }}`}}
+      already_reviewed: ${{`{{ steps.bind_review.outputs.already_reviewed }}`}}
+      review_marker: ${{`{{ steps.bind_review.outputs.review_marker }}`}}
       number: ${{`{{ steps.target_pr.outputs.number }}`}}
       title: ${{`{{ steps.target_pr.outputs.title }}`}}
       head_sha: ${{`{{ steps.target_pr.outputs.head_sha }}`}}
@@ -156,6 +158,7 @@ jobs:
           PACKAGE_NAME: ${{`{{ steps.dependabot_context.outputs.package_name }}`}}
           FROM_VERSION: ${{`{{ steps.dependabot_context.outputs.from_version }}`}}
           TO_VERSION: ${{`{{ steps.dependabot_context.outputs.to_version }}`}}
+          VERSION_RANGE_FROM_BODY: ${{`{{ steps.dependabot_context.outputs.version_range_from_body }}`}}
           MALWARE_WARN_ONLY: >-
             {{ .DEPENDABOT_CURSOR_MALWARE_WARN_ONLY }}
           MALWARE_IOC_PATTERNS: >-
@@ -236,6 +239,25 @@ jobs:
             upstream_changed_files.txt
             cursor_prompt_malware.txt
             cursor_prompt_compatibility.txt
+
+      - name: Bind review marker to peeled commit
+        id: bind_review
+        if: always() && steps.malware_scan.outcome == 'success'
+        uses: actions/github-script@v9
+        env:
+          PATCH_ID: ${{`{{ steps.target_pr.outputs.patch_id }}`}}
+          REVIEWED_SHAS: ${{`{{ steps.target_pr.outputs.reviewed_shas }}`}}
+          RESOLVED_TO: ${{`{{ steps.malware_scan.outputs.resolved_to }}`}}
+        with:
+          script: |
+            const {
+              reviewMarkerFromPatchId,
+              skipApplies,
+            } = require(`${process.env.RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency-cursor-review-dependabot-context.js`);
+            const resolved = process.env.RESOLVED_TO || '';
+            const reviewed = (process.env.REVIEWED_SHAS || '').split(',').filter(Boolean);
+            core.setOutput('review_marker', reviewMarkerFromPatchId(process.env.PATCH_ID || '', resolved));
+            core.setOutput('already_reviewed', skipApplies(reviewed, resolved) ? 'true' : 'false');
 
   dependency-review-agent:
     needs: dependency-review-scan
@@ -540,7 +562,7 @@ jobs:
           cp "$DCR_MALWARE_JSON" cursor_output_malware.json
           cp "$DCR_COMPAT_JSON" cursor_output_compatibility.json
 
-      # The patch-id marker is posted only after combine writes a complete review.
+      # The patch-id and peeled-commit marker is posted only after combine writes a complete review.
       # selectPostedMarker in the default-branch helper drops it otherwise.
       - name: Post or update PR comment
         if: ${{`{{ success() && steps.helpers.outcome == 'success' }}`}}
@@ -555,3 +577,9 @@ jobs:
           script: |
             const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-post-comment.js`);
             await run({ github, context, core });
+
+      - name: Fail the check unless the scan is clean
+        if: ${{`{{ success() && needs.dependency-review-scan.outputs.status != 'clean' }}`}}
+        run: |
+          echo "dependency scan status=${{`{{ needs.dependency-review-scan.outputs.status }}`}}" >&2
+          exit 1

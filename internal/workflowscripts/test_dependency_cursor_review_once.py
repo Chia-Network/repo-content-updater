@@ -7,7 +7,12 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW = _REPO_ROOT / "templates" / "dependency-cursor-review.yml"
-_TARGET_PR = _REPO_ROOT / "internal" / "workflowscripts" / "dependency-cursor-review-target-pr.js"
+_TARGET_PR = (
+    _REPO_ROOT
+    / "internal"
+    / "workflowscripts"
+    / "dependency-cursor-review-target-pr.js"
+)
 _MAKEFILE = _REPO_ROOT / "Makefile"
 _GO_TEST = _REPO_ROOT / ".github" / "workflows" / "go-test.yml"
 _SKIP_UNREVIEWED = "steps.target_pr.outputs.already_reviewed != 'true'"
@@ -30,7 +35,10 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
             workflow.index("Checkout trusted target-PR helper"),
             workflow.index("Resolve target PR context"),
         )
-        self.assertLess(workflow.index("Resolve target PR context"), workflow.index("Checkout repository"))
+        self.assertLess(
+            workflow.index("Resolve target PR context"),
+            workflow.index("Checkout repository"),
+        )
         self.assertLess(
             workflow.index("Copy trusted helper out of the workspace"),
             workflow.index("Resolve target PR context"),
@@ -38,9 +46,13 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
         self.assertNotIn("dependabot/fetch-metadata", workflow)
         self.assertNotIn("UPDATED_DEPENDENCIES_JSON", workflow)
         self.assertNotIn("GITHUB_WORKSPACE}/.trusted-dcr-helper", workflow)
-        helper = workflow.split("Checkout trusted target-PR helper", 1)[1].split("Resolve target PR context", 1)[0]
+        helper = workflow.split("Checkout trusted target-PR helper", 1)[1].split(
+            "Resolve target PR context", 1
+        )[0]
         self.assertNotIn("dependency-cursor-review-post-comment.js", helper)
-        self.assertIn(".github/scripts/dependency-cursor-review-dependabot-context.js", helper)
+        self.assertIn(
+            ".github/scripts/dependency-cursor-review-dependabot-context.js", helper
+        )
         self.assertIn("${RUNNER_TEMP}/trusted-dcr-helper", helper)
         self.assertIn(
             "RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-target-pr.js",
@@ -54,9 +66,16 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
             "GITHUB_WORKSPACE}/.github/scripts/dependency-cursor-review-post-comment.js",
             workflow,
         )
-        self.assertIn("steps.target_pr.outputs.review_marker", workflow)
+        self.assertIn("steps.bind_review.outputs.review_marker", workflow)
+        self.assertIn("steps.bind_review.outputs.already_reviewed", workflow)
+        self.assertIn("steps.target_pr.outputs.patch_id", workflow)
+        self.assertIn("steps.target_pr.outputs.reviewed_shas", workflow)
+        self.assertIn("VERSION_RANGE_FROM_BODY", workflow)
         self.assertIn("steps.target_pr.outputs.title", workflow)
-        self.assertIn("node --test internal/workflowscripts/*.test.js", _MAKEFILE.read_text(encoding="utf-8"))
+        self.assertIn(
+            "node --test internal/workflowscripts/*.test.js",
+            _MAKEFILE.read_text(encoding="utf-8"),
+        )
         self.assertIn("actions/setup-node@", _GO_TEST.read_text(encoding="utf-8"))
         self.assertIn("steps.target_pr.outputs.body", workflow)
         self.assertIn(
@@ -66,7 +85,9 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
 
     def test_post_step_requires_successful_analysis(self) -> None:
         workflow = _WORKFLOW.read_text(encoding="utf-8")
-        agent = workflow.split("\n  dependency-review-agent:\n", 1)[1].split("\n  dependency-review:\n", 1)[0]
+        agent = workflow.split("\n  dependency-review-agent:\n", 1)[1].split(
+            "\n  dependency-review:\n", 1
+        )[0]
         verdict = workflow.split("\n  dependency-review:\n", 1)[1]
         gate = (
             "needs.dependency-review-scan.result == 'success' && "
@@ -80,6 +101,25 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
         self.assertNotIn(gate, post)
         self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
         self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
+        fail_check = verdict.split(
+            "- name: Fail the check unless the scan is clean\n", 1
+        )
+        self.assertEqual(len(fail_check), 2)
+        self.assertLess(
+            verdict.index("Post or update PR comment"),
+            verdict.index("Fail the check unless the scan is clean"),
+        )
+        self.assertIn(
+            "needs.dependency-review-scan.outputs.status != 'clean'", fail_check[1]
+        )
+        self.assertNotIn("already_reviewed", fail_check[1])
+        self.assertIn("exit 1", fail_check[1])
+        self.assertNotIn("warn_only", fail_check[1])
+        self.assertNotIn("MALWARE_WARN_ONLY", fail_check[1])
+        scan_sh = (
+            _REPO_ROOT / "internal/workflowscripts/upstream_malware_scan.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("\n  exit 1\n", scan_sh)
 
 
 if __name__ == "__main__":
