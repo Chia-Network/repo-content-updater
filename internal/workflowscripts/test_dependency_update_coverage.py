@@ -10,7 +10,43 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import dependency_cursor_review_prompts as prompts
 import dependency_update_coverage as coverage
+
+
+def _git(repo: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": "coverage-test",
+            "GIT_AUTHOR_EMAIL": "coverage-test@example.com",
+            "GIT_COMMITTER_NAME": "coverage-test",
+            "GIT_COMMITTER_EMAIL": "coverage-test@example.com",
+        },
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"git {args} failed\n{proc.stderr}")
+    return proc.stdout.strip()
+
+
+def _git_repo(repo: Path) -> None:
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "coverage-test@example.com")
+    _git(repo, "config", "user.name", "coverage-test")
+
+
+def _commit(repo: Path, rel: str, content: str, message: str) -> None:
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    _git(repo, "add", rel)
+    _git(repo, "commit", "-m", message)
 
 
 def _clean(name: str, repo: str) -> dict:
@@ -123,63 +159,99 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             self.assertIn("not covered", summary)
             self.assertIn("scan_conclusive=false", output.read_text(encoding="utf-8"))
 
-    def test_child_scan_sees_the_commit_list(self) -> None:
-        update = {
-            "packageName": "lodash",
-            "fromVersion": "4.17.20",
-            "toVersion": "4.17.21",
-            "upstreamRepo": "lodash/lodash",
-        }
-        seen: dict[str, object] = {}
-
-        def fake_clone(_repo: str, dest: Path) -> bool:
-            dest.mkdir(parents=True)
-            return True
-
-        def fake_run(
-            cmd: list[str],
-            cwd: Path | None = None,
-            env: dict | None = None,
-            check: bool = False,
-        ) -> subprocess.CompletedProcess[str]:
-            del env, check
-            assert cwd is not None
-            commits = Path(cwd) / "dependabot_commits.md"
-            seen["commits"] = commits.read_text(encoding="utf-8")
-            (Path(cwd) / "malware_scan_report.json").write_text(
-                json.dumps(_clean("lodash", "lodash/lodash")),
-                encoding="utf-8",
-            )
-            return subprocess.CompletedProcess(cmd, 0)
-
+    def test_isolated_child_searches_listed_commit_blobs(self) -> None:
+        marker = "LISTED_COMMIT_IOC_9f3a"
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "dependabot_commits.md").write_text("commit abc1234\n", encoding="utf-8")
+            repo = root / "upstream"
+            _git_repo(repo)
+            _commit(repo, "pkg/index.js", "module.exports = 1;\n", "clean")
+            _git(repo, "tag", "v1.0.0")
+            _commit(repo, "pkg/index.js", f"const marker = '{marker}';\n", "listed")
+            sha = _git(repo, "rev-parse", "HEAD")
+            _git(repo, "tag", "v1.1.0")
+            _commit(repo, "pkg/index.js", "module.exports = 1;\n", "cleaned on main")
+            commits = root / "dependabot_commits.md"
+            commits.write_text(f"update {sha}\n", encoding="utf-8")
+            child = root / "child"
+            child.mkdir()
+            (child / "dependabot_commits.md").write_text("commit deadbeef\n", encoding="utf-8")
+
+            def use_local(_repo: str, dest: Path) -> bool:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                os.symlink(repo, dest, target_is_directory=True)
+                return True
+
             previous = os.getcwd()
+            saved_env = {
+                name: os.environ.get(name)
+                for name in (
+                    "MALWARE_IOC_PATTERNS",
+                    "MALWARE_WARN_ONLY",
+                    "MALWARE_IOC_ALLOWLIST",
+                    "MALWARE_UNICODE_ALLOWLIST",
+                    "MALWARE_CONFUSABLE_ALLOWLIST",
+                    "MALWARE_HEURISTIC_ALLOWLIST",
+                )
+            }
             os.chdir(root)
+            os.environ["MALWARE_IOC_PATTERNS"] = json.dumps([marker])
+            os.environ["MALWARE_WARN_ONLY"] = "1"
+            for name in saved_env:
+                if name not in ("MALWARE_IOC_PATTERNS", "MALWARE_WARN_ONLY"):
+                    os.environ[name] = "[]"
             try:
-                with (
-                    patch.object(coverage, "_clone", fake_clone),
-                    patch.object(coverage.subprocess, "run", fake_run),
-                ):
-                    coverage._scan_one(update, root / "child", root / "upstream_malware_scan.sh")
+                with patch.object(coverage, "_clone", use_local):
+                    report = coverage._scan_one(
+                        {
+                            "packageName": "lodash",
+                            "fromVersion": "9.9.9",
+                            "toVersion": "1.1.0",
+                            "upstreamRepo": "lodash/lodash",
+                        },
+                        child,
+                        Path(__file__).resolve().parent / "upstream_malware_scan.sh",
+                        commits.resolve(),
+                    )
             finally:
                 os.chdir(previous)
-        self.assertEqual(seen["commits"], "commit abc1234\n")
+                for name, value in saved_env.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+            self.assertEqual((child / "dependabot_commits.md").read_text(encoding="utf-8"), "commit deadbeef\n")
+        self.assertEqual(report["resolution_strategy"], "commit_list", msg=report)
+        self.assertGreater(len(report["findings"]["ioc"]), 0)
+        self.assertIn(marker, json.dumps(report["findings"]["ioc"]))
 
     def test_checkout_keeps_the_conclusive_package(self) -> None:
         skipped = _clean("lodash", "lodash/lodash")
         skipped["scan_conclusive"] = False
+        skipped["from_version"] = "4.17.20"
+        skipped["to_version"] = "4.17.21"
         skipped["resolved_to"] = "a" * 40
         chosen = _clean("semver", "npm/node-semver")
+        chosen["from_version"] = "7.5.4"
+        chosen["to_version"] = "7.6.0"
+        chosen["resolved_from"] = "d" * 40
         chosen["resolved_to"] = "c" * 40
         records = [skipped, chosen]
         report = coverage.aggregate(records)
+        self.assertEqual(
+            coverage.agent_target(records),
+            ("semver", "npm/node-semver", "c" * 40),
+        )
+        self.assertEqual(report["agent_target"], ["semver", "npm/node-semver", "c" * 40])
         self.assertIs(report["scan_conclusive"], False)
         self.assertEqual(report["package_name"], "semver")
         self.assertEqual(report["upstream_repo"], "npm/node-semver")
-        self.assertEqual(report["from_version"], "1.0.0")
+        self.assertEqual(report["from_version"], "7.5.4")
         self.assertEqual(report["resolved_to"], "c" * 40)
+        self.assertEqual(
+            coverage.agent_fields(report["agent_candidates"])["package"],
+            "semver",
+        )
 
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -191,19 +263,44 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 marker.mkdir(parents=True)
                 (marker / "who").write_text(str(record["package_name"]), encoding="utf-8")
                 scans.append((record, dest))
+            (root / "malware_scan_report.json").write_text(json.dumps(report), encoding="utf-8")
+            (root / "dependabot_comment_context.json").write_text(
+                json.dumps({"packageName": "lodash", "upstreamRepo": "lodash/lodash"}),
+                encoding="utf-8",
+            )
             previous = os.getcwd()
-            previous_output = os.environ.get("GITHUB_OUTPUT")
+            saved = {
+                key: os.environ.get(key)
+                for key in (
+                    "GITHUB_OUTPUT",
+                    "PACKAGE_NAME",
+                    "FROM_VERSION",
+                    "TO_VERSION",
+                    "RESOLVED_FROM",
+                    "RESOLVED_TO",
+                )
+            }
             os.chdir(root)
             os.environ["GITHUB_OUTPUT"] = str(output)
+            os.environ["PACKAGE_NAME"] = "lodash"
+            os.environ["FROM_VERSION"] = "4.17.20"
+            os.environ["TO_VERSION"] = "4.17.21"
+            os.environ["RESOLVED_FROM"] = "a" * 40
+            os.environ["RESOLVED_TO"] = "a" * 40
             try:
                 coverage._keep_checkout(records, scans)
                 coverage._emit(report, "summary\n")
+                fields = prompts._prompt_fields()
             finally:
                 os.chdir(previous)
-                if previous_output is None:
-                    os.environ.pop("GITHUB_OUTPUT", None)
-                else:
-                    os.environ["GITHUB_OUTPUT"] = previous_output
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+            self.assertEqual(fields["package"], "semver")
+            self.assertEqual(fields["from_version"], "7.5.4")
+            self.assertEqual(fields["resolved_to"], "c" * 40)
             self.assertEqual((root / ".upstream-dependency" / "who").read_text(encoding="utf-8"), "semver")
             self.assertTrue((root / "0" / ".upstream-dependency").is_dir())
             emitted = output.read_text(encoding="utf-8")

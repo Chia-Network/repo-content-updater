@@ -78,20 +78,78 @@ def _covered(report: dict) -> bool:
     return report.get("scan_conclusive") is True
 
 
-def agent_record(records: list[dict]) -> dict | None:
-    """One package for the agent checkout: its repo and resolved commit together."""
+def agent_target(records: list[dict]) -> tuple[str, str, str] | None:
+    """The one (package, repository, resolved commit) shared by the prompt and the checkout."""
     for record in records:
-        if _covered(record) and record.get("resolved_to") and record.get("upstream_repo"):
-            return record
+        repo = str(record.get("upstream_repo") or "")
+        resolved_to = str(record.get("resolved_to") or "")
+        if _covered(record) and repo and resolved_to:
+            return (str(record.get("package_name") or ""), repo, resolved_to)
     return None
+
+
+def _identity(record: dict) -> tuple[str, str, str]:
+    return (
+        str(record.get("package_name") or ""),
+        str(record.get("upstream_repo") or ""),
+        str(record.get("resolved_to") or ""),
+    )
+
+
+def _candidate(record: dict) -> dict:
+    return {
+        "package_name": str(record.get("package_name") or ""),
+        "upstream_repo": str(record.get("upstream_repo") or ""),
+        "resolved_to": str(record.get("resolved_to") or ""),
+        "resolved_from": str(record.get("resolved_from") or ""),
+        "from_version": str(record.get("from_version") or ""),
+        "to_version": str(record.get("to_version") or ""),
+        "from_tag": str(record.get("from_tag") or ""),
+        "to_tag": str(record.get("to_tag") or ""),
+        "scan_conclusive": _covered(record),
+    }
+
+
+def _stamp(report: dict, records: list[dict], target: tuple[str, str, str] | None) -> dict:
+    report["agent_candidates"] = [_candidate(record) for record in records]
+    report["agent_target"] = list(target) if target else None
+    return report
+
+
+def _selected(records: list[dict], target: tuple[str, str, str] | None) -> dict:
+    if target is None:
+        return {}
+    return next((record for record in records if _identity(record) == target), {})
+
+
+def agent_fields(records: list[dict]) -> dict[str, str]:
+    """Prompt fields for agent_target. Empty when no dependency was scanned conclusively."""
+    target = agent_target(records)
+    if target is None:
+        return {
+            "package": "",
+            "from_version": "",
+            "to_version": "",
+            "resolved_from": "",
+            "resolved_to": "",
+        }
+    chosen = _selected(records, target)
+    return {
+        "package": target[0],
+        "from_version": str(chosen.get("from_version") or ""),
+        "to_version": str(chosen.get("to_version") or ""),
+        "resolved_from": str(chosen.get("resolved_from") or ""),
+        "resolved_to": target[2],
+    }
 
 
 def aggregate(records: list[dict]) -> dict:
     """Covered only when every record was scanned conclusively."""
+    target = agent_target(records)
     if len(records) == 1:
-        return records[0]
+        return _stamp(dict(records[0]), records, target)
     if not records:
-        return uncovered({}, "incomplete_coverage")
+        return _stamp(uncovered({}, "incomplete_coverage"), records, None)
 
     findings = {key: [] for key in _FINDING_KEYS}
     errors: list[str] = []
@@ -123,41 +181,45 @@ def aggregate(records: list[dict]) -> dict:
     else:
         status = "clean"
 
-    chosen = agent_record(records) or {}
-    return {
-        "status": status,
-        "warn_only": warn_only,
-        "scan_conclusive": conclusive,
-        "not_scanned_reason": "" if conclusive else "incomplete_coverage",
-        "verdict_token_in_tree": any(record.get("verdict_token_in_tree") is True for record in records),
-        "resolution_strategy": "group",
-        "package_name": chosen.get("package_name") or "",
-        "upstream_repo": chosen.get("upstream_repo") or "",
-        "from_version": chosen.get("from_version") or "",
-        "to_version": chosen.get("to_version") or "",
-        "resolved_range": chosen.get("resolved_range") or "",
-        "resolved_from": chosen.get("resolved_from") or "",
-        "resolved_to": chosen.get("resolved_to") or "",
-        "from_tag": chosen.get("from_tag") or "",
-        "to_tag": chosen.get("to_tag") or "",
-        "changed_files_count": sum(int(record.get("changed_files_count") or 0) for record in records),
-        "materialized_count": sum(int(record.get("materialized_count") or 0) for record in records),
-        "filtered_count": sum(int(record.get("filtered_count") or 0) for record in records),
-        "changed_files": changed,
-        "errors": errors,
-        "findings": findings,
-        "dependencies": [
-            {
-                "package_name": record.get("package_name") or "",
-                "upstream_repo": record.get("upstream_repo") or "",
-                "from_version": record.get("from_version") or "",
-                "to_version": record.get("to_version") or "",
-                "scan_conclusive": _covered(record),
-                "not_scanned_reason": record.get("not_scanned_reason") or "",
-            }
-            for record in records
-        ],
-    }
+    chosen = _selected(records, target)
+    return _stamp(
+        {
+            "status": status,
+            "warn_only": warn_only,
+            "scan_conclusive": conclusive,
+            "not_scanned_reason": "" if conclusive else "incomplete_coverage",
+            "verdict_token_in_tree": any(record.get("verdict_token_in_tree") is True for record in records),
+            "resolution_strategy": "group",
+            "package_name": chosen.get("package_name") or "",
+            "upstream_repo": chosen.get("upstream_repo") or "",
+            "from_version": chosen.get("from_version") or "",
+            "to_version": chosen.get("to_version") or "",
+            "resolved_range": chosen.get("resolved_range") or "",
+            "resolved_from": chosen.get("resolved_from") or "",
+            "resolved_to": chosen.get("resolved_to") or "",
+            "from_tag": chosen.get("from_tag") or "",
+            "to_tag": chosen.get("to_tag") or "",
+            "changed_files_count": sum(int(record.get("changed_files_count") or 0) for record in records),
+            "materialized_count": sum(int(record.get("materialized_count") or 0) for record in records),
+            "filtered_count": sum(int(record.get("filtered_count") or 0) for record in records),
+            "changed_files": changed,
+            "errors": errors,
+            "findings": findings,
+            "dependencies": [
+                {
+                    "package_name": record.get("package_name") or "",
+                    "upstream_repo": record.get("upstream_repo") or "",
+                    "from_version": record.get("from_version") or "",
+                    "to_version": record.get("to_version") or "",
+                    "scan_conclusive": _covered(record),
+                    "not_scanned_reason": record.get("not_scanned_reason") or "",
+                }
+                for record in records
+            ],
+        },
+        records,
+        target,
+    )
 
 
 def render_summary(report: dict, records: list[dict]) -> str:
@@ -209,16 +271,15 @@ def _clone(repo: str, dest: Path) -> bool:
     return proc.returncode == 0 and dest.is_dir()
 
 
-def _scan_one(update: dict, dest: Path, scan_script: Path) -> dict:
+def _scan_one(update: dict, dest: Path, scan_script: Path, commits_file: Path | None = None) -> dict:
     if not scannable(update):
         return uncovered(update, "unresolved")
     checkout = dest / ".upstream-dependency"
     if not _clone(str(update["upstreamRepo"]), checkout):
         return uncovered(update, "unresolved")
-    commits = Path("dependabot_commits.md")
-    if commits.is_file():
-        shutil.copyfile(commits, dest / "dependabot_commits.md")
     env = os.environ.copy()
+    if commits_file is not None and commits_file.is_file():
+        env["DEPENDABOT_COMMITS_FILE"] = str(commits_file.resolve())
     env["GITHUB_OUTPUT"] = str(dest / "github_output.txt")
     env["PACKAGE_NAME"] = str(update.get("packageName") or "")
     env["FROM_VERSION"] = str(update["fromVersion"])
@@ -249,23 +310,36 @@ def _output_field(value: object) -> str:
     return str(value or "").replace("\r", " ").replace("\n", " ")
 
 
+def _emitted_fields(report: dict) -> dict:
+    """Outputs follow agent_target. A scan record's own commit is not a second choice."""
+    target = report.get("agent_target")
+    if not isinstance(target, list) or len(target) != 3:
+        return {}
+    want = (str(target[0]), str(target[1]), str(target[2]))
+    for item in report.get("agent_candidates") or []:
+        if isinstance(item, dict) and _identity(item) == want:
+            return item
+    return {"package_name": want[0], "upstream_repo": want[1], "resolved_to": want[2]}
+
+
 def _emit(report: dict, summary: str) -> None:
     output = os.environ.get("GITHUB_OUTPUT", "").strip()
     if not output:
         return
+    fields = _emitted_fields(report)
     delim = f"GHEOF_{uuid.uuid4().hex}"
     conclusive = "true" if report.get("scan_conclusive") is True else "false"
     text = (
         f"status={_output_field(report.get('status'))}\n"
         f"changed_files_count={int(report.get('changed_files_count') or 0)}\n"
-        f"package_name={_output_field(report.get('package_name'))}\n"
-        f"upstream_repo={_output_field(report.get('upstream_repo'))}\n"
-        f"from_version={_output_field(report.get('from_version'))}\n"
-        f"to_version={_output_field(report.get('to_version'))}\n"
-        f"resolved_from={_output_field(report.get('resolved_from'))}\n"
-        f"resolved_to={_output_field(report.get('resolved_to'))}\n"
-        f"from_tag={_output_field(report.get('from_tag'))}\n"
-        f"to_tag={_output_field(report.get('to_tag'))}\n"
+        f"package_name={_output_field(fields.get('package_name'))}\n"
+        f"upstream_repo={_output_field(fields.get('upstream_repo'))}\n"
+        f"from_version={_output_field(fields.get('from_version'))}\n"
+        f"to_version={_output_field(fields.get('to_version'))}\n"
+        f"resolved_from={_output_field(fields.get('resolved_from'))}\n"
+        f"resolved_to={_output_field(fields.get('resolved_to'))}\n"
+        f"from_tag={_output_field(fields.get('from_tag'))}\n"
+        f"to_tag={_output_field(fields.get('to_tag'))}\n"
         f"scan_conclusive={conclusive}\n"
         f"summary<<{delim}\n"
         f"{summary}"
@@ -276,18 +350,18 @@ def _emit(report: dict, summary: str) -> None:
 
 
 def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
-    chosen = agent_record(records)
-    target = Path.cwd() / ".upstream-dependency"
-    if target.exists():
-        shutil.rmtree(target)
-    if chosen is None:
+    target = agent_target(records)
+    kept = Path.cwd() / ".upstream-dependency"
+    if kept.exists():
+        shutil.rmtree(kept)
+    if target is None:
         return
     for record, dest in scans:
-        if record is not chosen:
+        if _identity(record) != target:
             continue
         checkout = dest / ".upstream-dependency"
         if checkout.is_dir():
-            shutil.move(str(checkout), str(target))
+            shutil.move(str(checkout), str(kept))
         return
 
 
@@ -301,11 +375,12 @@ def main() -> None:
     records: list[dict] = []
     scans: list[tuple[dict, Path]] = []
     child_summary = ""
+    commits_file = Path("dependabot_commits.md").resolve()
     try:
         for index, update in enumerate(updates):
             dest = work / str(index)
             dest.mkdir()
-            record = _scan_one(update, dest, scan_script)
+            record = _scan_one(update, dest, scan_script, commits_file)
             records.append(record)
             scans.append((record, dest))
             summary_path = dest / "malware_scan_summary.md"

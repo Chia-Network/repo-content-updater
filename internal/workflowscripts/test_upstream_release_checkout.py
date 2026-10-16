@@ -144,6 +144,29 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
             self.assertEqual(_git(repo, "rev-parse", "HEAD"), release)
             self.assertFalse((repo / "AGENTS.md").exists())
 
+    def test_agent_target_commit_wins_over_resolved_to(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work, repo, release = self._tree(Path(tmp))
+            main = _git(repo, "rev-parse", "HEAD")
+            self._report(
+                work,
+                {
+                    "resolved_to": main,
+                    "agent_target": ["semver", "npm/node-semver", release],
+                },
+            )
+            proc = self._script(work)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(_git(repo, "rev-parse", "HEAD"), release)
+
+    def test_null_agent_target_removes_the_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work, repo, release = self._tree(Path(tmp))
+            self._report(work, {"resolved_to": release, "agent_target": None})
+            proc = self._script(work)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertFalse(repo.exists())
+
     def test_empty_resolved_to_removes_checkout_and_scan_dir(self) -> None:
         payloads = ({"resolved_to": ""}, {"resolved_to": None}, {})
         for payload in payloads:

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
+import sys
 from pathlib import Path
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
@@ -31,9 +33,38 @@ def _layout_tag_line(label: str, token: str) -> str:
     return f"- {label}: (none) dcr-slot-{token}"
 
 
-def _upstream_layout(token: str) -> str:
-    from_sha = _shown_sha(os.getenv("RESOLVED_FROM", ""))
-    to_sha = _shown_sha(os.getenv("RESOLVED_TO", ""))
+def _agent_fields(records: list[dict]) -> dict[str, str]:
+    scripts = str(Path(__file__).resolve().parent)
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from dependency_update_coverage import agent_fields
+
+    return agent_fields(records)
+
+
+def _prompt_fields() -> dict[str, str]:
+    """Package and commit come from agent_fields when the scan stored candidates."""
+    env_fields = {
+        "package": os.getenv("PACKAGE_NAME", ""),
+        "from_version": os.getenv("FROM_VERSION", ""),
+        "to_version": os.getenv("TO_VERSION", ""),
+        "resolved_from": os.getenv("RESOLVED_FROM", ""),
+        "resolved_to": os.getenv("RESOLVED_TO", ""),
+    }
+    try:
+        report = json.loads(Path("malware_scan_report.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return env_fields
+    if not isinstance(report, dict) or "agent_candidates" not in report:
+        return env_fields
+    raw = report.get("agent_candidates")
+    candidates = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+    return _agent_fields(candidates)
+
+
+def _upstream_layout(token: str, fields: dict[str, str]) -> str:
+    from_sha = _shown_sha(fields["resolved_from"])
+    to_sha = _shown_sha(fields["resolved_to"])
     lines = [
         "Repository layout:",
         "- Current repository root: .",
@@ -42,10 +73,10 @@ def _upstream_layout(token: str) -> str:
         "- refs/dcr/from is the from commit when that commit was fetched. It is not a second worktree.",
         "- Only those two commits and the version tags named below are fetched.",
         "- Intermediate commits were not fetched. Compare the trees with git diff, not git log.",
-        f"- from version: {_shown_version(os.getenv('FROM_VERSION', ''))}",
+        f"- from version: {_shown_version(fields['from_version'])}",
         _layout_tag_line("from tag", token),
         f"- from commit: {from_sha}",
-        f"- to version: {_shown_version(os.getenv('TO_VERSION', ''))}",
+        f"- to version: {_shown_version(fields['to_version'])}",
         _layout_tag_line("to tag", token),
         f"- to commit: {to_sha}",
     ]
@@ -59,7 +90,7 @@ def _upstream_layout(token: str) -> str:
     return "\n".join(lines)
 
 
-def _base_context(token: str) -> str:
+def _base_context(token: str, fields: dict[str, str]) -> str:
     return f"""
 This is a dependency bot PR review request.
 
@@ -70,9 +101,9 @@ PR body:
 {os.getenv("PR_BODY", "")}
 
 Package metadata:
-- package: {os.getenv("PACKAGE_NAME", "")}
-- from: {os.getenv("FROM_VERSION", "")}
-- to: {os.getenv("TO_VERSION", "")}
+- package: {fields["package"]}
+- from: {fields["from_version"]}
+- to: {fields["to_version"]}
 
 PR context JSON:
 {_read_file("dependabot_comment_context.json")}
@@ -86,7 +117,7 @@ Commits:
 Local usage hints (non-authoritative rg hits):
 {_read_file("package_usage.txt")[:12000]}
 
-{_upstream_layout(token)}
+{_upstream_layout(token, fields)}
 """.strip()
 
 
@@ -165,7 +196,7 @@ Keep it concise and actionable.
 
 
 def main() -> None:
-    base = _base_context(secrets.token_hex(16))
+    base = _base_context(secrets.token_hex(16), _prompt_fields())
     malware_context = f"""
 {base}
 

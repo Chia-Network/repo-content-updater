@@ -584,8 +584,10 @@ test('parseDependencyUpdate reads a grouped npm table', () => {
       ['@rollup/plugin-commonjs', '29.0.2', '29.0.3', 'rollup/plugins'],
     ],
   );
-  assert.equal(parsed.fromVersion, '4.17.20');
-  assert.equal(parsed.toVersion, '4.17.21');
+  assert.equal(parsed.packageName, '');
+  assert.equal(parsed.upstreamRepo, '');
+  assert.equal(parsed.fromVersion, '');
+  assert.equal(parsed.toVersion, '');
 });
 
 test('parseDependencyUpdate reads a grouped gomod list and leaves an unresolvable entry', () => {
@@ -606,7 +608,31 @@ test('parseDependencyUpdate reads a grouped gomod list and leaves an unresolvabl
   assert.equal(byName['k8s.io/api'].upstreamRepo, '');
   assert.equal(byName['k8s.io/api'].fromVersion, '0.29.1');
   assert.equal(byName['github.com/mattn/go-runewidth'].upstreamRepo, 'mattn/go-runewidth');
-  assert.equal(parsed.upstreamRepo, 'spf13/cobra');
+  assert.equal(parsed.upstreamRepo, '');
+  assert.equal(parsed.packageName, '');
+});
+
+test('grouped context does not choose a package before the scans', async () => {
+  await withWorkspace(async (directory) => {
+    process.env.PR_TITLE = 'Bump the npm-dependencies group across 1 directory with 2 updates';
+    process.env.PR_BODY = [
+      '| Package | From | To |',
+      '| --- | --- | --- |',
+      '| [lodash](https://github.com/lodash/lodash) | `4.17.20` | `4.17.21` |',
+      '| [semver](https://github.com/npm/node-semver) | `7.5.4` | `7.6.0` |',
+    ].join('\n');
+    process.env.PR_NUMBER = '7';
+    const core = fakeCore();
+    await context({ core });
+    assert.equal(core.failed, '');
+    assert.equal(core.outputs.package_name, '');
+    assert.equal(core.outputs.upstream_repo, '');
+    const updates = JSON.parse(fs.readFileSync(path.join(directory, 'dependency_updates.json'), 'utf8'));
+    assert.deepEqual(
+      updates.map((item) => item.packageName),
+      ['lodash', 'semver'],
+    );
+  });
 });
 
 test('context JSON stays limited to the prompt fields', async () => {

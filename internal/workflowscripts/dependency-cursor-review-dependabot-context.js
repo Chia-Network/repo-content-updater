@@ -111,10 +111,6 @@ function parseGroupedUpdates(body) {
   return [...byName.values()];
 }
 
-function promptUpdate(updates) {
-  return updates.find((item) => item.upstreamRepo && item.fromVersion && item.toVersion) || updates[0] || null;
-}
-
 function parseDependencyUpdate(title, body) {
   const dependencyRepoMatch = body.match(
     /^\s*(?:Bumps|Update(?:s|d)?)\s+\[[^\]]+\]\(\s*https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:[\/#?][^)\s]*)?\s*\)/im,
@@ -176,12 +172,12 @@ function parseDependencyUpdate(title, body) {
 
   const grouped = parseGroupedUpdates(body);
   if (grouped.length > 0) {
-    const prompt = promptUpdate(grouped);
+    // The package the agent checks out is chosen after each scan. Parsing does not pick one.
     return {
-      upstreamRepo: prompt.upstreamRepo,
-      packageName: prompt.packageName,
-      fromVersion: prompt.fromVersion,
-      toVersion: prompt.toVersion,
+      upstreamRepo: '',
+      packageName: '',
+      fromVersion: '',
+      toVersion: '',
       releaseNotes,
       commits,
       updates: grouped,
@@ -275,7 +271,7 @@ async function runDependabotContext({ core }) {
   const parsed = parseDependencyUpdate(title, body);
   fs.writeFileSync('dependency_updates.json', JSON.stringify(parsed.updates, null, 2));
 
-  if (!parsed.upstreamRepo) {
+  if (!parsed.updates.some((item) => item.upstreamRepo)) {
     core.setFailed('PR body is missing an upstream GitHub repository link.');
     return;
   }
