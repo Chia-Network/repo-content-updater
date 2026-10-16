@@ -87,8 +87,10 @@ def _apply_coverage(report: dict) -> dict:
     covered = _covered(report)
     stamped = dict(report)
     stamped["scan_conclusive"] = covered
-    if not covered and not str(stamped.get("not_scanned_reason") or "").strip():
-        stamped["not_scanned_reason"] = "incomplete_coverage"
+    if not covered:
+        if not str(stamped.get("not_scanned_reason") or "").strip():
+            stamped["not_scanned_reason"] = "incomplete_coverage"
+        stamped["status"] = "not_scanned"
     return stamped
 
 
@@ -394,7 +396,8 @@ def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
     new = _versions_for(kind, after)
     if old is None or new is None:
         return None
-    return {name for name, version in new.items() if old.get(name) != version}
+    names = set(old) | set(new)
+    return {name for name in names if old.get(name) != new.get(name)}
 
 
 def _git_text(rev: str, path: str) -> str:
@@ -476,8 +479,13 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
         kind = _manifest_kind(path)
         if not kind:
             continue
-        names = _changed_names(kind, _git_text(base, path), _git_text("HEAD", path))
-        labels = [path] if names is None else sorted(names)
+        before = _git_text(base, path)
+        after = _git_text("HEAD", path)
+        names = _changed_names(kind, before, after)
+        if names is None or (not names and before != after):
+            labels = [path]
+        else:
+            labels = sorted(names)
         for label in labels:
             if label in seen:
                 continue
