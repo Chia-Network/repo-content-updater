@@ -175,7 +175,10 @@ def main() -> None:
     )
     malware_text = published["malware_text"]
     compatibility_text = published["compatibility_text"]
-    complete = bool(_successful_analysis_text(malware_path)) and bool(_successful_analysis_text(compatibility_path))
+    agents_ok = bool(_successful_analysis_text(malware_path)) and bool(_successful_analysis_text(compatibility_path))
+    # An incomplete scan must not stamp the patch-id skip marker. A later run
+    # would skip and leave the required check green without a conclusive scan.
+    complete = agents_ok and isinstance(report, dict) and report.get("scan_conclusive") is True
     malware_review = {"result": malware_text}
     compatibility_review = {"result": compatibility_text}
 

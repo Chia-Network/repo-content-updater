@@ -39,9 +39,7 @@ class CombineCompleteTest(unittest.TestCase):
             if malware is not None:
                 (root / "cursor_output_malware.json").write_text(malware, encoding="utf-8")
             if compatibility is not None:
-                (root / "cursor_output_compatibility.json").write_text(
-                    compatibility, encoding="utf-8"
-                )
+                (root / "cursor_output_compatibility.json").write_text(compatibility, encoding="utf-8")
             if report is None:
                 report = {
                     "status": "clean",
@@ -129,8 +127,64 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertNotIn("compat ok", written["result"])
         self.assertIn("Compatibility recommendation withheld", written["result"])
         self.assertNotIn("needs human review", written["result"])
-        self.assertIs(written["complete"], True)
+        self.assertIs(written["complete"], False)
         self.assertNotIn("**Verdict: benign**", json.dumps(written["malware_review"]))
+
+    def test_incomplete_scan_with_empty_findings_stays_blocking(self) -> None:
+        """Production reports include empty finding lists. That is not a clean scan."""
+        benign = '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs in the files that were read.\\n"}'
+        merge = '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nCall sites are unchanged.\\n"}'
+        for reason in ("incomplete_coverage", "to_ref_unresolved", "no_commits", "commit_list"):
+            with self.subTest(reason=reason):
+                written = self._run(
+                    benign,
+                    merge,
+                    report={
+                        "status": "not_scanned",
+                        "scan_conclusive": False,
+                        "not_scanned_reason": reason,
+                        "verdict_token_in_tree": False,
+                        "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+                    },
+                )
+                self.assertIn("**Verdict: malicious**", written["result"])
+                self.assertIn(reason, written["result"])
+                self.assertNotIn("**Verdict: benign**", written["result"])
+                self.assertNotIn("No IOCs in the files that were read.", written["result"])
+                self.assertNotIn("**Merge**", written["result"])
+                self.assertIn("Compatibility recommendation withheld", written["result"])
+                self.assertIs(written["complete"], False)
+
+    def test_incomplete_generic_hits_cannot_be_cleared(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nBundle noise only.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nTypes still match.\\n"}',
+            report={
+                "status": "warn",
+                "scan_conclusive": False,
+                "not_scanned_reason": "incomplete_coverage",
+                "verdict_token_in_tree": False,
+                "findings": {
+                    "unicode": [],
+                    "confusable": [],
+                    "ioc": [],
+                    "heuristic": [
+                        {
+                            "kind": "shell_process_spawn",
+                            "file": "lib/entry-points.js",
+                            "line": "4",
+                            "match": "child_process",
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertIn("**Verdict: malicious**", written["result"])
+        self.assertIn("incomplete_coverage", written["result"])
+        self.assertNotIn("**Verdict: benign**", written["result"])
+        self.assertNotIn("Bundle noise only.", written["result"])
+        self.assertNotIn("**Merge**", written["result"])
+        self.assertIs(written["complete"], False)
 
     def test_findings_drop_agent_benign_verdict(self) -> None:
         written = self._run(
@@ -301,9 +355,7 @@ class CombineCompleteTest(unittest.TestCase):
                 "verdict_token_in_tree": False,
                 "findings": {
                     "ioc": [],
-                    "unicode": [
-                        {"kind": "unicode", "file": "pkg/index.js", "line": 3, "match": "zero-width"}
-                    ],
+                    "unicode": [{"kind": "unicode", "file": "pkg/index.js", "line": 3, "match": "zero-width"}],
                     "confusable": [],
                     "heuristic": [],
                 },

@@ -766,7 +766,7 @@ test('unscoped scan drops the agent banner and posts the composed verdict', asyn
       },
     });
     const written = JSON.parse(fs.readFileSync(combined, 'utf8'));
-    assert.equal(written.complete, true);
+    assert.equal(written.complete, false);
     assert.equal(JSON.stringify(written.malware_review).includes('**Verdict: benign**'), false);
     assert.equal(written.result.includes('**Verdict: malicious**'), true);
     process.env.REVIEW_MARKER = marker;
@@ -779,7 +779,8 @@ test('unscoped scan drops the agent banner and posts the composed verdict', asyn
     });
     const created = github.calls.find((call) => call[0] === 'createComment');
     const body = created[1].body;
-    assert.equal(body.split('\n')[0], marker);
+    assert.equal(body.split('\n')[0], context.LEGACY_REVIEW_MARKER);
+    assert.equal(body.includes('patch-id:'), false);
     assert.equal(body.includes('**Verdict: benign**'), false);
     assert.equal(body.includes('**Verdict: malicious**'), true);
     assert.equal(body.includes('needs human review'), false);
