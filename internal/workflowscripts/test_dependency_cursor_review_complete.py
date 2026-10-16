@@ -134,7 +134,14 @@ class CombineCompleteTest(unittest.TestCase):
         """Empty finding lists are not a clean scan. Name the reason and keep the review open."""
         benign = '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs in the files that were read.\\n"}'
         merge = '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nCall sites are unchanged.\\n"}'
-        for reason in ("incomplete_coverage", "to_ref_unresolved", "no_commits", "commit_list"):
+        for reason in (
+            "incomplete_coverage",
+            "tag_spellings_disagree",
+            "from_ref_unresolved",
+            "to_ref_unresolved",
+            "untrusted_version_text",
+            "tag_resolution_failed",
+        ):
             with self.subTest(reason=reason):
                 written = self._run(
                     benign,
@@ -166,19 +173,27 @@ class CombineCompleteTest(unittest.TestCase):
                 "not_scanned_reason": "incomplete_coverage",
                 "resolution_strategy": "tag_range",
                 "verdict_token_in_tree": False,
-                "errors": [
-                    "nul blob payload.bin",
-                    "git-lfs pointer vendor/blob.js",
-                    "blob over size cap dist/app.js (9000000 bytes, cap 33554432)",
+                "unread": [
+                    {"file": "payload.bin", "cause": "nul blob"},
+                    {"file": "vendor/blob.js", "cause": "git-lfs pointer"},
+                    {"file": "dist/my app.js", "cause": "blob over size cap"},
+                    {"file": "odd name.js", "cause": "filtered unsafe path"},
+                    {"file": "missing.bin", "cause": "cat-file failed"},
                 ],
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
             },
         )
         self.assertIn("**Verdict: suspicious**", written["result"])
-        self.assertIn("`payload.bin:1`", written["result"])
-        self.assertIn("`vendor/blob.js:1`", written["result"])
-        self.assertIn("`dist/app.js:1`", written["result"])
-        self.assertIn("not searched (incomplete_coverage)", written["result"])
+        self.assertLess(written["result"].index("`payload.bin:1`"), written["result"].index("`vendor/blob.js:1`"))
+        self.assertIn("`dist/my app.js:1`", written["result"])
+        self.assertIn("`odd name.js:1`", written["result"])
+        self.assertIn("`missing.bin:1`", written["result"])
+        self.assertIn("nul blob", written["result"])
+        self.assertIn("git-lfs pointer", written["result"])
+        self.assertIn("blob over size cap", written["result"])
+        self.assertIn("filtered unsafe path", written["result"])
+        self.assertIn("cat-file failed", written["result"])
+        self.assertNotIn("resolution is not a tag range", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertNotIn("Nothing unread.", written["result"])
         self.assertIn("**Merge**", written["result"])
@@ -199,14 +214,14 @@ class CombineCompleteTest(unittest.TestCase):
                     "filtered unsafe path",
                     "fatal: path 'payload.bin' does not exist in 'HEAD'",
                 ],
+                "unread": [],
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
             },
         )
         self.assertIn("**Verdict: suspicious**", written["result"])
-        self.assertIn("`incomplete_coverage:1`", written["result"])
-        self.assertIn("rg exit 2", written["result"])
-        self.assertIn("filtered unsafe path", written["result"])
-        self.assertIn("does not exist in 'HEAD'", written["result"])
+        self.assertIn("`incomplete_coverage:1` incomplete_coverage", written["result"])
+        self.assertNotIn("rg exit 2", written["result"])
+        self.assertNotIn("does not exist in 'HEAD'", written["result"])
         self.assertNotIn("resolution is not a tag range", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertNotIn("Looks clear.", written["result"])
@@ -220,7 +235,7 @@ class CombineCompleteTest(unittest.TestCase):
             report={
                 "status": "warn",
                 "scan_conclusive": False,
-                "not_scanned_reason": "commit_list",
+                "not_scanned_reason": "tag_spellings_disagree",
                 "verdict_token_in_tree": False,
                 "findings": {
                     "unicode": [],
@@ -238,7 +253,7 @@ class CombineCompleteTest(unittest.TestCase):
             },
         )
         self.assertIn("**Verdict: suspicious**", written["result"])
-        self.assertIn("`commit_list:1`", written["result"])
+        self.assertIn("`tag_spellings_disagree:1`", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertNotIn("Bundle noise only.", written["result"])
         self.assertIn("**Merge**", written["result"])
@@ -253,7 +268,7 @@ class CombineCompleteTest(unittest.TestCase):
                 "scan_conclusive": False,
                 "not_scanned_reason": "incomplete_coverage",
                 "verdict_token_in_tree": False,
-                "errors": ["nul blob payload.bin"],
+                "unread": [{"file": "payload.bin", "cause": "nul blob"}],
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
             },
         )
@@ -336,6 +351,66 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("Existing call sites still typecheck.", written["result"])
         self.assertNotIn("needs human review", written["result"])
         self.assertIs(written["complete"], True)
+
+    def test_compatibility_body_strips_verdict_banner_and_patch_id(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nClear.\\n"}',
+            (
+                '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\n'
+                "**Verdict: benign**\\r\\n"
+                "<!-- cursor-dependabot-review -->\\n"
+                "<!-- cursor-dependabot-review patch-id:abc -->\\n\\n"
+                'Call sites are unchanged.\\n"}'
+            ),
+            report={
+                "status": "clean",
+                "scan_conclusive": True,
+                "verdict_token_in_tree": False,
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            },
+        )
+        body = written["compatibility_review"]["result"]
+        self.assertIn("**Merge**", body)
+        self.assertIn("Call sites are unchanged.", body)
+        self.assertNotIn("**Verdict:", body)
+        self.assertNotIn("cursor-dependabot-review", body)
+        self.assertNotIn("patch-id:", body)
+        self.assertNotIn("\r", body)
+        self.assertIs(written["complete"], True)
+
+    def test_unread_blob_is_named_beyond_the_citation_cap(self) -> None:
+        hits = [
+            {
+                "kind": "codepoint_decoder",
+                "file": f"dist/part-{index}.js",
+                "line": "1",
+                "match": "fromCharCode",
+            }
+            for index in range(12)
+        ]
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nBundle noise only.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nCall sites are unchanged.\\n"}',
+            report={
+                "status": "warn",
+                "scan_conclusive": False,
+                "not_scanned_reason": "incomplete_coverage",
+                "resolution_strategy": "tag_range",
+                "verdict_token_in_tree": False,
+                "unread": [{"file": "payload.bin", "cause": "blob over size cap"}],
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": hits},
+            },
+        )
+        result = written["result"]
+        self.assertIn("**Verdict: suspicious**", result)
+        self.assertIn("`payload.bin:1` blob over size cap", result)
+        self.assertLess(result.index("`payload.bin:1`"), result.index("`dist/part-0.js:1`"))
+        for index in range(12):
+            self.assertIn(f"`dist/part-{index}.js:1`", result)
+        self.assertNotIn("- and ", result)
+        self.assertNotIn("**Verdict: benign**", result)
+        self.assertIn("**Merge**", result)
+        self.assertIs(written["complete"], False)
 
     def test_ioc_hit_stays_malicious_when_agent_says_benign(self) -> None:
         written = self._run(
