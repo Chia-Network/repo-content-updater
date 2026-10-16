@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 
@@ -109,6 +110,10 @@ class ReleaseResolutionTest(UpstreamScanCase):
             "pkg/ff.js": b"SPLIT" + b"\f" + b"MARKER\n",
             "pkg/ls.js": "SPLIT\u2028MARKER\n".encode(),
             "pkg/nel.js": b"SPLIT" + b"\xc2\x85" + b"MARKER\n",
+            "pkg/fs.js": b"SPLIT" + b"\x1c" + b"MARKER\n",
+            "pkg/gs.js": b"SPLIT" + b"\x1d" + b"MARKER\n",
+            "pkg/rs.js": b"SPLIT" + b"\x1e" + b"MARKER\n",
+            "pkg/rawnel.js": b"SPLIT" + b"\x85" + b"MARKER\n",
         }
         with self._workspace() as (work, repo):
             _commit_file(repo, "pkg/index.js", "module.exports = 1;\n", "base")
@@ -196,6 +201,8 @@ class ReleaseResolutionTest(UpstreamScanCase):
             )
             _assert_not_benign(self, report)
             self.assertEqual(report["not_scanned_reason"], "incomplete_coverage")
+            self.assertEqual(report["filtered_count"], 0, msg=report)
+            self.assertNotIn("Blobs not searched", report["_summary"])
             self.assertTrue(
                 any(err == "release diff failed" for err in report["errors"]),
                 msg=report["errors"],
@@ -223,3 +230,62 @@ class ReleaseResolutionTest(UpstreamScanCase):
                 any("release diff path not scored" in err for err in report["errors"]),
                 msg=report["errors"],
             )
+
+    def test_joined_allowlist_sees_only_the_match(self) -> None:
+        with self._workspace() as (work, repo):
+            _commit_file(repo, "pkg/index.js", "module.exports = 1;\n", "base")
+            _git(repo, "tag", "v1.0.0")
+            path = repo / "pkg" / "registry.js"
+            path.write_bytes(b"allowme\naxios@1.14.\n1\n")
+            _git(repo, "add", "pkg/registry.js")
+            _git(repo, "commit", "-m", "split specifier")
+            _git(repo, "tag", "v1.1.0")
+            report = self._scan(
+                work,
+                repo,
+                FROM_VERSION="1.0.0",
+                TO_VERSION="1.1.0",
+                MALWARE_IOC_PATTERNS=json.dumps([r"axios@1\.14\.1"]),
+                MALWARE_IOC_ALLOWLIST=json.dumps(["allowme"]),
+            )
+            self.assertEqual(report["_returncode"], 0, msg=report["_stderr"])
+            self.assertEqual(report["status"], "warn", msg=report)
+            hits = [
+                item
+                for item in report["findings"]["ioc"]
+                if item["file"] == "pkg/registry.js" and item["match"] == "axios@1.14.1"
+            ]
+            self.assertTrue(hits, msg=report["findings"]["ioc"])
+
+    def test_capital_v_does_not_select_the_lowercase_tag(self) -> None:
+        with self._workspace() as (work, repo):
+            _commit_file(repo, "pkg/index.js", "module.exports = 1;\n", "from")
+            _git(repo, "tag", "v1.0.0")
+            _commit_file(
+                repo,
+                "pkg/index.js",
+                "const marker = 'CASE_TAG_MARKER';\n",
+                "lower",
+            )
+            _git(repo, "tag", "v1.1.0")
+            report = self._scan(
+                work,
+                repo,
+                FROM_VERSION="1.0.0",
+                TO_VERSION="V1.1.0",
+                MALWARE_IOC_PATTERNS=json.dumps(["CASE_TAG_MARKER"]),
+            )
+            _assert_not_benign(self, report)
+            self.assertEqual(report["not_scanned_reason"], "tag_spellings_disagree")
+            self.assertEqual(report["resolved_to"], "")
+            self.assertEqual(report["findings"]["ioc"], [])
+
+    def test_empty_from_version_is_not_conclusive(self) -> None:
+        with self._workspace() as (work, repo):
+            _commit_file(repo, "pkg/index.js", "module.exports = 1;\n", "release")
+            _git(repo, "tag", "v1.1.0")
+            report = self._scan(work, repo, FROM_VERSION="", TO_VERSION="1.1.0")
+            _assert_not_benign(self, report)
+            self.assertEqual(report["not_scanned_reason"], "incomplete_coverage")
+            self.assertEqual(report["filtered_count"], 0, msg=report)
+            self.assertNotIn("Blobs not searched", report["_summary"])

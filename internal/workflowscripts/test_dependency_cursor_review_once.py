@@ -112,10 +112,7 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
         self.assertIn(
             "needs.dependency-review-scan.outputs.status != 'clean'", fail_check[1]
         )
-        self.assertIn(
-            "needs.dependency-review-scan.outputs.already_reviewed != 'true'",
-            fail_check[1],
-        )
+        self.assertNotIn("already_reviewed", fail_check[1])
         self.assertIn("exit 1", fail_check[1])
         self.assertNotIn("warn_only", fail_check[1])
         self.assertNotIn("MALWARE_WARN_ONLY", fail_check[1])
