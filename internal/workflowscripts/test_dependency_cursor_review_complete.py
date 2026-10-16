@@ -113,7 +113,7 @@ class CombineCompleteTest(unittest.TestCase):
         )
         self.assertIs(written["complete"], True)
 
-    def test_not_scanned_report_forces_inconclusive_over_benign_line(self) -> None:
+    def test_not_scanned_without_findings_stays_blocking(self) -> None:
         written = self._run(
             '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs.\\n\\n**Verdict: benign**"}',
             '{"result": "compat ok"}',
@@ -123,12 +123,13 @@ class CombineCompleteTest(unittest.TestCase):
                 "verdict_token_in_tree": False,
             },
         )
-        self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
+        self.assertIn("**Verdict: malicious**", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertNotIn("No IOCs.", written["result"])
         self.assertNotIn("compat ok", written["result"])
-        self.assertIn("Compatibility analysis withheld", written["result"])
-        self.assertIs(written["complete"], False)
+        self.assertIn("Compatibility recommendation withheld", written["result"])
+        self.assertNotIn("needs human review", written["result"])
+        self.assertIs(written["complete"], True)
         self.assertNotIn("**Verdict: benign**", json.dumps(written["malware_review"]))
 
     def test_findings_drop_agent_benign_verdict(self) -> None:
@@ -139,13 +140,19 @@ class CombineCompleteTest(unittest.TestCase):
                 "status": "warn",
                 "scan_conclusive": True,
                 "verdict_token_in_tree": False,
-                "findings": {"ioc": [{"file": "pkg/index.js"}]},
+                "findings": {
+                    "ioc": [{"file": "pkg/index.js"}],
+                    "unicode": [],
+                    "confusable": [],
+                    "heuristic": [],
+                },
             },
         )
-        self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
+        self.assertIn("**Verdict: malicious**", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertNotIn("compat essay", written["result"])
-        self.assertIs(written["complete"], False)
+        self.assertNotIn("needs human review", written["result"])
+        self.assertIs(written["complete"], True)
 
     def test_warn_with_empty_findings_blocks_agent(self) -> None:
         written = self._run(
@@ -158,8 +165,199 @@ class CombineCompleteTest(unittest.TestCase):
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
             },
         )
+        self.assertIn("**Verdict: malicious**", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
-        self.assertIs(written["complete"], False)
+        self.assertNotIn("needs human review", written["result"])
+        self.assertIs(written["complete"], True)
+
+    def test_buried_malicious_line_is_not_published_as_benign(self) -> None:
+        written = self._run(
+            '{"result": "Looks fine.\\nMALWARE_REVIEW_VERDICT: malicious\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nShip it.\\n"}',
+        )
+        self.assertIn("**Verdict: malicious**", written["result"])
+        self.assertNotIn("**Verdict: benign**", written["result"])
+        self.assertNotIn("**Merge**", written["result"])
+        self.assertIn("Compatibility recommendation withheld", written["result"])
+
+    def test_bundle_generic_hits_keep_agent_verdict_and_merge_call(self) -> None:
+        hits = [
+            {
+                "kind": "shell_process_spawn",
+                "file": "lib/entry-points.js",
+                "line": str(index),
+                "match": "child_process",
+            }
+            for index in range(1, 21)
+        ]
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nCompiled action bundle only.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nExisting call sites still typecheck.\\n"}',
+            report={
+                "status": "warn",
+                "scan_conclusive": True,
+                "verdict_token_in_tree": False,
+                "action_entry_points": ["lib/entry-points.js"],
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": hits},
+            },
+        )
+        self.assertIn("**Verdict: benign**", written["result"])
+        self.assertIn("**Merge**", written["result"])
+        self.assertIn("Existing call sites still typecheck.", written["result"])
+        self.assertNotIn("needs human review", written["result"])
+        self.assertIs(written["complete"], True)
+
+    def test_ioc_hit_stays_malicious_when_agent_says_benign(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nLooks fine.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nAPI unchanged.\\n"}',
+            report={
+                "status": "warn",
+                "scan_conclusive": True,
+                "verdict_token_in_tree": False,
+                "findings": {
+                    "ioc": [
+                        {
+                            "kind": "ioc_match",
+                            "file": "pkg/index.js",
+                            "line": "4",
+                            "match": "known-bad.example",
+                        }
+                    ],
+                    "unicode": [],
+                    "confusable": [],
+                    "heuristic": [],
+                },
+            },
+        )
+        self.assertIn("**Verdict: malicious**", written["result"])
+        self.assertIn("`pkg/index.js:4`", written["result"])
+        self.assertNotIn("**Verdict: benign**", written["result"])
+        self.assertNotIn("Looks fine.", written["result"])
+        self.assertNotIn("**Merge**", written["result"])
+        self.assertNotIn("API unchanged.", written["result"])
+        self.assertIn("Compatibility recommendation withheld", written["result"])
+        self.assertNotIn("needs human review", written["result"])
+
+    def test_unicode_trick_stays_blocking_when_agent_says_benign(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nIgnore the controls.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Don\'t merge\\n\\nBehavior changed.\\n"}',
+            report={
+                "status": "warn",
+                "scan_conclusive": True,
+                "verdict_token_in_tree": False,
+                "findings": {
+                    "ioc": [],
+                    "unicode": [
+                        {
+                            "kind": "unicode",
+                            "file": "pkg/index.js",
+                            "line": "9",
+                            "match": "bidi-override",
+                        }
+                    ],
+                    "confusable": [],
+                    "heuristic": [],
+                },
+            },
+        )
+        self.assertIn("**Verdict: suspicious**", written["result"])
+        self.assertIn("`pkg/index.js:9`", written["result"])
+        self.assertIn("bidi-override", written["result"])
+        self.assertNotIn("**Verdict: benign**", written["result"])
+        self.assertNotIn("Ignore the controls.", written["result"])
+        self.assertIn("**Don't merge**", written["result"])
+        self.assertIn("Behavior changed.", written["result"])
+        self.assertNotIn("needs human review", written["result"])
+
+    def test_scanner_that_did_not_run_states_that_and_still_calls_compatibility(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nNothing to see.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nCall sites are unchanged.\\n"}',
+            report={
+                "status": "not_scanned",
+                "scan_conclusive": False,
+                "verdict_token_in_tree": False,
+                "not_scanned_reason": "scanner_tools_missing",
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            },
+        )
+        self.assertIn("**Scan could not run.**", written["result"])
+        self.assertIn("scanner_tools_missing", written["result"])
+        self.assertNotIn("**Verdict: benign**", written["result"])
+        self.assertNotIn("Nothing to see.", written["result"])
+        self.assertNotIn("needs human review", written["result"])
+        self.assertIn("**Merge**", written["result"])
+        self.assertIn("Call sites are unchanged.", written["result"])
+
+    def test_agent_cannot_clear_unicode_by_escalating_only(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: malicious\\n\\nHidden payload.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nUnrelated.\\n"}',
+            report={
+                "status": "warn",
+                "scan_conclusive": True,
+                "verdict_token_in_tree": False,
+                "findings": {
+                    "ioc": [],
+                    "unicode": [
+                        {"kind": "unicode", "file": "pkg/index.js", "line": 3, "match": "zero-width"}
+                    ],
+                    "confusable": [],
+                    "heuristic": [],
+                },
+            },
+        )
+        self.assertIn("**Verdict: malicious**", written["result"])
+        self.assertIn("`pkg/index.js:3`", written["result"])
+        self.assertNotIn("**Merge**", written["result"])
+        self.assertIn("Compatibility recommendation withheld", written["result"])
+
+    def test_malformed_unicode_list_is_blocking(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nClear.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nFine.\\n"}',
+            report={
+                "status": "clean",
+                "scan_conclusive": True,
+                "verdict_token_in_tree": False,
+                "findings": {"ioc": [], "unicode": "present", "confusable": [], "heuristic": []},
+            },
+        )
+        self.assertIn("**Verdict: malicious**", written["result"])
+        self.assertNotIn("**Verdict: benign**", written["result"])
+        self.assertNotIn("**Merge**", written["result"])
+
+    def test_action_entry_point_hit_is_context_and_other_paths_are_not(self) -> None:
+        finding = {
+            "kind": "minified_payload_indicator",
+            "file": "src/main.js",
+            "line": "2",
+            "match": "long-line",
+        }
+        report = {
+            "status": "warn",
+            "scan_conclusive": True,
+            "verdict_token_in_tree": False,
+            "findings": {"ioc": [], "unicode": [], "confusable": [], "heuristic": [finding]},
+        }
+        benign = '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nEntry point only.\\n"}'
+        compat = '{"result": "COMPATIBILITY_RECOMMENDATION: Don\'t merge\\n\\nNeeds a changelog.\\n"}'
+        blocked = self._run(benign, compat, report=report)
+        self.assertIn("**Verdict: suspicious**", blocked["result"])
+        self.assertIn("`src/main.js:2`", blocked["result"])
+        self.assertNotIn("Entry point only.", blocked["result"])
+        self.assertIn("**Don't merge**", blocked["result"])
+        self.assertIn("Needs a changelog.", blocked["result"])
+        cleared = self._run(
+            benign,
+            compat,
+            report={**report, "action_entry_points": ["src/main.js"]},
+        )
+        self.assertIn("**Verdict: benign**", cleared["result"])
+        self.assertIn("Entry point only.", cleared["result"])
+        self.assertIn("**Don't merge**", cleared["result"])
 
 
 if __name__ == "__main__":

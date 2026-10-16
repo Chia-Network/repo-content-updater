@@ -739,7 +739,7 @@ test('skip marker requires both agent files and a genuine combined review', asyn
   });
 });
 
-test('blocked scan withholds verdict banners and posts the legacy marker', async () => {
+test('unscoped scan drops the agent banner and posts the composed verdict', async () => {
   const marker = `<!-- cursor-dependabot-review patch-id:${'d'.repeat(40)} -->`;
   await withWorkspace(async (directory) => {
     const report = Buffer.from('{"status":"not_scanned","scan_conclusive":false,"verdict_token_in_tree":false}\n');
@@ -766,7 +766,9 @@ test('blocked scan withholds verdict banners and posts the legacy marker', async
       },
     });
     const written = JSON.parse(fs.readFileSync(combined, 'utf8'));
+    assert.equal(written.complete, true);
     assert.equal(JSON.stringify(written.malware_review).includes('**Verdict: benign**'), false);
+    assert.equal(written.result.includes('**Verdict: malicious**'), true);
     process.env.REVIEW_MARKER = marker;
     process.env.PR_NUMBER = '42';
     const github = fakeGithub({ commentsFor: () => [] });
@@ -777,8 +779,10 @@ test('blocked scan withholds verdict banners and posts the legacy marker', async
     });
     const created = github.calls.find((call) => call[0] === 'createComment');
     const body = created[1].body;
-    assert.equal(body.split('\n')[0], context.LEGACY_REVIEW_MARKER);
+    assert.equal(body.split('\n')[0], marker);
     assert.equal(body.includes('**Verdict: benign**'), false);
+    assert.equal(body.includes('**Verdict: malicious**'), true);
+    assert.equal(body.includes('needs human review'), false);
   });
 });
 
