@@ -54,6 +54,8 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         self.assertNotIn("cp --remove-destination", workflow)
         self.assertNotIn("O_NOFOLLOW", (_SCRIPTS / "dependency_cursor_review_combine_outputs.py").read_text())
         prompts = (_SCRIPTS / "dependency_cursor_review_prompts.py").read_text(encoding="utf-8")
+        self.assertNotIn("sys.path.insert", prompts)
+        self.assertIn("bootstrap_module_from_scripts_dir", prompts)
         self.assertIn("refs/dcr/from", prompts)
         self.assertIn("refs/dcr/to", prompts)
         self.assertIn('_layout_tag_line("from tag", token)', prompts)

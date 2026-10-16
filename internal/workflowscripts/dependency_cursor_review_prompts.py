@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import runpy
 import secrets
-import sys
 from pathlib import Path
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
@@ -34,12 +34,16 @@ def _layout_tag_line(label: str, token: str) -> str:
 
 
 def _agent_fields(records: list[dict]) -> dict[str, str]:
-    scripts = str(Path(__file__).resolve().parent)
-    if scripts not in sys.path:
-        sys.path.insert(0, scripts)
-    from dependency_update_coverage import agent_fields
-
-    return agent_fields(records)
+    """Load agent_fields through the scripts-dir spine. Do not put that directory on sys.path."""
+    script_dir = Path(__file__).resolve().parent
+    scrub_ns = runpy.run_path(str(script_dir / "scripts_dir_path_scrub.py"))
+    scrub = scrub_ns["load_scrub_from_disk_under_dash_i"](script_dir)
+    module = scrub.bootstrap_module_from_scripts_dir(
+        script_dir,
+        "dependency_update_coverage.py",
+        "dependency_update_coverage",
+    )
+    return module.agent_fields(records)
 
 
 def _prompt_fields() -> dict[str, str]:
