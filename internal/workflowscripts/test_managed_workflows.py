@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -14,6 +15,9 @@ _DEPENDENCY_CURSOR_REVIEW = _REPO_ROOT / "templates" / "dependency-cursor-review
 _TRUSTED_GIT_CHECKOUT_ACTION = (
     _REPO_ROOT / "templates" / "trusted-git-path-checkout-action.yml"
 )
+_SLOT = "ab" * 16
+_OTHER_SLOT = "cd" * 16
+_LATER_SLOT = "ef" * 16
 
 
 class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
@@ -155,7 +159,24 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("fetch-depth: 0", agent)
         self.assertNotIn("--shallow-exclude", agent)
         self.assertNotIn("merge-base --is-ancestor", agent)
-        self.assertIn('fetch --no-tags --depth=1 origin "${RESOLVED_FROM}"', agent)
+        self.assertNotIn("fetch --tags", agent)
+        self.assertIn('fetch --no-tags --depth=1 origin "$sha"', agent)
+        self.assertIn('refs/tags/${name}:refs/tags/${name}', agent)
+        self.assertIn("refs/dcr/from", agent)
+        self.assertIn("refs/dcr/to", agent)
+        self.assertIn('refs/tags/${name}^{commit}', agent)
+        self.assertIn('update-ref -d "refs/tags/${name}"', agent)
+        self.assertEqual(agent.count("tag_name_ok()"), 1)
+        self.assertNotIn("*/*/*", agent)
+        self.assertIn('update-ref -d "refs/tags/${name}" || return 1', agent)
+        self.assertIn('file="dcr-scan-input/cursor_prompt_compatibility.txt"', agent)
+        fetch = agent.split("- name: Fetch upstream commits and version tags\n", 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertNotIn("|| exit 1", fetch)
+        self.assertNotIn("dcr-slot-[0-9a-f]", fetch)
+        scan_sh = (_REPO_ROOT / "internal/workflowscripts/upstream_malware_scan.sh").read_text(encoding="utf-8")
+        self.assertNotIn("tag_name_ok", scan_sh)
         self.assertNotIn("dependency_cursor_review_combine_outputs.py", agent)
         self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
         self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
@@ -200,11 +221,8 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn("function selectPostedMarker", post_js)
 
     def test_tag_range_fetch_uses_peeled_shas(self) -> None:
-        """Peeled tag SHAs and a non-ancestor pair both diff after one depth-1 fetch."""
-        workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
-        agent = self._job(workflow, "dependency-review-agent")
-        block = agent.split("- name: Fetch upstream from commit\n", 1)[1].split("\n      - name:", 1)[0]
-        script = textwrap.dedent(block.split("run: |\n", 1)[1])
+        """Peeled commits and their version tags are inspectable after depth-1 fetches."""
+        script = self._fetch_script()
         with tempfile.TemporaryDirectory() as tmp:
             origin = Path(tmp) / "origin"
             self._git(origin, "init", "-b", "main")
@@ -215,10 +233,21 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
                 self._git(origin, "commit", "-m", name)
             self._git(origin, "tag", "-a", "v1.0.0", "-m", "v1.0.0", "HEAD~2")
             self._git(origin, "tag", "-a", "v1.2.0", "-m", "v1.2.0", "HEAD")
+            self._git(origin, "tag", "-a", "extra", "-m", "extra", "HEAD")
             resolved_from = self._git(origin, "rev-parse", "v1.0.0^{commit}")
             resolved_to = self._git(origin, "rev-parse", "v1.2.0^{commit}")
             self.assertNotEqual(resolved_from, self._git(origin, "rev-parse", "v1.0.0"))
-            self._assert_tree_diff(script, origin, resolved_from, resolved_to, "-released", "+head")
+            self._assert_tree_diff(
+                script,
+                origin,
+                resolved_from,
+                resolved_to,
+                "-released",
+                "+head",
+                from_tag="v1.0.0",
+                to_tag="v1.2.0",
+                from_blob="released",
+            )
 
             self._git(origin, "checkout", "--orphan", "rewritten")
             self._git(origin, "rm", "-rf", ".")
@@ -235,7 +264,15 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
                 text=True,
             )
             self.assertNotEqual(ancestry.returncode, 0)
-            self._assert_tree_diff(script, origin, orphan, head, "-orphan", "+head")
+            self._assert_tree_diff(
+                script,
+                origin,
+                orphan,
+                head,
+                "-orphan",
+                "+head",
+                from_blob="orphan",
+            )
 
     def _assert_tree_diff(
         self,
@@ -245,6 +282,9 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         resolved_to: str,
         removed: str,
         added: str,
+        from_blob: str,
+        from_tag: str = "",
+        to_tag: str = "",
     ) -> None:
         work = origin.parent / f"work-{resolved_from[:8]}"
         upstream = work / ".upstream-dependency"
@@ -252,20 +292,275 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self._git(upstream, "remote", "add", "origin", str(origin))
         self._git(upstream, "fetch", "--depth=1", "origin", resolved_to)
         self._git(upstream, "checkout", "--detach", "FETCH_HEAD")
+        self._plant_prompts(work)
+        proc = self._run_fetch(
+            script,
+            work,
+            RESOLVED_FROM=resolved_from,
+            RESOLVED_TO=resolved_to,
+            FROM_TAG=from_tag,
+            TO_TAG=to_tag,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+        self.assertEqual(self._git(upstream, "rev-parse", "HEAD"), resolved_to)
+        self.assertEqual(self._git(upstream, "rev-parse", "refs/dcr/from"), resolved_from)
+        self.assertEqual(self._git(upstream, "rev-parse", "refs/dcr/to"), resolved_to)
+        diff = self._git(upstream, "diff", resolved_from, resolved_to)
+        self.assertIn(removed, diff)
+        self.assertIn(added, diff)
+        self.assertEqual(self._git(upstream, "show", f"{resolved_from}:pkg.txt"), from_blob)
+        to_blob = self._git(upstream, "show", f"{resolved_to}:pkg.txt")
+        expected_tags = {tag for tag in (from_tag, to_tag) if tag}
+        listed = self._git(upstream, "tag", "--list")
+        self.assertEqual(set(listed.splitlines()) if listed else set(), expected_tags)
+        for tag, sha, blob in (
+            (from_tag, resolved_from, from_blob),
+            (to_tag, resolved_to, to_blob),
+        ):
+            if not tag:
+                continue
+            self.assertEqual(self._git(upstream, "cat-file", "-t", tag), "tag")
+            self.assertEqual(self._git(upstream, "rev-parse", f"{tag}^{{commit}}"), sha)
+            self.assertEqual(self._git(upstream, "show", f"{tag}:pkg.txt"), blob)
+        self._assert_prompt_tags(work, from_tag, to_tag)
+        if from_tag:
+            log = self._git(upstream, "log", "--oneline", f"{resolved_from}..{resolved_to}")
+            self.assertNotIn("middle", log)
+        checkout = subprocess.run(
+            ["bash", str(_REPO_ROOT / "internal/workflowscripts/upstream_release_checkout.sh")],
+            cwd=work,
+            env={**self._git_env(), "RESOLVED_TO": resolved_to},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(checkout.returncode, 0, msg=checkout.stderr or checkout.stdout)
+        self.assertEqual(self._git(upstream, "rev-parse", "HEAD"), resolved_to)
+        self.assertEqual(self._git(upstream, "rev-parse", "refs/dcr/from"), resolved_from)
+        if not from_tag:
+            return
+        for bad in ("not a sha", "abcdef", "a" * 65):
+            refused = self._run_fetch(
+                script,
+                work,
+                RESOLVED_FROM=bad,
+                RESOLVED_TO=resolved_to,
+                FROM_TAG=from_tag,
+                TO_TAG=to_tag,
+            )
+            self.assertNotEqual(refused.returncode, 0, msg=bad)
+            self.assertIn("Refusing non-SHA ref.", refused.stderr)
+        for bad in ("foo@{bar", "v1..2", "-v1", ".hidden"):
+            refused = self._run_fetch(
+                script,
+                work,
+                RESOLVED_FROM=resolved_from,
+                RESOLVED_TO=resolved_to,
+                FROM_TAG=bad,
+                TO_TAG=to_tag,
+            )
+            self.assertNotEqual(refused.returncode, 0, msg=bad)
+            self.assertIn("Refusing tag name.", refused.stderr)
+        self.assertEqual(self._git(upstream, "rev-parse", "refs/dcr/from"), resolved_from)
+
+    def test_moved_tag_is_deleted_and_left_out_of_the_prompt(self) -> None:
+        """A tag that no longer peels to the scanned commit is not shown to the agent."""
+        script = self._fetch_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            origin = Path(tmp) / "origin"
+            self._git(origin, "init", "-b", "main")
+            self._git_config(origin)
+            (origin / "pkg.txt").write_text("released\n", encoding="utf-8")
+            self._git(origin, "add", "pkg.txt")
+            self._git(origin, "commit", "-m", "released")
+            self._git(origin, "tag", "-a", "v1.0.0", "-m", "v1.0.0")
+            self._git(origin, "tag", "-a", "moved", "-m", "moved")
+            released = self._git(origin, "rev-parse", "HEAD")
+            (origin / "pkg.txt").write_text("head\n", encoding="utf-8")
+            self._git(origin, "add", "pkg.txt")
+            self._git(origin, "commit", "-m", "head")
+            self._git(origin, "tag", "-a", "v1.2.0", "-m", "v1.2.0")
+            head = self._git(origin, "rev-parse", "HEAD")
+            work = origin.parent / "work-moved"
+            upstream = work / ".upstream-dependency"
+            self._git(upstream, "init", "-b", "main")
+            self._git(upstream, "remote", "add", "origin", str(origin))
+            self._git(upstream, "fetch", "--depth=1", "origin", head)
+            self._git(upstream, "checkout", "--detach", "FETCH_HEAD")
+            self._plant_prompts(work)
+            proc = self._run_fetch(
+                script,
+                work,
+                RESOLVED_FROM=released,
+                RESOLVED_TO=head,
+                FROM_TAG="v1.0.0",
+                TO_TAG="moved",
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            self.assertEqual(self._git(upstream, "rev-parse", "refs/tags/v1.0.0^{commit}"), released)
+            self.assertEqual(self._git(upstream, "show", "v1.0.0:pkg.txt"), "released")
+            missing = subprocess.run(
+                ["git", "rev-parse", "--verify", "--end-of-options", "refs/tags/moved"],
+                cwd=upstream,
+                env=self._git_env(),
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(missing.returncode, 0, msg=missing.stdout)
+            self._assert_prompt_tags(work, "v1.0.0", "")
+
+    def test_nested_tag_names_are_fetched(self) -> None:
+        """Tag names with more than one slash are fetched when the peel matches."""
+        script = self._fetch_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            origin = Path(tmp) / "origin"
+            self._git(origin, "init", "-b", "main")
+            self._git_config(origin)
+            for name in ("base", "released", "middle", "head"):
+                (origin / "pkg.txt").write_text(name + "\n", encoding="utf-8")
+                self._git(origin, "add", "pkg.txt")
+                self._git(origin, "commit", "-m", name)
+            self._git(origin, "tag", "-a", "rel/a/b", "-m", "rel/a/b", "HEAD~2")
+            self._git(origin, "tag", "-a", "sdk/go/v1.2.3", "-m", "sdk/go/v1.2.3", "HEAD")
+            resolved_from = self._git(origin, "rev-parse", "rel/a/b^{commit}")
+            resolved_to = self._git(origin, "rev-parse", "sdk/go/v1.2.3^{commit}")
+            self._assert_tree_diff(
+                script,
+                origin,
+                resolved_from,
+                resolved_to,
+                "-released",
+                "+head",
+                from_blob="released",
+                from_tag="rel/a/b",
+                to_tag="sdk/go/v1.2.3",
+            )
+
+    def test_failed_tag_delete_stops_the_step(self) -> None:
+        """A failed tag delete is a step failure and leaves that ref in place."""
+        script = self._fetch_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            origin = Path(tmp) / "origin"
+            self._git(origin, "init", "-b", "main")
+            self._git_config(origin)
+            (origin / "pkg.txt").write_text("released\n", encoding="utf-8")
+            self._git(origin, "add", "pkg.txt")
+            self._git(origin, "commit", "-m", "released")
+            self._git(origin, "tag", "-a", "v1.0.0", "-m", "v1.0.0")
+            self._git(origin, "tag", "-a", "moved", "-m", "moved")
+            released = self._git(origin, "rev-parse", "HEAD")
+            (origin / "pkg.txt").write_text("head\n", encoding="utf-8")
+            self._git(origin, "add", "pkg.txt")
+            self._git(origin, "commit", "-m", "head")
+            head = self._git(origin, "rev-parse", "HEAD")
+            work = origin.parent / "work-delete"
+            upstream = work / ".upstream-dependency"
+            self._git(upstream, "init", "-b", "main")
+            self._git(upstream, "remote", "add", "origin", str(origin))
+            self._git(upstream, "fetch", "--depth=1", "origin", head)
+            self._git(upstream, "checkout", "--detach", "FETCH_HEAD")
+            self._plant_prompts(work)
+            bin_dir = Path(tmp) / "bin"
+            bin_dir.mkdir()
+            real_git = shutil.which("git")
+            self.assertIsNotNone(real_git)
+            wrapper = bin_dir / "git"
+            wrapper.write_text(
+                "#!/bin/sh\n"
+                'if [ "$1" = "-C" ] && [ "$3" = "update-ref" ] && [ "$4" = "-d" ]; then\n'
+                "  echo 'update-ref -d failed' >&2\n"
+                "  exit 1\n"
+                "fi\n"
+                f"exec {real_git} \"$@\"\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            proc = self._run_fetch(
+                script,
+                work,
+                RESOLVED_FROM=released,
+                RESOLVED_TO=head,
+                FROM_TAG="v1.0.0",
+                TO_TAG="moved",
+                PATH=f"{bin_dir}:{os.environ.get('PATH', '')}",
+            )
+            self.assertNotEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            self.assertIn("update-ref -d failed", proc.stderr)
+            self.assertEqual(self._git(upstream, "rev-parse", "refs/tags/moved^{commit}"), released)
+            missing = subprocess.run(
+                ["git", "rev-parse", "--verify", "--end-of-options", "refs/tags/v1.0.0"],
+                cwd=upstream,
+                env=self._git_env(),
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(missing.returncode, 0, msg=missing.stdout)
+            for name in ("cursor_prompt_malware.txt", "cursor_prompt_compatibility.txt"):
+                text = (work / "dcr-scan-input" / name).read_text(encoding="utf-8")
+                self.assertIn(f"- to tag: (none) dcr-slot-{_SLOT}", text)
+                self.assertNotIn("- to tag: moved", text)
+                self.assertNotIn("- from tag: v1.0.0", text)
+
+    def _fetch_script(self) -> str:
+        workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
+        agent = self._job(workflow, "dependency-review-agent")
+        block = agent.split("- name: Fetch upstream commits and version tags\n", 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        return textwrap.dedent(block.split("run: |\n", 1)[1])
+
+    def _plant_prompts(self, work: Path) -> None:
+        dest = work / "dcr-scan-input"
+        dest.mkdir(parents=True, exist_ok=True)
+        notes = (
+            "Release notes:\n"
+            "- from tag: (none)\n"
+            "- to tag: (none)\n"
+            "- keep: yes\n"
+            f"- from tag: (none) dcr-slot-{_OTHER_SLOT}\n"
+            f"- to tag: (none) dcr-slot-{_OTHER_SLOT}\n"
+            "\n"
+            "Repository layout:\n"
+            f"- from tag: (none) dcr-slot-{_SLOT}\n"
+            f"- to tag: (none) dcr-slot-{_SLOT}\n"
+        )
+        trailing = (
+            "\nMalware scan report JSON:\n"
+            f"- from tag: (none) dcr-slot-{_LATER_SLOT}\n"
+            f"- to tag: (none) dcr-slot-{_LATER_SLOT}\n"
+        )
+        (dest / "cursor_prompt_compatibility.txt").write_text(notes, encoding="utf-8")
+        (dest / "cursor_prompt_malware.txt").write_text(notes + trailing, encoding="utf-8")
+
+    def _assert_prompt_tags(self, work: Path, from_tag: str, to_tag: str) -> None:
+        expected = {"from tag": from_tag, "to tag": to_tag}
+        for name in ("cursor_prompt_malware.txt", "cursor_prompt_compatibility.txt"):
+            lines = (work / "dcr-scan-input" / name).read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines.count("- from tag: (none)"), 1)
+            self.assertEqual(lines.count("- to tag: (none)"), 1)
+            self.assertIn("- keep: yes", lines)
+            self.assertIn(f"- from tag: (none) dcr-slot-{_OTHER_SLOT}", lines)
+            self.assertIn(f"- to tag: (none) dcr-slot-{_OTHER_SLOT}", lines)
+            for label, tag in expected.items():
+                if tag:
+                    self.assertIn(f"- {label}: {tag}", lines)
+                    self.assertNotIn(f"- {label}: (none) dcr-slot-{_SLOT}", lines)
+                else:
+                    self.assertIn(f"- {label}: (none) dcr-slot-{_SLOT}", lines)
+            if name == "cursor_prompt_malware.txt":
+                self.assertIn(f"- from tag: (none) dcr-slot-{_LATER_SLOT}", lines)
+                self.assertIn(f"- to tag: (none) dcr-slot-{_LATER_SLOT}", lines)
+
+    def _run_fetch(self, script: str, work: Path, **updates: str) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
-        env.update(GH_TOKEN="x", RESOLVED_FROM=resolved_from)
-        proc = subprocess.run(
+        env.update(GH_TOKEN="x", RESOLVED_FROM="", RESOLVED_TO="", FROM_TAG="", TO_TAG="")
+        env.update(updates)
+        return subprocess.run(
             ["bash", "-c", script],
             cwd=work,
             env=env,
             capture_output=True,
             text=True,
         )
-        self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
-        self.assertEqual(self._git(upstream, "rev-parse", "HEAD"), resolved_to)
-        diff = self._git(upstream, "diff", resolved_from, resolved_to)
-        self.assertIn(removed, diff)
-        self.assertIn(added, diff)
 
     def _git(self, repo: Path, *args: str) -> str:
         repo.mkdir(parents=True, exist_ok=True)

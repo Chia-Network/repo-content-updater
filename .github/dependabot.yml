@@ -38,7 +38,7 @@ updates:
     reviewers: ["emlowe"]
 
   - package-ecosystem: "github-actions"
-    directories: ["/", ".github/actions/*"]
+    directories: ["/", ".github/actions/*", "/templates"]
     schedule:
       interval: "weekly"
       day: "tuesday"
