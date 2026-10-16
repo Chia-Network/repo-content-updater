@@ -126,12 +126,18 @@ async function run({ github, context, core }) {
     core.setFailed(`Target PR #${pr.number} is not opened by an allowed bot. Author: ${pr.user?.login}`);
     return;
   }
+  const baseSha = String(pr.base?.sha || '');
+  if (!/^[0-9a-fA-F]{40}$/.test(baseSha)) {
+    core.setFailed(`Target PR #${pr.number} is missing a base commit.`);
+    return;
+  }
   const patchId = await dependabotPatchId({ github, context, core, pr });
   const reviewed = await reviewedReleaseShas({ github, context, core, pr, patchId });
   core.setOutput('number', String(pr.number));
   core.setOutput('title', pr.title || '');
   core.setOutput('body', pr.body || '');
   core.setOutput('head_sha', pr.head?.sha || '');
+  core.setOutput('base_sha', baseSha);
   core.setOutput('patch_id', patchId);
   core.setOutput('reviewed_shas', reviewed.join(','));
   // The peeled commit is not known yet. The scan job binds the marker afterward.

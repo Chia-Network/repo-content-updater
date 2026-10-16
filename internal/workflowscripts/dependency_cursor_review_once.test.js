@@ -197,6 +197,7 @@ function dependabotPr(title) {
     body: singleBody('abc1234'),
     user: { login: 'dependabot[bot]' },
     head: { sha: 'head' },
+    base: { sha: 'c'.repeat(40) },
   };
 }
 
@@ -670,10 +671,12 @@ test('Renovate and workflow_dispatch still review when a marker exists', async (
       body: 'https://github.com/lodash/lodash',
       user: { login: 'renovate[bot]' },
       head: { sha: 'reno' },
+      base: { sha: 'c'.repeat(40) },
     };
     const reno = await resolve('pull_request', renovate, { commentsFor: () => [botComment(marker)] });
     assert.equal(reno.core.outputs.already_reviewed, 'false');
     assert.equal(reno.core.outputs.review_marker, '');
+    assert.equal(reno.core.outputs.base_sha, 'c'.repeat(40));
     assert.equal(
       reno.github.calls.some((call) => call[0] === 'listComments'),
       false,
@@ -687,6 +690,12 @@ test('Renovate and workflow_dispatch still review when a marker exists', async (
     });
     assert.equal(dispatched.core.outputs.already_reviewed, 'false');
     assert.equal(dispatched.core.outputs.review_marker, '');
+    assert.equal(dispatched.core.outputs.base_sha, 'c'.repeat(40));
+    const missing = dependabotPr('Bump lodash');
+    delete missing.base;
+    const failed = await resolve('workflow_dispatch', missing, { inputs: { pr_number: '42' } });
+    assert.match(failed.core.failed, /base commit/);
+    assert.equal(failed.core.outputs.base_sha, undefined);
     assert.equal(reviewMarkerFromPatchId(dispatched.core.outputs.patch_id, 'a'.repeat(40)), marker);
     assert.equal(
       dispatched.github.calls.some((call) => call[0] === 'listComments'),

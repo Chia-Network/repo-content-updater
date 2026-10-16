@@ -143,7 +143,7 @@ jobs:
         id: malware_scan
         shell: bash
         env:
-          PR_BASE_SHA: ${{`{{ github.event.pull_request.base.sha }}`}}
+          PR_BASE_SHA: ${{`{{ steps.target_pr.outputs.base_sha }}`}}
           VERSION_RANGE_FROM_BODY: ${{`{{ steps.dependabot_context.outputs.version_range_from_body }}`}}
           MALWARE_WARN_ONLY: >-
             {{ .DEPENDABOT_CURSOR_MALWARE_WARN_ONLY }}

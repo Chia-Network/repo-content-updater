@@ -132,7 +132,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             "\n      - name:", 1
         )[0]
         self.assertIn("steps.malware_scan.outputs.resolved_to", checkout_step)
-        self.assertIn("github.event.pull_request.base.sha", scan)
+        self.assertIn("steps.target_pr.outputs.base_sha", scan)
         checkout_sh = (
             _REPO_ROOT / "internal/workflowscripts/upstream_release_checkout.sh"
         ).read_text(encoding="utf-8")
