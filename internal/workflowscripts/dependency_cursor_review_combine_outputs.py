@@ -175,9 +175,7 @@ def main() -> None:
     )
     malware_text = published["malware_text"]
     compatibility_text = published["compatibility_text"]
-    complete = bool(_successful_analysis_text(malware_path)) and bool(
-        _successful_analysis_text(compatibility_path)
-    )
+    complete = bool(_successful_analysis_text(malware_path)) and bool(_successful_analysis_text(compatibility_path))
     malware_review = {"result": malware_text}
     compatibility_review = {"result": compatibility_text}
 
