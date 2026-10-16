@@ -203,6 +203,7 @@ class ReleaseResolutionTest(UpstreamScanCase):
             self.assertEqual(report["not_scanned_reason"], "incomplete_coverage")
             self.assertEqual(report["filtered_count"], 0, msg=report)
             self.assertNotIn("Blobs not searched", report["_summary"])
+            self.assertIn("- Scan error: `release diff failed`", report["_summary"])
             self.assertTrue(
                 any(err == "release diff failed" for err in report["errors"]),
                 msg=report["errors"],
@@ -257,6 +258,38 @@ class ReleaseResolutionTest(UpstreamScanCase):
             ]
             self.assertTrue(hits, msg=report["findings"]["ioc"])
 
+    def test_backslash_continuation_does_not_hide_a_signature(self) -> None:
+        blobs = {
+            "pkg/lf.js": b"axios@1.14.\\\n1\n",
+            "pkg/crlf.js": b"axios@1.14.\\\r\n1\n",
+        }
+        with self._workspace() as (work, repo):
+            _commit_file(repo, "pkg/index.js", "module.exports = 1;\n", "base")
+            _git(repo, "tag", "v1.0.0")
+            for rel, payload in blobs.items():
+                path = repo / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+            _git(repo, "add", *blobs)
+            _git(repo, "commit", "-m", "continued specifiers")
+            _git(repo, "tag", "v1.1.0")
+            report = self._scan(
+                work,
+                repo,
+                FROM_VERSION="1.0.0",
+                TO_VERSION="1.1.0",
+                MALWARE_IOC_PATTERNS=json.dumps([r"axios@1\.14\.1"]),
+            )
+            self.assertEqual(report["_returncode"], 0, msg=report["_stderr"])
+            self.assertEqual(report["status"], "warn", msg=report)
+            for rel in blobs:
+                hits = [
+                    item
+                    for item in report["findings"]["ioc"]
+                    if item["file"] == rel and item["match"] == "axios@1.14.1"
+                ]
+                self.assertTrue(hits, msg=report["findings"]["ioc"])
+
     def test_capital_v_does_not_select_the_lowercase_tag(self) -> None:
         with self._workspace() as (work, repo):
             _commit_file(repo, "pkg/index.js", "module.exports = 1;\n", "from")
@@ -289,3 +322,4 @@ class ReleaseResolutionTest(UpstreamScanCase):
             self.assertEqual(report["not_scanned_reason"], "incomplete_coverage")
             self.assertEqual(report["filtered_count"], 0, msg=report)
             self.assertNotIn("Blobs not searched", report["_summary"])
+            self.assertNotIn("Scan error:", report["_summary"])
