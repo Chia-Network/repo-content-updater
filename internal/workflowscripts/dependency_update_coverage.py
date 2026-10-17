@@ -277,7 +277,6 @@ _REQ_RE = re.compile(
 )
 _YARN_HEADER_RE = re.compile(r'"?(@?[^@"\s]+)@[^:]*:')
 _YARN_VERSION_RE = re.compile(r'^\s+version\s+"([^"]+)"')
-_YARN_CHECKSUM_RE = re.compile(r"^\s+(?:resolved|integrity)\s")
 _OPAQUE_LOCKS = {
     "pnpm-lock.yaml",
     "Cargo.lock",
@@ -409,96 +408,208 @@ def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
     return {name for name in names if old.get(name) != new.get(name)}
 
 
-def _version_tokens(spec: str) -> list[str]:
-    return sorted(part for part in spec.split() if part)
+def _listed_versions(updates: list[dict], *, lower: bool = False) -> dict[str, set[tuple[str, str]]]:
+    found: dict[str, set[tuple[str, str]]] = {}
+    for item in updates:
+        name = str(item.get("packageName") or "").strip()
+        if lower:
+            name = name.lower()
+        if not name:
+            continue
+        pair = (str(item.get("fromVersion") or "").strip(), str(item.get("toVersion") or "").strip())
+        found.setdefault(name, set()).add(pair)
+    return found
 
 
-def _blank_json_checksums(text: str, changed: set[str]) -> str:
+def _reached_listed_version(name: str, old: str, new: str, listed: dict[str, set[tuple[str, str]]]) -> bool:
+    """True when this package moved from its listed version to its listed version."""
+    if not old or not new or old == new:
+        return False
+    return any(old == frm and new == to for frm, to in listed.get(name, ()))
+
+
+def _json_entry_version(parts: dict[str, object]) -> str:
+    lock = parts.get("lock")
+    if isinstance(lock, dict) and lock.get("version"):
+        return str(lock["version"])
+    spec = parts.get("spec")
+    if isinstance(spec, str):
+        return spec
+    if isinstance(spec, dict) and spec.get("version"):
+        return str(spec["version"])
+    return ""
+
+
+def _take_specs(block: object, parts: dict[str, dict[str, object]]) -> None:
+    if not isinstance(block, dict):
+        return
+    for name in list(block):
+        spec = block[name]
+        if isinstance(spec, str) or (isinstance(spec, dict) and spec.get("version")):
+            parts.setdefault(str(name), {})["spec"] = spec
+            del block[name]
+
+
+def _json_parts(text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
     if not text.strip():
-        return text
+        return {}, ""
     try:
         doc = json.loads(text)
     except json.JSONDecodeError:
-        return text
+        return None
     if not isinstance(doc, dict):
-        return text
+        return None
+    parts: dict[str, dict[str, object]] = {}
     for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+        _take_specs(doc.get(section), parts)
         block = doc.get(section)
-        if not isinstance(block, dict):
-            continue
-        for name, spec in block.items():
-            if name in changed and isinstance(spec, dict):
-                spec.pop("integrity", None)
-                spec.pop("resolved", None)
+        if isinstance(block, dict) and not block:
+            doc.pop(section, None)
     packages = doc.get("packages")
     if isinstance(packages, dict):
-        for key, meta in packages.items():
-            if isinstance(key, str) and isinstance(meta, dict) and _direct_lock_name(key) in changed:
-                meta.pop("integrity", None)
-                meta.pop("resolved", None)
-    return json.dumps(doc, sort_keys=True, separators=(",", ":"))
+        root = packages.get("")
+        if isinstance(root, dict):
+            for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+                _take_specs(root.get(section), parts)
+                block = root.get(section)
+                if isinstance(block, dict) and not block:
+                    root.pop(section, None)
+        for key in list(packages):
+            if not isinstance(key, str):
+                continue
+            name = _direct_lock_name(key)
+            meta = packages.get(key)
+            if not name or not isinstance(meta, dict):
+                continue
+            parts.setdefault(name, {})["lock"] = meta
+            del packages[key]
+        if not packages:
+            doc.pop("packages", None)
+    entries = {
+        name: (_json_entry_version(blob), json.dumps(blob, sort_keys=True, separators=(",", ":")))
+        for name, blob in parts.items()
+    }
+    return entries, json.dumps(doc, sort_keys=True, separators=(",", ":"))
 
 
-def _blank_go_sum_hashes(text: str, changed: set[str]) -> str:
-    lines: list[str] = []
+def _go_mod_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
+    entries: dict[str, tuple[str, str]] = {}
+    residue: list[str] = []
     for line in text.splitlines(keepends=True):
-        body = line.rstrip("\r\n")
-        ending = line[len(body) :]
+        code = line.split("//", 1)[0]
+        match = _GO_MOD_RE.match(code)
+        if match and not code.strip().startswith("replace"):
+            entries[match.group(1)] = (match.group(2), code.strip())
+            continue
+        residue.append(line)
+    return entries, "".join(residue)
+
+
+def _go_sum_version(tokens: set[str]) -> str:
+    primaries = sorted({token.split("/go.mod", 1)[0] for token in tokens})
+    return primaries[0] if len(primaries) == 1 else " ".join(primaries)
+
+
+def _go_sum_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
+    grouped: dict[str, list[str]] = {}
+    versions: dict[str, set[str]] = {}
+    residue: list[str] = []
+    for line in text.splitlines(keepends=True):
+        body = line.strip()
         match = _GO_SUM_RE.match(body)
-        if match and match.group(1) in changed:
-            lines.append(f"{match.group(1)} {match.group(2)}{ending}")
-        else:
-            lines.append(line)
-    return "".join(lines)
+        if not body or not match:
+            residue.append(line)
+            continue
+        name, version = match.group(1), match.group(2)
+        grouped.setdefault(name, []).append(body)
+        versions.setdefault(name, set()).add(version)
+    entries = {name: (_go_sum_version(versions[name]), "\n".join(sorted(grouped[name]))) for name in grouped}
+    return entries, "".join(residue)
 
 
-def _blank_yarn_checksums(text: str, changed: set[str]) -> str:
-    lines: list[str] = []
-    names: list[str] = []
+def _req_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
+    entries: dict[str, tuple[str, str]] = {}
+    residue: list[str] = []
     for line in text.splitlines(keepends=True):
-        body = line.rstrip("\r\n")
-        if body and not body.startswith((" ", "\t")):
-            names = _YARN_HEADER_RE.findall(body)
-            lines.append(line)
+        match = _REQ_RE.match(line)
+        if match:
+            entries[match.group(1).lower()] = (match.group(2), line.strip())
             continue
-        if any(name in changed for name in names) and _YARN_CHECKSUM_RE.match(body):
-            continue
-        lines.append(line)
-    return "".join(lines)
+        residue.append(line)
+    return entries, "".join(residue)
 
 
-def _blank_changed_checksums(kind: str, text: str, changed: set[str]) -> str:
-    """Drop checksums that belong to a package whose parsed version changed."""
+def _yarn_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
+    entries: dict[str, tuple[str, str]] = {}
+    residue: list[str] = []
+    names: list[str] = []
+    block: list[str] = []
+    version = ""
+
+    def flush() -> None:
+        nonlocal names, block, version
+        if names:
+            payload = "\n".join(block)
+            for name in names:
+                entries[name] = (version, payload)
+        elif block:
+            residue.append("\n".join(block) + "\n")
+        names, block, version = [], [], ""
+
+    for raw in text.splitlines():
+        if raw and not raw.startswith((" ", "\t")):
+            flush()
+            names = _YARN_HEADER_RE.findall(raw)
+            block = [raw]
+            version = ""
+            continue
+        block.append(raw)
+        match = _YARN_VERSION_RE.match(raw)
+        if match:
+            version = match.group(1)
+    flush()
+    return entries, "".join(residue)
+
+
+def _split_entries(kind: str, text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
     if kind == "json":
-        return _blank_json_checksums(text, changed)
+        return _json_parts(text)
+    if kind == "go.mod":
+        return _go_mod_parts(text)
     if kind == "go.sum":
-        return _blank_go_sum_hashes(text, changed)
+        return _go_sum_parts(text)
+    if kind == "requirements":
+        return _req_parts(text)
     if kind == "yarn":
-        return _blank_yarn_checksums(text, changed)
-    return text
+        return _yarn_parts(text)
+    return None
 
 
-def _version_strings_explain(kind: str, before: str, after: str) -> bool:
-    """True when listed version edits, including their own checksums, explain the diff."""
-    old = _versions_for(kind, before)
-    new = _versions_for(kind, after)
-    if old is None or new is None:
+def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) -> bool:
+    """True when every changed entry moved to its listed version.
+
+    Checksums on that entry are part of the change. A same-version entry,
+    an unlisted package, a replace line, or any other residue is not.
+    """
+    old_split = _split_entries(kind, before)
+    new_split = _split_entries(kind, after)
+    if old_split is None or new_split is None:
         return False
-    changed = {name for name in set(old) | set(new) if old.get(name) != new.get(name)}
-    pairs: list[tuple[str, str]] = []
-    for name in changed:
-        old_tokens = _version_tokens(old.get(name) or "")
-        new_tokens = _version_tokens(new.get(name) or "")
-        if len(old_tokens) != len(new_tokens):
+    old_entries, old_residue = old_split
+    new_entries, new_residue = new_split
+    if old_residue != new_residue:
+        return False
+    listed = _listed_versions(updates, lower=kind == "requirements")
+    for name in set(old_entries) | set(new_entries):
+        old = old_entries.get(name)
+        new = new_entries.get(name)
+        if old == new:
+            continue
+        old_version = "" if old is None else old[0]
+        new_version = "" if new is None else new[0]
+        if not _reached_listed_version(name, old_version, new_version, listed):
             return False
-        pairs.extend(zip(old_tokens, new_tokens, strict=True))
-    rewritten = _blank_changed_checksums(kind, before, changed)
-    target = _blank_changed_checksums(kind, after, changed)
-    for old_token, new_token in sorted(pairs, key=lambda pair: len(pair[0]), reverse=True):
-        if old_token not in rewritten:
-            return False
-        rewritten = rewritten.replace(old_token, new_token)
-    return rewritten == target
+    return True
 
 
 def _git_text(rev: str, path: str) -> str:
@@ -559,8 +670,8 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
     """Direct manifest and lockfile bumps missing from the parsed list.
 
     An unreadable base ref, when one was named, is itself unresolved.
-    A checksum, replace line, or nested entry outside a listed version change
-    stays unresolved under the path.
+    An entry is explained only when its package moved to the listed version.
+    Anything else in the file stays unresolved under the path.
     """
     base = _base_commit()
     if base is None:
@@ -585,8 +696,8 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
         before = _git_text(base, path)
         after = _git_text("HEAD", path)
         names = _changed_names(kind, before, after)
-        version_only = names is not None and _version_strings_explain(kind, before, after)
-        if names is None or (before != after and names <= listed and not version_only):
+        explained = names is not None and _entries_explain(kind, before, after, updates)
+        if names is None or (before != after and names <= listed and not explained):
             labels = [path]
         else:
             labels = sorted(names)

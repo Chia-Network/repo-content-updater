@@ -49,6 +49,41 @@ def _commit(repo: Path, rel: str, content: str, message: str) -> None:
     _git(repo, "commit", "-m", message)
 
 
+def _run_listed_scan(base: dict[str, str], head: dict[str, str], updates: list[dict]) -> dict:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _git(root, "init", "-b", "main")
+        _git(root, "config", "user.email", "coverage-test@example.com")
+        _git(root, "config", "user.name", "coverage-test")
+        for name, content in base.items():
+            _commit(root, name, content, f"base {name}")
+        _git(root, "checkout", "-b", "pr")
+        for name, content in head.items():
+            _commit(root, name, content, f"head {name}")
+        (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
+        previous = os.getcwd()
+        saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT")}
+        os.chdir(root)
+        os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
+        os.environ.pop("GITHUB_BASE_REF", None)
+        os.environ["GITHUB_OUTPUT"] = str(root / "github_output.txt")
+
+        def fake_scan(update: dict, *_args: object, **_kwargs: object) -> dict:
+            return _clean(str(update.get("packageName") or ""), str(update.get("upstreamRepo") or ""))
+
+        try:
+            with patch.object(coverage, "_scan_one", fake_scan):
+                coverage.main()
+        finally:
+            os.chdir(previous)
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        return json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
+
+
 def _clean(name: str, repo: str) -> dict:
     return {
         "status": "clean",
@@ -619,78 +654,64 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             for path in ("package-lock.json", "go.mod", "go.sum"):
                 self.assertIn(path, summary, msg=summary)
 
-    def test_checksums_on_a_listed_version_bump_are_not_a_path_gap(self) -> None:
-        lock = {
+    def test_listed_lodash_lock_bump_is_conclusive(self) -> None:
+        base_lock = {
             "lockfileVersion": 3,
             "packages": {
                 "node_modules/lodash": {
                     "version": "4.17.20",
                     "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",
                     "integrity": "sha512-lodash-old",
-                },
-                "node_modules/minimist": {
-                    "version": "1.2.8",
-                    "resolved": "https://registry.npmjs.org/minimist/-/minimist-1.2.8.tgz",
-                    "integrity": "sha512-minimist-old",
-                },
+                }
             },
         }
-        go_mod = "module example.com/app\n\ngo 1.22\n\nrequire github.com/spf13/cobra v1.8.0\n"
-        foo = "a" * 43 + "="
-        go_sum = (
-            f"github.com/foo/bar v1.0.0 h1:{foo}\n"
-            f"github.com/foo/bar v1.0.0/go.mod h1:{foo}\n"
-            "github.com/spf13/cobra {ver} h1:{cobra}\n"
-            "github.com/spf13/cobra {ver}/go.mod h1:{cobra}\n"
+        head_lock = {
+            "lockfileVersion": 3,
+            "packages": {
+                "node_modules/lodash": {
+                    "version": "4.17.21",
+                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+                    "integrity": "sha512-lodash-new",
+                }
+            },
+        }
+        report = _run_listed_scan(
+            {"package-lock.json": json.dumps(base_lock) + "\n"},
+            {"package-lock.json": json.dumps(head_lock) + "\n"},
+            [
+                {
+                    "packageName": "lodash",
+                    "fromVersion": "4.17.20",
+                    "toVersion": "4.17.21",
+                    "upstreamRepo": "lodash/lodash",
+                }
+            ],
         )
-        updates = [
-            {
-                "packageName": "lodash",
-                "fromVersion": "4.17.20",
-                "toVersion": "4.17.21",
-                "upstreamRepo": "lodash/lodash",
-            },
-            {
-                "packageName": "github.com/spf13/cobra",
-                "fromVersion": "v1.8.0",
-                "toVersion": "v1.8.1",
-                "upstreamRepo": "spf13/cobra",
-            },
-        ]
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            _git(root, "init", "-b", "main")
-            _git(root, "config", "user.email", "coverage-test@example.com")
-            _git(root, "config", "user.name", "coverage-test")
-            _commit(root, "package-lock.json", json.dumps(lock) + "\n", "base lock")
-            _commit(root, "go.mod", go_mod, "base go.mod")
-            _commit(root, "go.sum", go_sum.format(ver="v1.8.0", cobra="b" * 43 + "="), "base go.sum")
-            _git(root, "checkout", "-b", "pr")
-            lock["packages"]["node_modules/lodash"]["version"] = "4.17.21"
-            lock["packages"]["node_modules/lodash"]["resolved"] = (
-                "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
+        self.assertIs(report["scan_conclusive"], True)
+        self.assertEqual(report["status"], "clean")
+        self.assertEqual(report["package_name"], "lodash")
+
+    def test_listed_cobra_sum_bump_is_conclusive(self) -> None:
+        def go_sum(version: str, digest: str) -> str:
+            return (
+                f"github.com/spf13/cobra {version} h1:{digest}\ngithub.com/spf13/cobra {version}/go.mod h1:{digest}\n"
             )
-            lock["packages"]["node_modules/lodash"]["integrity"] = "sha512-lodash-new"
-            _commit(root, "package-lock.json", json.dumps(lock) + "\n", "lodash checksums follow the version")
-            _commit(root, "go.mod", go_mod.replace("v1.8.0", "v1.8.1"), "cobra require only")
-            _commit(
-                root, "go.sum", go_sum.format(ver="v1.8.1", cobra="c" * 43 + "="), "cobra hashes follow the version"
-            )
-            previous = os.getcwd()
-            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF")}
-            os.chdir(root)
-            os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
-            os.environ.pop("GITHUB_BASE_REF", None)
-            try:
-                gaps = coverage.manifest_gaps(updates)
-            finally:
-                os.chdir(previous)
-                for key, value in saved.items():
-                    if value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = value
-            self.assertEqual(gaps, [])
+
+        report = _run_listed_scan(
+            {"go.sum": go_sum("v1.8.0", "a" * 43 + "=")},
+            {"go.sum": go_sum("v1.8.1", "b" * 43 + "=")},
+            [
+                {
+                    "packageName": "github.com/spf13/cobra",
+                    "fromVersion": "v1.8.0",
+                    "toVersion": "v1.8.1",
+                    "upstreamRepo": "spf13/cobra",
+                }
+            ],
+        )
+        self.assertIs(report["scan_conclusive"], True)
+        self.assertEqual(report["status"], "clean")
+        self.assertEqual(report["package_name"], "github.com/spf13/cobra")
 
 
 if __name__ == "__main__":
