@@ -209,10 +209,13 @@ def aggregate(records: list[dict]) -> dict:
     conclusive = all(_covered(record) for record in records)
     any_findings = any(findings.values())
     warn_only = all(record.get("warn_only") is not False for record in records)
+    warned = any(record.get("status") == "warn" or record.get("verdict_token_in_tree") is True for record in records)
     if any(record.get("status") == "fail" for record in records):
         status = "fail"
     elif any_findings:
         status = "warn" if warn_only else "fail"
+    elif warned:
+        status = "warn"
     elif not conclusive:
         status = "not_scanned"
     else:
@@ -568,14 +571,14 @@ def _json_parts(text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
     return entries, json.dumps(doc, sort_keys=True, separators=(",", ":"))
 
 
-def _go_mod_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
-    entries: dict[str, tuple[str, str]] = {}
+def _go_mod_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
+    entries: dict[str, list[tuple[str, str]]] = {}
     residue: list[str] = []
     for kind, line in _go_mod_lines(text):
         code = line.split("//", 1)[0]
         match = _GO_MOD_RE.match(code) if kind == "entry" else None
         if match:
-            entries[match.group(1)] = (match.group(2), code.strip())
+            entries.setdefault(match.group(1), []).append((match.group(2), code.strip()))
             continue
         residue.append(line)
     return entries, "".join(residue)
@@ -603,13 +606,13 @@ def _go_sum_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
     return entries, "".join(residue)
 
 
-def _req_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
-    entries: dict[str, tuple[str, str]] = {}
+def _req_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
+    entries: dict[str, list[tuple[str, str]]] = {}
     residue: list[str] = []
     for line in text.splitlines(keepends=True):
         match = _REQ_RE.match(line)
         if match:
-            entries[match.group(1).lower()] = (match.group(2), line.strip())
+            entries.setdefault(match.group(1).lower(), []).append((match.group(2), line.strip()))
             continue
         residue.append(line)
     return entries, "".join(residue)
@@ -683,13 +686,9 @@ def _blocks_explain(
             new_left.remove(block)
     if not old_left and not new_left:
         return True
-    if len(old_left) != len(new_left):
+    if len(old_left) != 1 or len(new_left) != 1:
         return False
-    old_versions = {version for version, _payload in old_left}
-    new_versions = {version for version, _payload in new_left}
-    if len(old_versions) != 1 or len(new_versions) != 1:
-        return False
-    return _reached_listed_version(name, min(old_versions), min(new_versions), listed)
+    return _reached_listed_version(name, old_left[0][0], new_left[0][0], listed)
 
 
 def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) -> bool:

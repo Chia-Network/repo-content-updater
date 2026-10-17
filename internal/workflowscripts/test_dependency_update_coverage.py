@@ -906,25 +906,59 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 "upstreamRepo": "lodash/lodash",
             }
         ]
-        old = 'lodash@^4.17.20:\n  version "4.17.20"\n  integrity "sha-old"\n'
+        old = (
+            'lodash@^4.17.20:\n  version "4.17.20"\n'
+            '  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.20.tgz"\n'
+            '  integrity "sha-old"\n'
+        )
         added = (
-            'lodash@^4.17.21:\n  version "4.17.21"\n  integrity "sha-new"\n\n'
-            'lodash@npm:4.17.21:\n  version "4.17.21"\n  integrity "sha-evil"\n'
+            'lodash@^4.17.20:\n  version "4.17.21"\n'
+            '  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz"\n'
+            '  integrity "sha-new"\n\n'
+            'lodash@^4.17.21:\n  version "4.17.21"\n'
+            '  resolved "https://evil.example/lodash.tgz"\n'
+            '  integrity "sha-evil"\n'
         )
         self.assertFalse(coverage._entries_explain("yarn", old, added, updates))
-        both = (
-            'lodash@^4.17.20:\n  version "4.17.20"\n  integrity "a"\n\n'
-            'lodash@npm:4.17.20:\n  version "4.17.20"\n  integrity "b"\n'
-        )
-        bumped = (
-            'lodash@^4.17.21:\n  version "4.17.21"\n  integrity "c"\n\n'
-            'lodash@npm:4.17.21:\n  version "4.17.21"\n  integrity "d"\n'
-        )
-        self.assertTrue(coverage._entries_explain("yarn", both, bumped, updates))
         report = _run_listed_scan({"yarn.lock": old}, {"yarn.lock": added}, updates)
         self.assertIn("yarn.lock", {item["package_name"] for item in report["dependencies"]})
         self.assertIs(report["scan_conclusive"], False)
         self.assertNotEqual(report["status"], "clean")
+
+    def test_duplicate_require_pin_and_warn_stay_non_clean(self) -> None:
+        updates = [
+            {
+                "packageName": "github.com/spf13/cobra",
+                "fromVersion": "v1.8.0",
+                "toVersion": "v1.8.1",
+                "upstreamRepo": "spf13/cobra",
+            }
+        ]
+        old_mod = (
+            "module example.com/app\n\ngo 1.22\n\nrequire (\n"
+            "\tgithub.com/spf13/cobra v1.8.0\n\tgithub.com/foo/bar v1.2.3\n)\n"
+        )
+        new_mod = (
+            "module example.com/app\n\ngo 1.22\n\nrequire (\n"
+            "\tgithub.com/spf13/cobra v1.8.1\n\tgithub.com/foo/bar v1.9.9\n\tgithub.com/foo/bar v1.2.3\n)\n"
+        )
+        report = _run_listed_scan(
+            {"go.mod": old_mod, "requirements.txt": "requests==2.31.0\n"},
+            {"go.mod": new_mod, "requirements.txt": "requests==9.9.9\nrequests==2.31.0\n"},
+            updates,
+        )
+        names = {item["package_name"] for item in report["dependencies"]}
+        self.assertIn("go.mod", names)
+        self.assertIn("requirements.txt", names)
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
+        planted = _clean("left-pad", "left-pad/left-pad")
+        planted["status"] = "warn"
+        planted["findings"] = {key: [] for key in planted["findings"]}
+        planted["verdict_token_in_tree"] = True
+        grouped = coverage.aggregate([_clean("lodash", "lodash/lodash"), planted])
+        self.assertEqual(grouped["status"], "warn")
+        self.assertIs(grouped["verdict_token_in_tree"], True)
 
     def test_empty_from_still_scans_the_to_tree(self) -> None:
         update = {
