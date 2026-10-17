@@ -197,6 +197,7 @@ function dependabotPr(title) {
     body: singleBody('abc1234'),
     user: { login: 'dependabot[bot]' },
     head: { sha: 'head' },
+    base: { sha: 'c'.repeat(40) },
   };
 }
 
@@ -554,9 +555,36 @@ test('parseDependencyUpdate still extracts upstream notes and commits', () => {
   const parsed = parseDependencyUpdate('Bump lodash from 4.17.20 to 4.17.21', singleBody('deadbee'));
   assert.equal(parsed.upstreamRepo, 'lodash/lodash');
   assert.equal(parsed.packageName, 'lodash');
+  assert.equal(parsed.fromVersion, '4.17.20');
   assert.equal(parsed.toVersion, '4.17.21');
+  assert.equal(parsed.updates.length, 1);
+  assert.equal(parsed.updates[0].fromVersion, '4.17.20');
+  assert.equal(parsed.updates[0].toVersion, '4.17.21');
   assert.match(parsed.releaseNotes, /small patch/);
   assert.match(parsed.commits, /deadbee/);
+});
+
+test('grouped context does not choose a package before the scans', async () => {
+  await withWorkspace(async (directory) => {
+    process.env.PR_TITLE = 'Bump the npm-dependencies group across 1 directory with 2 updates';
+    process.env.PR_BODY = [
+      '| Package | From | To |',
+      '| --- | --- | --- |',
+      '| [lodash](https://github.com/lodash/lodash) | `4.17.20` | `4.17.21` |',
+      '| [semver](https://github.com/npm/node-semver) | `7.5.4` | `7.6.0` |',
+    ].join('\n');
+    process.env.PR_NUMBER = '7';
+    const core = fakeCore();
+    await context({ core });
+    assert.equal(core.failed, '');
+    assert.equal(core.outputs.package_name, '');
+    assert.equal(core.outputs.upstream_repo, '');
+    const updates = JSON.parse(fs.readFileSync(path.join(directory, 'dependency_updates.json'), 'utf8'));
+    assert.deepEqual(
+      updates.map((item) => item.packageName),
+      ['lodash', 'semver'],
+    );
+  });
 });
 
 test('context JSON stays limited to the prompt fields', async () => {
@@ -577,6 +605,12 @@ test('context JSON stays limited to the prompt fields', async () => {
       'commits',
     ]);
     assert.equal(core.failed, '');
+    const updates = JSON.parse(fs.readFileSync(path.join(directory, 'dependency_updates.json'), 'utf8'));
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].packageName, 'lodash');
+    assert.equal(updates[0].fromVersion, '4.17.20');
+    assert.equal(updates[0].toVersion, '4.17.21');
+    assert.equal(updates[0].upstreamRepo, 'lodash/lodash');
   });
 });
 
@@ -637,10 +671,12 @@ test('Renovate and workflow_dispatch still review when a marker exists', async (
       body: 'https://github.com/lodash/lodash',
       user: { login: 'renovate[bot]' },
       head: { sha: 'reno' },
+      base: { sha: 'c'.repeat(40) },
     };
     const reno = await resolve('pull_request', renovate, { commentsFor: () => [botComment(marker)] });
     assert.equal(reno.core.outputs.already_reviewed, 'false');
     assert.equal(reno.core.outputs.review_marker, '');
+    assert.equal(reno.core.outputs.base_sha, 'c'.repeat(40));
     assert.equal(
       reno.github.calls.some((call) => call[0] === 'listComments'),
       false,
@@ -654,6 +690,12 @@ test('Renovate and workflow_dispatch still review when a marker exists', async (
     });
     assert.equal(dispatched.core.outputs.already_reviewed, 'false');
     assert.equal(dispatched.core.outputs.review_marker, '');
+    assert.equal(dispatched.core.outputs.base_sha, 'c'.repeat(40));
+    const missing = dependabotPr('Bump lodash');
+    delete missing.base;
+    const failed = await resolve('workflow_dispatch', missing, { inputs: { pr_number: '42' } });
+    assert.match(failed.core.failed, /base commit/);
+    assert.equal(failed.core.outputs.base_sha, undefined);
     assert.equal(reviewMarkerFromPatchId(dispatched.core.outputs.patch_id, 'a'.repeat(40)), marker);
     assert.equal(
       dispatched.github.calls.some((call) => call[0] === 'listComments'),

@@ -89,17 +89,24 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
     def _report(self, work: Path, payload: dict) -> None:
         (work / "malware_scan_report.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
-    def _script(self, work: Path, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-        self.assertIsNotNone(shutil.which("jq"))
-        return _run(work, "bash", str(_SCRIPT), extra_env=extra_env)
+    def _script(
+        self,
+        work: Path,
+        extra_env: dict[str, str] | None = None,
+        resolved_to: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        env = dict(extra_env or {})
+        if resolved_to is not None:
+            env["RESOLVED_TO"] = resolved_to
+        return _run(work, "bash", str(_SCRIPT), extra_env=env)
 
     def test_differing_blob_detaches_and_strips_nested_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             work, repo, release = self._tree(Path(tmp))
             scan = work / ".malware-scan" / "at-to-ref"
             _write(scan, "AGENTS.md", "scan copy\n")
-            self._report(work, {"resolved_to": release})
-            proc = self._script(work)
+            self._report(work, {"resolved_to": "not-the-commit"})
+            proc = self._script(work, resolved_to=release)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(_git(repo, "rev-parse", "HEAD"), release)
             self.assertFalse((work / ".malware-scan").exists())
@@ -119,7 +126,7 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
             work, repo, release = self._tree(Path(tmp))
             _write(repo, "AGENTS.md", "dirty local\n")
             self._report(work, {"resolved_to": release})
-            proc = self._script(work)
+            proc = self._script(work, resolved_to=release)
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("would be overwritten by checkout", proc.stderr)
             self.assertEqual((repo / "AGENTS.md").read_text(encoding="utf-8"), "dirty local\n")
@@ -128,8 +135,7 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
     def test_missing_object_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             work, repo, _release = self._tree(Path(tmp))
-            self._report(work, {"resolved_to": "a" * 40})
-            proc = self._script(work)
+            proc = self._script(work, resolved_to="a" * 40)
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("Failed to resolve upstream release", proc.stderr)
             self.assertEqual((repo / "AGENTS.md").read_text(encoding="utf-8"), "main agents\n")
@@ -143,6 +149,30 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
             self.assertFalse((work / "malware_scan_report.json").exists())
             self.assertEqual(_git(repo, "rev-parse", "HEAD"), release)
             self.assertFalse((repo / "AGENTS.md").exists())
+
+    def test_report_does_not_choose_the_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work, repo, release = self._tree(Path(tmp))
+            main = _git(repo, "rev-parse", "HEAD")
+            self._report(
+                work,
+                {
+                    "resolved_to": release,
+                    "agent_target": ["semver", "npm/node-semver", release],
+                },
+            )
+            proc = self._script(work, resolved_to=main)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(_git(repo, "rev-parse", "HEAD"), main)
+            self.assertNotEqual(main, release)
+
+    def test_null_agent_target_removes_the_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work, repo, release = self._tree(Path(tmp))
+            self._report(work, {"resolved_to": release, "agent_target": None})
+            proc = self._script(work)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertFalse(repo.exists())
 
     def test_empty_resolved_to_removes_checkout_and_scan_dir(self) -> None:
         payloads = ({"resolved_to": ""}, {"resolved_to": None}, {})
@@ -174,8 +204,7 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
             release = _git(repo, "rev-parse", "HEAD")
             _write(repo, "pkg/index.js", "main code\n")
             _commit(repo, "main")
-            self._report(work, {"resolved_to": release})
-            proc = self._script(work)
+            proc = self._script(work, resolved_to=release)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertFalse((repo / "AGENTS.md").exists())
             self.assertFalse((repo / ".codex").exists())
@@ -190,8 +219,7 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
             (repo / ".git" / "AGENTS.md").write_text("inside git\n", encoding="utf-8")
             _write(repo, "pkg/.git/AGENTS.md", "nested git\n")
             objects = {path: path.read_bytes() for path in (repo / ".git" / "objects").rglob("*") if path.is_file()}
-            self._report(work, {"resolved_to": release})
-            proc = self._script(work)
+            proc = self._script(work, resolved_to=release)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual((repo / ".git" / "AGENTS.md").read_text(encoding="utf-8"), "inside git\n")
             self.assertEqual((repo / "pkg" / ".git" / "AGENTS.md").read_text(encoding="utf-8"), "nested git\n")
@@ -232,8 +260,11 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
                 encoding="utf-8",
             )
             stub.chmod(0o755)
-            self._report(work, {"resolved_to": release})
-            proc = self._script(work, extra_env={"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"})
+            proc = self._script(
+                work,
+                extra_env={"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"},
+                resolved_to=release,
+            )
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("realpath leaves .upstream-dependency", proc.stderr)
             self.assertEqual((repo / "AGENTS.md").read_text(encoding="utf-8"), "release agents\n")
@@ -246,8 +277,7 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
             self.assertNotEqual(tag_object, release)
             for value in ("v1.2.3", tag_object, "release"):
                 _git(repo, "checkout", "--force", "main")
-                self._report(work, {"resolved_to": value})
-                proc = self._script(work)
+                proc = self._script(work, resolved_to=value)
                 self.assertEqual(proc.returncode, 0, f"{value}\n{proc.stderr}")
                 self.assertEqual(_git(repo, "rev-parse", "HEAD"), release)
                 self.assertFalse((repo / "pkg" / "AGENTS.md").exists())

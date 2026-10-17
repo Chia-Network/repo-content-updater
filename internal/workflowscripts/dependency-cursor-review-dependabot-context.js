@@ -44,6 +44,146 @@ function extractDetailsSection(text, summaryLabel) {
     .trim();
 }
 
+function stripLeadingV(version) {
+  return String(version || '')
+    .trim()
+    .replace(/^v/i, '');
+}
+
+function githubRepoFromText(text) {
+  const source = String(text || '');
+  const url = source.match(/https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/i);
+  if (url) return url[1].replace(/\.git$/i, '');
+  const moduleName = source.match(/^github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:\/|$)/i);
+  return moduleName ? moduleName[1] : '';
+}
+
+function packageCell(cell) {
+  const trimmed = cell.trim();
+  const link = trimmed.match(/^\[([^\]]*)\]\(([^)]*)\)$/);
+  if (!link) return { name: trimmed, repo: githubRepoFromText(trimmed) };
+  return {
+    name: link[1].trim(),
+    repo: githubRepoFromText(link[2]) || githubRepoFromText(link[1]),
+  };
+}
+
+function agree(record, key, incoming) {
+  if (record.disputed[key]) return '';
+  if (!incoming) return record[key];
+  if (!record[key]) return incoming;
+  if (record[key] === incoming) return record[key];
+  record.disputed[key] = true;
+  return '';
+}
+
+function rememberUpdate(byName, name, fromVersion, toVersion, repo) {
+  const packageName = String(name || '').trim();
+  if (!packageName || packageName.toLowerCase() === 'package') return;
+  const from = stripLeadingV(fromVersion);
+  const to = stripLeadingV(toVersion);
+  const repoName = String(repo || '')
+    .trim()
+    .replace(/\.git$/i, '');
+  const existing = byName.get(packageName);
+  if (!existing) {
+    byName.set(packageName, {
+      packageName,
+      fromVersion: from,
+      toVersion: to,
+      upstreamRepo: repoName,
+      disputed: {},
+    });
+    return;
+  }
+  existing.fromVersion = agree(existing, 'fromVersion', from);
+  existing.toVersion = agree(existing, 'toVersion', to);
+  existing.upstreamRepo = agree(existing, 'upstreamRepo', repoName);
+}
+
+function groupPreamble(body) {
+  if (/^(?:Updates |<details|\|)/i.test(body)) return '';
+  const marks = ['\nUpdates ', '\n|', '\n<details', '\n### '];
+  let cut = body.length;
+  for (const mark of marks) {
+    const index = body.indexOf(mark);
+    if (index >= 0 && index < cut) cut = index;
+  }
+  return body.slice(0, cut);
+}
+
+// One map. Intro links, table rows, Updates lines, and the title all write it.
+// A second non-empty repository or version that differs clears that field.
+function collectPackageUpdates(title, body) {
+  const byName = new Map();
+  const preamble = groupPreamble(body);
+  const linkRe = /\[([^\]]+)\]\(\s*(https?:\/\/[^)\s]+)[^)]*\)/gi;
+  let link;
+  while ((link = linkRe.exec(preamble)) !== null) {
+    rememberUpdate(byName, link[1], '', '', githubRepoFromText(link[2]));
+  }
+  const bumpsRe = /\[([^\]]+)\]\(\s*(https?:\/\/[^)\s]+)[^)]*\)\s+from\s+(\S+)\s+to\s+(\S+)/gi;
+  let bumps;
+  while ((bumps = bumpsRe.exec(preamble)) !== null) {
+    rememberUpdate(
+      byName,
+      bumps[1],
+      bumps[3].replace(/[.,;:]+$/, ''),
+      bumps[4].replace(/[.,;:]+$/, ''),
+      githubRepoFromText(bumps[2]),
+    );
+  }
+  const tableRe = /^\|\s*([^|\n]+?)\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|/gm;
+  let row;
+  while ((row = tableRe.exec(body)) !== null) {
+    const cell = packageCell(row[1]);
+    rememberUpdate(byName, cell.name, row[2], row[3], cell.repo);
+  }
+  const lineRe = /^Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+)/gm;
+  let line;
+  while ((line = lineRe.exec(body)) !== null) {
+    rememberUpdate(
+      byName,
+      line[1].trim(),
+      line[2].replace(/[.,;:]+$/, ''),
+      line[3].replace(/[.,;:]+$/, ''),
+      githubRepoFromText(line[1]),
+    );
+  }
+
+  const titleMatch =
+    title.match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
+    title.match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
+    title.match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
+  const renovateTitleMatch =
+    !titleMatch &&
+    (title.match(/(?:update|pin)\s+dependency\s+(.+?)\s+to\s+v?([^\s]+)/i) ||
+      title.match(/(?:update|pin)\s+(.+?)\s+(?:action|digest|docker\s+tag)\s+to\s+v?([^\s]+)/i) ||
+      title.match(/(?:update|pin)\s+(.+?)\s+to\s+v?([^\s]+)/i));
+  if (titleMatch) {
+    rememberUpdate(byName, titleMatch[1], titleMatch[2], titleMatch[3], '');
+  } else if (renovateTitleMatch) {
+    rememberUpdate(byName, renovateTitleMatch[1], '', renovateTitleMatch[2], '');
+  }
+
+  if (byName.size === 1) {
+    const only = [...byName.values()][0];
+    if (!only.fromVersion || !only.toVersion) {
+      const arrow = body.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
+      if (arrow) {
+        rememberUpdate(
+          byName,
+          only.packageName,
+          only.fromVersion ? '' : arrow[1],
+          only.toVersion ? '' : arrow[2],
+          '',
+        );
+      }
+    }
+  }
+  return [...byName.values()].map(({ disputed, ...item }) => item);
+}
+
 function parseDependencyUpdate(title, body) {
   const dependencyRepoMatch = body.match(
     /^\s*(?:Bumps|Update(?:s|d)?)\s+\[[^\]]+\]\(\s*https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:[\/#?][^)\s]*)?\s*\)/im,
@@ -68,48 +208,16 @@ function parseDependencyUpdate(title, body) {
     if (shaMatches && shaMatches.length > 0) commits = shaMatches.join('\n');
   }
 
-  const titleMatch =
-    title.match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-    title.match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-    title.match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
-  const renovateTitleMatch =
-    !titleMatch &&
-    (title.match(/(?:update|pin)\s+dependency\s+(.+?)\s+to\s+v?([^\s]+)/i) ||
-      title.match(/(?:update|pin)\s+(.+?)\s+(?:action|digest|docker\s+tag)\s+to\s+v?([^\s]+)/i) ||
-      title.match(/(?:update|pin)\s+(.+?)\s+to\s+v?([^\s]+)/i));
-
-  let packageName;
-  let fromVersion;
-  let toVersion;
-  if (titleMatch) {
-    packageName = titleMatch[1].trim();
-    fromVersion = titleMatch[2].trim();
-    toVersion = titleMatch[3].trim();
-  } else if (renovateTitleMatch) {
-    packageName = renovateTitleMatch[1].trim();
-    fromVersion = '';
-    toVersion = renovateTitleMatch[2].trim();
-  } else {
-    packageName = '';
-    fromVersion = '';
-    toVersion = '';
-  }
-
-  if (!fromVersion || !toVersion) {
-    const bodyVersionMatch = body.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
-    if (bodyVersionMatch) {
-      if (!fromVersion) fromVersion = bodyVersionMatch[1].replace(/^v/i, '');
-      if (!toVersion) toVersion = bodyVersionMatch[2].replace(/^v/i, '');
-    }
-  }
-
+  const updates = collectPackageUpdates(title, body);
+  const sole = updates.length === 1 ? updates[0] : null;
   return {
-    upstreamRepo,
-    packageName,
-    fromVersion,
-    toVersion,
+    upstreamRepo: sole ? sole.upstreamRepo : '',
+    packageName: sole ? sole.packageName : '',
+    fromVersion: sole ? sole.fromVersion : '',
+    toVersion: sole ? sole.toVersion : '',
     releaseNotes,
     commits,
+    updates,
   };
 }
 
@@ -187,8 +295,9 @@ async function runDependabotContext({ core }) {
   const title = process.env.PR_TITLE || '';
   const prNumber = Number(process.env.PR_NUMBER || '0');
   const parsed = parseDependencyUpdate(title, body);
+  fs.writeFileSync('dependency_updates.json', JSON.stringify(parsed.updates, null, 2));
 
-  if (!parsed.upstreamRepo) {
+  if (!parsed.updates.some((item) => item.upstreamRepo)) {
     core.setFailed('PR body is missing an upstream GitHub repository link.');
     return;
   }

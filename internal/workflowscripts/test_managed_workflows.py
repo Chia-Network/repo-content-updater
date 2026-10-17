@@ -95,9 +95,19 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         agent = self._job(workflow, "dependency-review-agent")
         verdict = self._job(workflow, "dependency-review")
         self.assertIn(
-            'bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_malware_scan.sh"',
+            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_update_coverage.py"',
             scan,
         )
+        prompts = scan.split("- name: Build Cursor prompts\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("steps.malware_scan.outputs.package_name", prompts)
+        self.assertIn("steps.malware_scan.outputs.from_version", prompts)
+        self.assertIn("steps.malware_scan.outputs.to_version", prompts)
+        self.assertNotIn("steps.dependabot_context.outputs", prompts)
+        coverage = (
+            _REPO_ROOT / "internal/workflowscripts/dependency_update_coverage.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("upstream_malware_scan.sh", coverage)
+        self.assertIn("scan_conclusive", coverage)
         self.assertNotIn("bash .github/scripts/upstream_malware_scan.sh", workflow)
         combine = (
             _REPO_ROOT
@@ -118,6 +128,16 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             'bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_release_checkout.sh"',
             scan,
         )
+        checkout_step = scan.split("- name: Check out upstream release and drop agent instructions\n", 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn("steps.malware_scan.outputs.resolved_to", checkout_step)
+        self.assertIn("steps.target_pr.outputs.base_sha", scan)
+        checkout_sh = (
+            _REPO_ROOT / "internal/workflowscripts/upstream_release_checkout.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("agent_target", checkout_sh)
+        self.assertNotIn("jq ", checkout_sh)
         self.assertNotIn("git -C .upstream-dependency checkout --detach", workflow)
         self.assertNotIn("hash_trusted_scripts", workflow)
         self.assertNotIn("trusted_hash_snapshot", workflow)
@@ -200,6 +220,12 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         )
         self.assertNotIn("RUNNER_TEMP", post)
         self.assertLess(verdict.index("Checkout default-branch helpers"), verdict.index("Post or update PR comment"))
+        self.assertLess(
+            verdict.index("Post or update PR comment"),
+            verdict.index("Fail the check unless the scan is clean"),
+        )
+        self.assertIn("needs.dependency-review-scan.outputs.status != 'clean'", verdict)
+        self.assertIn("needs.dependency-review-scan.outputs.already_reviewed != 'true'", verdict)
         self.assertIn("DCR_SCAN_REPORT:", verdict)
         self.assertIn("DCR_MALWARE_JSON:", verdict)
         self.assertIn("DCR_COMPAT_JSON:", verdict)
