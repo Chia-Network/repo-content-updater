@@ -610,6 +610,25 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertIn("go.mod", unresolved)
         self.assertIn("github.com/foo/bar", unresolved)
 
+    def test_unchanged_yarn_descriptors_are_not_named_on_an_unresolved_lock(self) -> None:
+        def lock(integrity: str) -> str:
+            return (
+                f'lodash@^4.17.20:\n  version "4.17.20"\n  integrity "{integrity}"\n\n'
+                'left-pad@^1.3.0:\n  version "1.3.0"\n  integrity "sha-a"\n\n'
+                'left-pad@^1.0.0:\n  version "1.3.0"\n  integrity "sha-a"\n'
+            )
+
+        report = _run_listed_scan(
+            {"yarn.lock": lock("sha-old")},
+            {"yarn.lock": lock("sha-new")},
+            [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")],
+        )
+        names = {item["package_name"] for item in report["dependencies"]}
+        self.assertIn("yarn.lock", names)
+        self.assertNotIn("left-pad", names)
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
+
 
 if __name__ == "__main__":
     unittest.main()

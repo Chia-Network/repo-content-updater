@@ -363,16 +363,29 @@ def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
     return changed
 
 
-def _multi_entry_names(kind: str, before: str, after: str) -> set[str]:
-    """Names with more than one entry on either side. Same blocks as explain."""
+def _multi_entry_names(kind: str, before: str, after: str, updates: list[dict]) -> set[str]:
+    """Multi-entry names whose own blocks are not the listed change.
+
+    Several Yarn descriptors for one package are normal. They are a gap
+    only when those blocks are unexplained. An unchanged set is not.
+    """
+    old_split = _split_entries(kind, before)
+    new_split = _split_entries(kind, after)
+    if old_split is None or new_split is None:
+        return set()
+    old_entries = old_split[0]
+    new_entries = new_split[0]
+    listed = _listed_versions(updates, lower=kind == "requirements")
+    keyed = kind == "yarn"
     found: set[str] = set()
-    for text in (before, after):
-        split = _split_entries(kind, text)
-        if split is None:
+    for name in set(old_entries) | set(new_entries):
+        old_blocks = _entry_blocks(old_entries.get(name))
+        new_blocks = _entry_blocks(new_entries.get(name))
+        if len(old_blocks) <= 1 and len(new_blocks) <= 1:
             continue
-        for name, entry in split[0].items():
-            if len(_entry_blocks(entry)) > 1:
-                found.add(name)
+        if _blocks_explain(name, old_blocks, new_blocks, listed, keyed=keyed):
+            continue
+        found.add(name)
     return found
 
 

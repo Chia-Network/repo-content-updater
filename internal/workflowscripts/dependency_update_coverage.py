@@ -374,7 +374,7 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
     An entry is explained only when its package moved to the listed version.
     Anything else in the file stays unresolved under the path. A listed
     package with that path as its name does not hide the path. A dependency
-    with more than one entry is named as well.
+    with more than one unexplained entry is named as well.
     """
     base = _base_commit()
     if base is None:
@@ -410,7 +410,7 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
                 gaps.append(uncovered({"packageName": label}, "unresolved"))
                 seen.add(label)
         if names is not None and file_unresolved:
-            for label in sorted(_diff._multi_entry_names(kind, before, after)):
+            for label in sorted(_diff._multi_entry_names(kind, before, after, updates)):
                 if label in seen:
                     continue
                 gaps.append(uncovered({"packageName": label}, "unresolved"))
