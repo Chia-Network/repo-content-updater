@@ -342,6 +342,44 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             self.assertIs(aggregated["scan_conclusive"], False)
             self.assertEqual(aggregated["findings"]["ioc"][0]["path"], "pkg/index.js")
 
+    def test_uncovered_fail_returns_after_writing_the_report(self) -> None:
+        child = _clean("lodash", "lodash/lodash")
+        child["from_tag"] = ""
+        child["to_tag"] = ""
+        child["status"] = "fail"
+        child["findings"]["ioc"] = [{"path": "pkg/index.js", "line": 1, "kind": "ioc", "match": "x"}]
+        updates = [
+            {
+                "packageName": "lodash",
+                "fromVersion": "4.17.20",
+                "toVersion": "4.17.21",
+                "upstreamRepo": "lodash/lodash",
+            }
+        ]
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
+            output = root / "github_output.txt"
+            previous = os.getcwd()
+            saved = os.environ.get("GITHUB_OUTPUT")
+            os.chdir(root)
+            os.environ["GITHUB_OUTPUT"] = str(output)
+            try:
+                with patch.object(coverage, "_scan_one", lambda *_args, **_kwargs: child):
+                    coverage.main()
+            finally:
+                os.chdir(previous)
+                if saved is None:
+                    os.environ.pop("GITHUB_OUTPUT", None)
+                else:
+                    os.environ["GITHUB_OUTPUT"] = saved
+            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "fail")
+            self.assertIs(report["scan_conclusive"], False)
+            self.assertEqual(report["findings"]["ioc"][0]["path"], "pkg/index.js")
+            self.assertIn("status=fail", output.read_text(encoding="utf-8"))
+            self.assertTrue((root / "malware_scan_summary.md").is_file())
+
     def test_manifest_bump_missing_from_the_parsed_list_is_unresolved(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

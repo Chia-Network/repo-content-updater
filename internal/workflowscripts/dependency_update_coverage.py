@@ -11,7 +11,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import uuid
 from pathlib import Path
 
@@ -638,9 +637,6 @@ def main() -> None:
     finally:
         shutil.rmtree(work, ignore_errors=True)
     _emit(report, summary)
-    if report.get("status") == "fail":
-        print("Malware scan failed.", file=sys.stderr)
-        sys.exit(1)
 
 
 if __name__ == "__main__":
