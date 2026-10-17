@@ -514,6 +514,111 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             self.assertNotIn("github.com/spf13/cobra", summary)
             self.assertNotIn("left-pad", summary)
 
+    def test_listed_version_with_other_manifest_bytes_is_unresolved(self) -> None:
+        lock = {
+            "lockfileVersion": 3,
+            "packages": {
+                "node_modules/lodash": {
+                    "version": "4.17.20",
+                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",
+                    "integrity": "sha512-lodash-old",
+                },
+                "node_modules/minimist": {
+                    "version": "1.2.8",
+                    "resolved": "https://registry.npmjs.org/minimist/-/minimist-1.2.8.tgz",
+                    "integrity": "sha512-minimist-old",
+                },
+            },
+        }
+        go_mod = "module example.com/app\n\ngo 1.22\n\nrequire github.com/spf13/cobra v1.8.0\n"
+        foo_mod_hash = "d" * 43 + "="
+        go_sum = (
+            "github.com/foo/bar v1.0.0 h1:{foo}\n"
+            f"github.com/foo/bar v1.0.0/go.mod h1:{foo_mod_hash}\n"
+            "github.com/spf13/cobra {ver} h1:{cobra}\n"
+            "github.com/spf13/cobra {ver}/go.mod h1:" + ("b" * 43) + "=\n"
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _git(root, "init", "-b", "main")
+            _git(root, "config", "user.email", "coverage-test@example.com")
+            _git(root, "config", "user.name", "coverage-test")
+            _commit(
+                root, "package.json", json.dumps({"dependencies": {"lodash": "4.17.20"}}) + "\n", "base package.json"
+            )
+            _commit(root, "package-lock.json", json.dumps(lock) + "\n", "base lock")
+            _commit(root, "go.mod", go_mod, "base go.mod")
+            _commit(
+                root, "go.sum", go_sum.format(foo="a" * 43 + "=", cobra="c" * 43 + "=", ver="v1.8.0"), "base go.sum"
+            )
+            _git(root, "checkout", "-b", "pr")
+            _commit(
+                root, "package.json", json.dumps({"dependencies": {"lodash": "4.17.21"}}) + "\n", "listed lodash bump"
+            )
+            lock["packages"]["node_modules/lodash"]["version"] = "4.17.21"
+            lock["packages"]["node_modules/lodash"]["resolved"] = (
+                "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
+            )
+            lock["packages"]["node_modules/lodash"]["integrity"] = "sha512-lodash-new"
+            lock["packages"]["node_modules/minimist"]["resolved"] = "https://github.com/evil/minimist/tarball/deadbeef"
+            lock["packages"]["node_modules/minimist"]["integrity"] = "sha512-minimist-new"
+            _commit(root, "package-lock.json", json.dumps(lock) + "\n", "lodash bump and minimist swap")
+            _commit(
+                root,
+                "go.mod",
+                go_mod.replace("v1.8.0", "v1.8.1")
+                + "\nreplace github.com/spf13/cobra => github.com/evil/cobra v1.8.1\n",
+                "cobra bump and replace",
+            )
+            _commit(
+                root,
+                "go.sum",
+                go_sum.format(foo="e" * 43 + "=", cobra="f" * 43 + "=", ver="v1.8.1"),
+                "cobra bump and foo hash swap",
+            )
+            updates = [
+                {
+                    "packageName": "lodash",
+                    "fromVersion": "4.17.20",
+                    "toVersion": "4.17.21",
+                    "upstreamRepo": "lodash/lodash",
+                },
+                {
+                    "packageName": "github.com/spf13/cobra",
+                    "fromVersion": "v1.8.0",
+                    "toVersion": "v1.8.1",
+                    "upstreamRepo": "spf13/cobra",
+                },
+            ]
+            (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
+            output = root / "github_output.txt"
+            previous = os.getcwd()
+            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT")}
+            os.chdir(root)
+            os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
+            os.environ.pop("GITHUB_BASE_REF", None)
+            os.environ["GITHUB_OUTPUT"] = str(output)
+            try:
+                with patch.object(coverage, "_clone", lambda *_args, **_kwargs: False):
+                    coverage.main()
+            finally:
+                os.chdir(previous)
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
+            names = {item["package_name"] for item in report["dependencies"]}
+            for path in ("package-lock.json", "go.mod", "go.sum"):
+                self.assertIn(path, names, msg=sorted(names))
+            self.assertNotIn("package.json", names)
+            self.assertIs(report["scan_conclusive"], False)
+            self.assertNotEqual(report["status"], "clean")
+            summary = (root / "malware_scan_summary.md").read_text(encoding="utf-8")
+            for path in ("package-lock.json", "go.mod", "go.sum"):
+                self.assertIn(path, summary, msg=summary)
+
 
 if __name__ == "__main__":
     unittest.main()

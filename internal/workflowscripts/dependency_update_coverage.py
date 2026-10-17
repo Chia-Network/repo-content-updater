@@ -400,6 +400,33 @@ def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
     return {name for name in names if old.get(name) != new.get(name)}
 
 
+def _version_tokens(spec: str) -> list[str]:
+    return sorted(part for part in spec.split() if part)
+
+
+def _version_strings_explain(kind: str, before: str, after: str) -> bool:
+    """True when substituting parsed version tokens turns before into after."""
+    old = _versions_for(kind, before)
+    new = _versions_for(kind, after)
+    if old is None or new is None:
+        return False
+    pairs: list[tuple[str, str]] = []
+    for name in set(old) | set(new):
+        old_tokens = _version_tokens(old.get(name) or "")
+        new_tokens = _version_tokens(new.get(name) or "")
+        if old_tokens == new_tokens:
+            continue
+        if len(old_tokens) != len(new_tokens):
+            return False
+        pairs.extend(zip(old_tokens, new_tokens, strict=True))
+    rewritten = before
+    for old_token, new_token in sorted(pairs, key=lambda pair: len(pair[0]), reverse=True):
+        if old_token not in rewritten:
+            return False
+        rewritten = rewritten.replace(old_token, new_token)
+    return rewritten == after
+
+
 def _git_text(rev: str, path: str) -> str:
     proc = subprocess.run(
         ["git", "show", f"{rev}:{path}"],
@@ -458,6 +485,7 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
     """Direct manifest and lockfile bumps missing from the parsed list.
 
     An unreadable base ref, when one was named, is itself unresolved.
+    Bytes that are not listed version strings stay unresolved under the path.
     """
     base = _base_commit()
     if base is None:
@@ -482,7 +510,8 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
         before = _git_text(base, path)
         after = _git_text("HEAD", path)
         names = _changed_names(kind, before, after)
-        if names is None or (not names and before != after):
+        version_only = names is not None and _version_strings_explain(kind, before, after)
+        if names is None or (before != after and names <= listed and not version_only):
             labels = [path]
         else:
             labels = sorted(names)
