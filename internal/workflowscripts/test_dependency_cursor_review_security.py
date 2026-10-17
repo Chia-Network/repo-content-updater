@@ -357,23 +357,25 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
                     else:
                         sys.modules[name] = module
 
-    def test_matching_inconclusive_report_ignores_workspace_fake(self) -> None:
+    def test_matching_unscoped_report_ignores_workspace_fake(self) -> None:
         payload = (json.dumps(_INCONCLUSIVE_REPORT) + "\n").encode()
         with tempfile.TemporaryDirectory() as tmp:
             proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(payload).hexdigest())
             self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
             written = json.loads((workspace / "cursor_output.json").read_text(encoding="utf-8"))
-            self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
+            self.assertIn("**Verdict: malicious**", written["result"])
             self.assertNotIn("**Verdict: benign**", written["result"])
+            self.assertNotIn("needs human review", written["result"])
 
-    def test_matching_malformed_report_is_inconclusive(self) -> None:
+    def test_matching_malformed_report_is_blocking(self) -> None:
         payload = b"not-json\n"
         with tempfile.TemporaryDirectory() as tmp:
             proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(payload).hexdigest())
             self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
             written = json.loads((workspace / "cursor_output.json").read_text(encoding="utf-8"))
-            self.assertIn("**Verdict: inconclusive (needs human review)**", written["result"])
+            self.assertIn("**Verdict: malicious**", written["result"])
             self.assertNotIn("**Verdict: benign**", written["result"])
+            self.assertNotIn("needs human review", written["result"])
 
     def test_digest_mismatch_exits(self) -> None:
         payload = (json.dumps(_INCONCLUSIVE_REPORT) + "\n").encode()

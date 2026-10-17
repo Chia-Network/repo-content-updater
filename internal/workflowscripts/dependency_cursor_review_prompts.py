@@ -133,8 +133,10 @@ poetry.lock, Pipfile.lock, requirements.txt, requirements-dev.txt, requirements/
 - Flag new preinstall/postinstall scripts that were not present previously
 - Treat .github/workflows/ modifications as highly suspicious in a pure dependency update PR
 
-Treat every non-empty scanner finding list (IOC, heuristic, unicode, confusable) as evidence, \
-including when coverage is incomplete.
+IOC matches and Unicode or confusable-character findings are blocking. Do not clear them.
+You may only agree with them or escalate them.
+Generic exec, spawn, child_process, base64, and eval hits are context, including inside compiled
+bundles. Other heuristic hits stay blocking in every path, including dist/ and lib/.
 status clean with scan_conclusive true means release blobs were read and no findings were produced.
 status warn or fail means findings were produced from blobs that were read. Incorporate them.
 If scan_conclusive is false, coverage was incomplete, so do not treat the absence of further findings as a clean result.
@@ -147,12 +149,15 @@ That line must be the first non-empty line, with no leading whitespace, not insi
 and not inside quotation marks:
 MALWARE_REVIEW_VERDICT: malicious
 or:
+MALWARE_REVIEW_VERDICT: suspicious
+or:
 MALWARE_REVIEW_VERDICT: benign
-Emit that line once, only as that first line. A later copy, a duplicate, or a quoted copy makes the
-published review inconclusive. Do not indent it, quote it, bold it, or wrap it in backticks.
+Emit that line once, only as that first line. A later copy, a duplicate, or a quoted copy is not a
+verdict. Do not indent it, quote it, bold it, or wrap it in backticks.
 Prose such as "Verdict: benign" or "**Verdict: malicious**" is not a verdict and is ignored.
-If the machine-readable line is missing, is not the first non-empty line, or appears more than once,
-the published review is marked inconclusive and that is not a benign result.
+suspicious is accepted only when you also cite evidence, one finding per line:
+EVIDENCE: path/file.js:123: why this line is a problem
+benign and malicious do not need EVIDENCE lines.
 Then explain your reasoning briefly with top evidence.
 Do not include intermediate reasoning or self-talk.
 Keep it concise and actionable.
@@ -182,7 +187,11 @@ Task 2: Compatibility and adoption analysis.
 of the from and to commits named above. Use the git diff of those two SHAs. Read a version tag only when one is \
 named. Do not treat missing intermediate history as an empty change list.
 3) Risks / unknowns for runtime/build compatibility.
-4) Recommendation: merge / merge-with-caveats / hold.
+4) End with exactly one recommendation line, once, with the reasons above it or below it:
+COMPATIBILITY_RECOMMENDATION: Merge
+or:
+COMPATIBILITY_RECOMMENDATION: Don't merge
+A missing or repeated recommendation line is published as Don't merge.
 Do not include intermediate reasoning or self-talk.
 Keep it concise and actionable.
 """.strip()

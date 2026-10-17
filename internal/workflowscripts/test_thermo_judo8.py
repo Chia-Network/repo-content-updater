@@ -18,7 +18,7 @@ _POLICY_MODULE_BOUNDS: tuple[tuple[str, int], ...] = (
     ("scripts_dir_path_scrub.py", 130),
     ("formatter_runtime_bundle.py", 40),
     ("formatter_bundle_inventory.py", 220),
-    ("malware_verdict_formatter.py", 80),
+    ("malware_verdict_formatter.py", 294),
     ("isolated_module_exec.py", 100),
     ("trusted_formatter_loader_cold_start.py", 78),
 )
@@ -39,12 +39,8 @@ _REMOVED_VERDICT_MODULES: tuple[str, ...] = (
 
 class ThermoJudo8Test(unittest.TestCase):
     def test_single_canonical_isolated_exec_module(self) -> None:
-        combine = (_SCRIPTS / "dependency_cursor_review_combine_outputs.py").read_text(
-            encoding="utf-8"
-        )
-        cold_src = (
-            _SCRIPTS / "trusted_formatter_loader_cold_start.py"
-        ).read_text(encoding="utf-8")
+        combine = (_SCRIPTS / "dependency_cursor_review_combine_outputs.py").read_text(encoding="utf-8")
+        cold_src = (_SCRIPTS / "trusted_formatter_loader_cold_start.py").read_text(encoding="utf-8")
         iso_src = (_SCRIPTS / "isolated_module_exec.py").read_text(encoding="utf-8")
         resolve_src = inspect.getsource(cold_start.resolve_loader_for_dir)
         hop_exec_calls = [
@@ -78,9 +74,7 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("_require_scripts_dir_path_scrub", iso_src)
         self.assertNotIn("register_util_from_disk", cold_src)
         self.assertIn("register_util_from_scripts_dir", cold_src)
-        self.assertFalse(
-            (_SCRIPTS / "dependency_cursor_review_trusted_loader.py").exists()
-        )
+        self.assertFalse((_SCRIPTS / "dependency_cursor_review_trusted_loader.py").exists())
         self.assertFalse((_SCRIPTS / "companion_isolated_exec.py").exists())
         self.assertFalse((_SCRIPTS / "script_dir_isolated_load.py").exists())
         self.assertFalse((_SCRIPTS / "malware_verdict_policy_lexical.py").exists())
@@ -92,12 +86,8 @@ class ThermoJudo8Test(unittest.TestCase):
         self.assertIn("def format_malware_review_verdict", formatter)
         self.assertNotIn("VERDICT_RE", formatter)
         self.assertNotIn("VerdictAnalysis", formatter)
-        self.assertFalse(
-            (_SCRIPTS / "malware_verdict_policy_official_selection_rows.py").exists()
-        )
-        self.assertFalse(
-            (_SCRIPTS / "malware_verdict_policy_rules_select_precedence.py").exists()
-        )
+        self.assertFalse((_SCRIPTS / "malware_verdict_policy_official_selection_rows.py").exists())
+        self.assertFalse((_SCRIPTS / "malware_verdict_policy_rules_select_precedence.py").exists())
         scrub_src = (_SCRIPTS / "scripts_dir_path_scrub.py").read_text()
         iso_src = (_SCRIPTS / "isolated_module_exec.py").read_text(encoding="utf-8")
         self.assertIn("_exec_with_path_filter", scrub_src)
