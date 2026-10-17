@@ -897,6 +897,40 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIs(tainted["scan_conclusive"], False)
         self.assertNotEqual(tainted["status"], "clean")
 
+    def test_empty_from_still_scans_the_to_tree(self) -> None:
+        update = {
+            "packageName": "lodash",
+            "fromVersion": "",
+            "toVersion": "1.1.0",
+            "upstreamRepo": "lodash/lodash",
+        }
+        self.assertTrue(coverage.scannable(update))
+        self.assertFalse(coverage.scannable({**update, "toVersion": ""}))
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scan.sh"
+            script.write_text(
+                "#!/bin/bash\n"
+                'test -n "$TO_VERSION"\n'
+                'test -z "${FROM_VERSION:-}"\n'
+                "cat > malware_scan_report.json <<'EOF'\n"
+                '{"status":"fail","scan_conclusive":true,"from_tag":"","to_tag":"v1.1.0",'
+                '"findings":{"ioc":[{"path":"pkg/index.js","line":1,"kind":"ioc","text":"marker"}],'
+                '"unicode":[],"confusable":[],"heuristic":[]}}\n'
+                "EOF\n",
+                encoding="utf-8",
+            )
+            dest = root / "child"
+            dest.mkdir()
+            with patch.object(coverage, "_clone", lambda *_args, **_kwargs: True):
+                record = coverage._scan_one(update, dest, script)
+        self.assertEqual(record["status"], "fail")
+        self.assertEqual(record["findings"]["ioc"][0]["path"], "pkg/index.js")
+        report = coverage.aggregate([record])
+        self.assertEqual(report["status"], "fail")
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertEqual(report["findings"]["ioc"][0]["path"], "pkg/index.js")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,12 +19,13 @@ _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
 
 
 def scannable(update: dict) -> bool:
+    """A destination version is enough to read that tree. An empty from stays inconclusive."""
     repo = str(update.get("upstreamRepo") or "")
     from_version = str(update.get("fromVersion") or "")
     to_version = str(update.get("toVersion") or "")
     if not _REPO_RE.fullmatch(repo):
         return False
-    if not from_version or not to_version:
+    if not to_version:
         return False
     if any(char in from_version + to_version for char in "\n\r\x00"):
         return False
@@ -842,8 +843,8 @@ def _scan_one(update: dict, dest: Path, scan_script: Path) -> dict:
     env = os.environ.copy()
     env["GITHUB_OUTPUT"] = str(dest / "github_output.txt")
     env["PACKAGE_NAME"] = str(update.get("packageName") or "")
-    env["FROM_VERSION"] = str(update["fromVersion"])
-    env["TO_VERSION"] = str(update["toVersion"])
+    env["FROM_VERSION"] = str(update.get("fromVersion") or "")
+    env["TO_VERSION"] = str(update.get("toVersion") or "")
     proc = subprocess.run(
         ["bash", str(scan_script)],
         cwd=dest,
