@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import dependency_cursor_review_prompts as prompts
 import dependency_update_coverage as coverage
+import malware_verdict_formatter as formatter
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -364,6 +365,41 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertEqual(aggregated["not_scanned_reason"], "incomplete_coverage")
         self.assertIsNone(coverage.agent_target([report]))
         self.assertIsNone(aggregated["agent_target"])
+
+    def test_grouped_incomplete_review_cites_unread_and_is_not_benign(self) -> None:
+        covered = _clean("lodash", "lodash/lodash")
+        partial = _clean("minimist", "minimistjs/minimist")
+        partial["from_tag"] = ""
+        partial["to_tag"] = ""
+        partial["scan_conclusive"] = False
+        partial["status"] = "not_scanned"
+        partial["not_scanned_reason"] = "incomplete_coverage"
+        partial["unread"] = [{"file": "payload.bin", "cause": "nul blob"}]
+        report = coverage.aggregate([covered, partial])
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertEqual(report["unread"], [{"file": "payload.bin", "cause": "nul blob"}])
+        published = formatter.compose_published_review(
+            report,
+            "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n",
+            "COMPATIBILITY_RECOMMENDATION: Merge\n\nFine.\n",
+        )
+        self.assertEqual(published["verdict"], "suspicious")
+        self.assertIn("`payload.bin:1`", published["malware_text"])
+        self.assertIn("nul blob", published["malware_text"])
+        self.assertNotIn("**Verdict: benign**", published["malware_text"])
+        self.assertIs(published["may_complete"], False)
+
+        planted = _clean("left-pad", "left-pad/left-pad")
+        planted["verdict_token_in_tree"] = True
+        planted_report = coverage.aggregate([covered, planted])
+        self.assertIs(planted_report["verdict_token_in_tree"], True)
+        planted_published = formatter.compose_published_review(
+            planted_report,
+            "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n",
+            "COMPATIBILITY_RECOMMENDATION: Merge\n\nFine.\n",
+        )
+        self.assertNotEqual(planted_published["verdict"], "benign")
+        self.assertIs(planted_published["may_complete"], False)
 
     def test_uncovered_finding_status_is_kept(self) -> None:
         for status in ("fail", "warn"):

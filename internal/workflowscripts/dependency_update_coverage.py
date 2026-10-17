@@ -159,6 +159,26 @@ def agent_fields(records: list[dict]) -> dict[str, str]:
     }
 
 
+def _unread_items(records: list[dict]) -> list[dict]:
+    found: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for record in records:
+        for item in record.get("unread") or []:
+            if not isinstance(item, dict):
+                continue
+            file_name = item.get("file")
+            cause = item.get("cause")
+            if not isinstance(file_name, str) or not file_name.strip():
+                continue
+            why = cause.strip() if isinstance(cause, str) and cause.strip() else "incomplete"
+            key = (file_name.strip(), why)
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append({"file": file_name.strip(), "cause": why})
+    return found
+
+
 def aggregate(records: list[dict]) -> dict:
     """Covered only when every record was scanned conclusively."""
     target = agent_target(records)
@@ -221,6 +241,7 @@ def aggregate(records: list[dict]) -> dict:
             "changed_files": changed,
             "errors": errors,
             "findings": findings,
+            "unread": _unread_items(records),
             "dependencies": [
                 {
                     "package_name": record.get("package_name") or "",
