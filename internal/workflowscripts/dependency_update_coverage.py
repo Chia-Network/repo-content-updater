@@ -90,7 +90,8 @@ def _apply_coverage(report: dict) -> dict:
     if not covered:
         if not str(stamped.get("not_scanned_reason") or "").strip():
             stamped["not_scanned_reason"] = "incomplete_coverage"
-        stamped["status"] = "not_scanned"
+        if stamped.get("status") not in {"fail", "warn"}:
+            stamped["status"] = "not_scanned"
     return stamped
 
 

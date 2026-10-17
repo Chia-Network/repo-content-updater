@@ -330,6 +330,18 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIsNone(coverage.agent_target([report]))
         self.assertIsNone(aggregated["agent_target"])
 
+    def test_uncovered_finding_status_is_kept(self) -> None:
+        for status in ("fail", "warn"):
+            report = _clean("lodash", "lodash/lodash")
+            report["from_tag"] = ""
+            report["to_tag"] = ""
+            report["status"] = status
+            report["findings"]["ioc"] = [{"path": "pkg/index.js", "line": 1}]
+            aggregated = coverage.aggregate([report])
+            self.assertEqual(aggregated["status"], status)
+            self.assertIs(aggregated["scan_conclusive"], False)
+            self.assertEqual(aggregated["findings"]["ioc"][0]["path"], "pkg/index.js")
+
     def test_manifest_bump_missing_from_the_parsed_list_is_unresolved(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
