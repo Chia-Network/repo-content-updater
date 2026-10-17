@@ -298,6 +298,8 @@ _REQ_RE = re.compile(
 )
 _YARN_HEADER_RE = re.compile(r'"?(@?[^@"\s]+)@[^:]*:')
 _YARN_VERSION_RE = re.compile(r'^\s+version\s+"([^"]+)"')
+_VERSION_PREFIX_RE = re.compile(r"^(>=|<=|v|\^|~|=|>|<)")
+_GO_BLOCK_STARTS = frozenset({"require(", "replace(", "exclude(", "retract("})
 _OPAQUE_LOCKS = {
     "pnpm-lock.yaml",
     "Cargo.lock",
@@ -349,11 +351,34 @@ def _load_json_map(text: str) -> dict[str, str] | None:
         return None
 
 
+def _go_mod_lines(text: str) -> list[tuple[str, str]]:
+    """Classify go.mod lines. Only require lines are entries."""
+    classified: list[tuple[str, str]] = []
+    block = ""
+    for line in text.splitlines(keepends=True):
+        compact = "".join(line.split("//", 1)[0].split())
+        if block:
+            classified.append(("entry" if block == "require" else "residue", line))
+            if compact == ")":
+                block = ""
+            continue
+        if compact in _GO_BLOCK_STARTS:
+            block = compact[:-1]
+            classified.append(("residue", line))
+            continue
+        if compact.startswith(("replace", "exclude", "retract")):
+            classified.append(("residue", line))
+            continue
+        classified.append(("entry", line))
+    return classified
+
+
 def _go_mod_map(text: str) -> dict[str, str]:
     found: dict[str, str] = {}
-    for line in text.splitlines():
-        code = line.split("//", 1)[0]
-        match = _GO_MOD_RE.match(code)
+    for kind, line in _go_mod_lines(text):
+        if kind != "entry":
+            continue
+        match = _GO_MOD_RE.match(line.split("//", 1)[0])
         if match:
             found[match.group(1)] = match.group(2)
     return found
@@ -442,11 +467,29 @@ def _listed_versions(updates: list[dict], *, lower: bool = False) -> dict[str, s
     return found
 
 
+def _version_body(value: str) -> str:
+    match = _VERSION_PREFIX_RE.match(value)
+    return value[match.end() :] if match else value
+
+
 def _reached_listed_version(name: str, old: str, new: str, listed: dict[str, set[tuple[str, str]]]) -> bool:
-    """True when this package moved from its listed version to its listed version."""
+    """True when this package moved from its listed version to its listed version.
+
+    A leading v is optional. Any other prefix, such as an npm range, must be
+    unchanged, and the version text after it must be the listed one.
+    """
     if not old or not new or old == new:
         return False
-    return any(old == frm and new == to for frm, to in listed.get(name, ()))
+    old_prefix = _VERSION_PREFIX_RE.match(old)
+    new_prefix = _VERSION_PREFIX_RE.match(new)
+    old_mark = old_prefix.group(1) if old_prefix else ""
+    new_mark = new_prefix.group(1) if new_prefix else ""
+    if old_mark != new_mark and (old_mark not in {"", "v"} or new_mark not in {"", "v"}):
+        return False
+    old_body, new_body = _version_body(old), _version_body(new)
+    if not old_body or not new_body:
+        return False
+    return any(_version_body(frm) == old_body and _version_body(to) == new_body for frm, to in listed.get(name, ()))
 
 
 def _json_entry_version(parts: dict[str, object]) -> str:
@@ -466,8 +509,19 @@ def _take_specs(block: object, parts: dict[str, dict[str, object]]) -> None:
         return
     for name in list(block):
         spec = block[name]
-        if isinstance(spec, str) or (isinstance(spec, dict) and spec.get("version")):
+        if isinstance(spec, str):
             parts.setdefault(str(name), {})["spec"] = spec
+            del block[name]
+            continue
+        if not isinstance(spec, dict) or not spec.get("version"):
+            continue
+        nested = {
+            key: spec.pop(key) for key in ("dependencies", "optionalDependencies") if isinstance(spec.get(key), dict)
+        }
+        parts.setdefault(str(name), {})["spec"] = spec
+        if nested:
+            block[name] = nested
+        else:
             del block[name]
 
 
@@ -516,10 +570,10 @@ def _json_parts(text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
 def _go_mod_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
     entries: dict[str, tuple[str, str]] = {}
     residue: list[str] = []
-    for line in text.splitlines(keepends=True):
+    for kind, line in _go_mod_lines(text):
         code = line.split("//", 1)[0]
-        match = _GO_MOD_RE.match(code)
-        if match and not code.strip().startswith("replace"):
+        match = _GO_MOD_RE.match(code) if kind == "entry" else None
+        if match:
             entries[match.group(1)] = (match.group(2), code.strip())
             continue
         residue.append(line)
@@ -560,8 +614,8 @@ def _req_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
     return entries, "".join(residue)
 
 
-def _yarn_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
-    entries: dict[str, tuple[str, str]] = {}
+def _yarn_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
+    entries: dict[str, list[tuple[str, str]]] = {}
     residue: list[str] = []
     names: list[str] = []
     block: list[str] = []
@@ -570,9 +624,9 @@ def _yarn_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
     def flush() -> None:
         nonlocal names, block, version
         if names:
-            payload = "\n".join(block)
+            item = (version, "\n".join(block))
             for name in names:
-                entries[name] = (version, payload)
+                entries.setdefault(name, []).append(item)
         elif block:
             residue.append("\n".join(block) + "\n")
         names, block, version = [], [], ""
@@ -606,11 +660,43 @@ def _split_entries(kind: str, text: str) -> tuple[dict[str, tuple[str, str]], st
     return None
 
 
+def _entry_blocks(entry: object) -> list[tuple[str, str]]:
+    if isinstance(entry, tuple):
+        return [entry]
+    if isinstance(entry, list):
+        return [item for item in entry if isinstance(item, tuple)]
+    return []
+
+
+def _blocks_explain(
+    name: str,
+    old_blocks: list[tuple[str, str]],
+    new_blocks: list[tuple[str, str]],
+    listed: dict[str, set[tuple[str, str]]],
+) -> bool:
+    old_left = list(old_blocks)
+    new_left = list(new_blocks)
+    for block in list(old_left):
+        if block in new_left:
+            old_left.remove(block)
+            new_left.remove(block)
+    if not old_left and not new_left:
+        return True
+    if not old_left or not new_left:
+        return False
+    old_versions = {version for version, _payload in old_left}
+    new_versions = {version for version, _payload in new_left}
+    if len(old_versions) != 1 or len(new_versions) != 1:
+        return False
+    return _reached_listed_version(name, min(old_versions), min(new_versions), listed)
+
+
 def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) -> bool:
     """True when every changed entry moved to its listed version.
 
     Checksums on that entry are part of the change. A same-version entry,
-    an unlisted package, a replace line, or any other residue is not.
+    an unlisted package, a replace line, an extra descriptor, or any other
+    residue is not.
     """
     old_split = _split_entries(kind, before)
     new_split = _split_entries(kind, after)
@@ -621,16 +707,11 @@ def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) ->
     if old_residue != new_residue:
         return False
     listed = _listed_versions(updates, lower=kind == "requirements")
-    for name in set(old_entries) | set(new_entries):
-        old = old_entries.get(name)
-        new = new_entries.get(name)
-        if old == new:
-            continue
-        old_version = "" if old is None else old[0]
-        new_version = "" if new is None else new[0]
-        if not _reached_listed_version(name, old_version, new_version, listed):
-            return False
-    return True
+    names = set(old_entries) | set(new_entries)
+    return all(
+        _blocks_explain(name, _entry_blocks(old_entries.get(name)), _entry_blocks(new_entries.get(name)), listed)
+        for name in names
+    )
 
 
 def _git_text(rev: str, path: str) -> str:

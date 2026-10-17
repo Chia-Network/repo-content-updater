@@ -749,6 +749,154 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertEqual(report["status"], "clean")
         self.assertEqual(report["package_name"], "github.com/spf13/cobra")
 
+    def test_listed_go_versions_match_without_a_leading_v(self) -> None:
+        def go_mod(version: str) -> str:
+            return f"module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/spf13/cobra {version}\n)\n"
+
+        def go_sum(version: str, digest: str) -> str:
+            return (
+                f"github.com/spf13/cobra {version} h1:{digest}\ngithub.com/spf13/cobra {version}/go.mod h1:{digest}\n"
+            )
+
+        report = _run_listed_scan(
+            {"go.mod": go_mod("v1.8.0"), "go.sum": go_sum("v1.8.0", "a" * 43 + "=")},
+            {"go.mod": go_mod("v1.8.1"), "go.sum": go_sum("v1.8.1", "b" * 43 + "=")},
+            [
+                {
+                    "packageName": "github.com/spf13/cobra",
+                    "fromVersion": "1.8.0",
+                    "toVersion": "1.8.1",
+                    "upstreamRepo": "spf13/cobra",
+                }
+            ],
+        )
+        self.assertIs(report["scan_conclusive"], True)
+        self.assertEqual(report["status"], "clean")
+        self.assertEqual(report["package_name"], "github.com/spf13/cobra")
+
+    def test_listed_npm_range_bump_is_conclusive(self) -> None:
+        report = _run_listed_scan(
+            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n"},
+            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n"},
+            [
+                {
+                    "packageName": "lodash",
+                    "fromVersion": "4.17.20",
+                    "toVersion": "4.17.21",
+                    "upstreamRepo": "lodash/lodash",
+                }
+            ],
+        )
+        self.assertIs(report["scan_conclusive"], True)
+        self.assertEqual(report["status"], "clean")
+
+    def test_changed_range_prefix_is_unresolved(self) -> None:
+        report = _run_listed_scan(
+            {"package.json": json.dumps({"dependencies": {"lodash": "4.17.20"}}) + "\n"},
+            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n"},
+            [
+                {
+                    "packageName": "lodash",
+                    "fromVersion": "4.17.20",
+                    "toVersion": "4.17.21",
+                    "upstreamRepo": "lodash/lodash",
+                }
+            ],
+        )
+        names = {item["package_name"] for item in report["dependencies"]}
+        self.assertIn("package.json", names)
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
+
+    def test_replace_block_keeps_the_module_file_unresolved(self) -> None:
+        def go_mod(version: str, target: str) -> str:
+            return (
+                "module example.com/app\n\ngo 1.22\n\n"
+                f"require github.com/spf13/cobra {version}\n\n"
+                "replace (\n"
+                f"\tgithub.com/spf13/cobra {version} => {target} {version}\n"
+                ")\n"
+            )
+
+        report = _run_listed_scan(
+            {"go.mod": go_mod("v1.8.0", "github.com/spf13/cobra")},
+            {"go.mod": go_mod("v1.8.1", "github.com/evil/cobra")},
+            [
+                {
+                    "packageName": "github.com/spf13/cobra",
+                    "fromVersion": "1.8.0",
+                    "toVersion": "1.8.1",
+                    "upstreamRepo": "spf13/cobra",
+                }
+            ],
+        )
+        names = {item["package_name"] for item in report["dependencies"]}
+        self.assertIn("go.mod", names)
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
+
+    def test_extra_yarn_descriptor_and_nested_lock_entry_stay_unresolved(self) -> None:
+        def yarn(version: str, integrity: str, other: str) -> str:
+            return (
+                f'lodash@^{version}:\n  version "{version}"\n  integrity "{integrity}"\n\n'
+                f'lodash@^3.10.1:\n  version "3.10.1"\n  integrity "{other}"\n'
+            )
+
+        def lock(version: str, integrity: str, nested: str) -> str:
+            return (
+                json.dumps(
+                    {
+                        "lockfileVersion": 1,
+                        "dependencies": {
+                            "lodash": {
+                                "version": version,
+                                "integrity": integrity,
+                                "dependencies": {"minimist": {"version": "1.2.8", "integrity": nested}},
+                            }
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        listed = [
+            {
+                "packageName": "lodash",
+                "fromVersion": "4.17.20",
+                "toVersion": "4.17.21",
+                "upstreamRepo": "lodash/lodash",
+            }
+        ]
+        clean = _run_listed_scan(
+            {
+                "yarn.lock": yarn("4.17.20", "sha-old", "sha-other"),
+                "package-lock.json": lock("4.17.20", "sha-old", "sha-mini"),
+            },
+            {
+                "yarn.lock": yarn("4.17.21", "sha-new", "sha-other"),
+                "package-lock.json": lock("4.17.21", "sha-new", "sha-mini"),
+            },
+            listed,
+        )
+        self.assertIs(clean["scan_conclusive"], True)
+        self.assertEqual(clean["status"], "clean")
+        tainted = _run_listed_scan(
+            {
+                "yarn.lock": yarn("4.17.20", "sha-old", "sha-other"),
+                "package-lock.json": lock("4.17.20", "sha-old", "sha-mini"),
+            },
+            {
+                "yarn.lock": yarn("4.17.21", "sha-new", "sha-evil"),
+                "package-lock.json": lock("4.17.21", "sha-new", "sha-evil"),
+            },
+            listed,
+        )
+        names = {item["package_name"] for item in tainted["dependencies"]}
+        self.assertIn("yarn.lock", names)
+        self.assertIn("package-lock.json", names)
+        self.assertIs(tainted["scan_conclusive"], False)
+        self.assertNotEqual(tainted["status"], "clean")
+
 
 if __name__ == "__main__":
     unittest.main()
