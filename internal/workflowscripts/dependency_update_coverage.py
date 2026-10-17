@@ -277,6 +277,7 @@ _REQ_RE = re.compile(
 )
 _YARN_HEADER_RE = re.compile(r'"?(@?[^@"\s]+)@[^:]*:')
 _YARN_VERSION_RE = re.compile(r'^\s+version\s+"([^"]+)"')
+_YARN_CHECKSUM_RE = re.compile(r"^\s+(?:resolved|integrity)\s")
 _OPAQUE_LOCKS = {
     "pnpm-lock.yaml",
     "Cargo.lock",
@@ -305,12 +306,20 @@ def _json_dep_map(doc: object) -> dict[str, str]:
         for key, meta in packages.items():
             if not isinstance(key, str) or not isinstance(meta, dict):
                 continue
-            if not key.startswith("node_modules/") or "/node_modules/" in key[len("node_modules/") :]:
+            name = _direct_lock_name(key)
+            if not name:
                 continue
             version = meta.get("version")
             if version:
-                found[key[len("node_modules/") :]] = str(version)
+                found[name] = str(version)
     return found
+
+
+def _direct_lock_name(key: str) -> str:
+    prefix = "node_modules/"
+    if not key.startswith(prefix) or "/node_modules/" in key[len(prefix) :]:
+        return ""
+    return key[len(prefix) :]
 
 
 def _load_json_map(text: str) -> dict[str, str] | None:
@@ -404,27 +413,92 @@ def _version_tokens(spec: str) -> list[str]:
     return sorted(part for part in spec.split() if part)
 
 
+def _blank_json_checksums(text: str, changed: set[str]) -> str:
+    if not text.strip():
+        return text
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(doc, dict):
+        return text
+    for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+        block = doc.get(section)
+        if not isinstance(block, dict):
+            continue
+        for name, spec in block.items():
+            if name in changed and isinstance(spec, dict):
+                spec.pop("integrity", None)
+                spec.pop("resolved", None)
+    packages = doc.get("packages")
+    if isinstance(packages, dict):
+        for key, meta in packages.items():
+            if isinstance(key, str) and isinstance(meta, dict) and _direct_lock_name(key) in changed:
+                meta.pop("integrity", None)
+                meta.pop("resolved", None)
+    return json.dumps(doc, sort_keys=True, separators=(",", ":"))
+
+
+def _blank_go_sum_hashes(text: str, changed: set[str]) -> str:
+    lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        ending = line[len(body) :]
+        match = _GO_SUM_RE.match(body)
+        if match and match.group(1) in changed:
+            lines.append(f"{match.group(1)} {match.group(2)}{ending}")
+        else:
+            lines.append(line)
+    return "".join(lines)
+
+
+def _blank_yarn_checksums(text: str, changed: set[str]) -> str:
+    lines: list[str] = []
+    names: list[str] = []
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        if body and not body.startswith((" ", "\t")):
+            names = _YARN_HEADER_RE.findall(body)
+            lines.append(line)
+            continue
+        if any(name in changed for name in names) and _YARN_CHECKSUM_RE.match(body):
+            continue
+        lines.append(line)
+    return "".join(lines)
+
+
+def _blank_changed_checksums(kind: str, text: str, changed: set[str]) -> str:
+    """Drop checksums that belong to a package whose parsed version changed."""
+    if kind == "json":
+        return _blank_json_checksums(text, changed)
+    if kind == "go.sum":
+        return _blank_go_sum_hashes(text, changed)
+    if kind == "yarn":
+        return _blank_yarn_checksums(text, changed)
+    return text
+
+
 def _version_strings_explain(kind: str, before: str, after: str) -> bool:
-    """True when substituting parsed version tokens turns before into after."""
+    """True when listed version edits, including their own checksums, explain the diff."""
     old = _versions_for(kind, before)
     new = _versions_for(kind, after)
     if old is None or new is None:
         return False
+    changed = {name for name in set(old) | set(new) if old.get(name) != new.get(name)}
     pairs: list[tuple[str, str]] = []
-    for name in set(old) | set(new):
+    for name in changed:
         old_tokens = _version_tokens(old.get(name) or "")
         new_tokens = _version_tokens(new.get(name) or "")
-        if old_tokens == new_tokens:
-            continue
         if len(old_tokens) != len(new_tokens):
             return False
         pairs.extend(zip(old_tokens, new_tokens, strict=True))
-    rewritten = before
+    rewritten = _blank_changed_checksums(kind, before, changed)
+    target = _blank_changed_checksums(kind, after, changed)
     for old_token, new_token in sorted(pairs, key=lambda pair: len(pair[0]), reverse=True):
         if old_token not in rewritten:
             return False
         rewritten = rewritten.replace(old_token, new_token)
-    return rewritten == after
+    return rewritten == target
 
 
 def _git_text(rev: str, path: str) -> str:
@@ -485,7 +559,8 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
     """Direct manifest and lockfile bumps missing from the parsed list.
 
     An unreadable base ref, when one was named, is itself unresolved.
-    Bytes that are not listed version strings stay unresolved under the path.
+    A checksum, replace line, or nested entry outside a listed version change
+    stays unresolved under the path.
     """
     base = _base_commit()
     if base is None:
