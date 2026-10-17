@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import runpy
 import shutil
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -290,452 +292,25 @@ def any_read(report: dict) -> bool:
     return int(report.get("materialized_count") or 0) > 0
 
 
-_BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
-_GO_MOD_RE = re.compile(
-    r"^\s*(?:require\s+)?([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)\s+(v\S+)",
-    re.M,
-)
-_GO_SUM_RE = re.compile(r"^(\S+)\s+(v\S+)\s+", re.M)
-_REQ_RE = re.compile(
-    r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:==|>=|<=|~=|!=|===)\s*([^\s#;]+)",
-    re.M,
-)
-_YARN_HEADER_RE = re.compile(r'"?(@?[^@"\s]+)@[^:]*:')
-_YARN_VERSION_RE = re.compile(r'^\s+version\s+"([^"]+)"')
-_VERSION_PREFIX_RE = re.compile(r"^(>=|<=|v|\^|~|=|>|<)")
-_GO_BLOCK_STARTS = frozenset({"require(", "replace(", "exclude(", "retract("})
-_OPAQUE_LOCKS = {
-    "pnpm-lock.yaml",
-    "Cargo.lock",
-    "poetry.lock",
-    "Pipfile.lock",
-    "Gemfile.lock",
-    "composer.lock",
-}
+def _load_manifest_diff():
+    """Load the manifest grammar beside this file under python3 -I.
 
-
-def _json_dep_map(doc: object) -> dict[str, str]:
-    found: dict[str, str] = {}
-    if not isinstance(doc, dict):
-        return found
-    for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
-        block = doc.get(section)
-        if not isinstance(block, dict):
-            continue
-        for name, spec in block.items():
-            if isinstance(spec, str):
-                found[str(name)] = spec
-            elif isinstance(spec, dict) and spec.get("version"):
-                found[str(name)] = str(spec["version"])
-    packages = doc.get("packages")
-    if isinstance(packages, dict):
-        for key, meta in packages.items():
-            if not isinstance(key, str) or not isinstance(meta, dict):
-                continue
-            name = _direct_lock_name(key)
-            if not name:
-                continue
-            version = meta.get("version")
-            if version:
-                found[name] = str(version)
-    return found
-
-
-def _direct_lock_name(key: str) -> str:
-    prefix = "node_modules/"
-    if not key.startswith(prefix) or "/node_modules/" in key[len(prefix) :]:
-        return ""
-    return key[len(prefix) :]
-
-
-def _load_json_map(text: str) -> dict[str, str] | None:
-    try:
-        return _json_dep_map(json.loads(text))
-    except json.JSONDecodeError:
-        return None
-
-
-def _go_mod_lines(text: str) -> list[tuple[str, str]]:
-    """Classify go.mod lines. Only require lines are entries."""
-    classified: list[tuple[str, str]] = []
-    block = ""
-    for line in text.splitlines(keepends=True):
-        compact = "".join(line.split("//", 1)[0].split())
-        if block:
-            classified.append(("entry" if block == "require" else "residue", line))
-            if compact == ")":
-                block = ""
-            continue
-        if compact in _GO_BLOCK_STARTS:
-            block = compact[:-1]
-            classified.append(("residue", line))
-            continue
-        if compact.startswith(("replace", "exclude", "retract")):
-            classified.append(("residue", line))
-            continue
-        classified.append(("entry", line))
-    return classified
-
-
-def _go_mod_map(text: str) -> dict[str, str]:
-    found: dict[str, str] = {}
-    for kind, line in _go_mod_lines(text):
-        if kind != "entry":
-            continue
-        match = _GO_MOD_RE.match(line.split("//", 1)[0])
-        if match:
-            found[match.group(1)] = match.group(2)
-    return found
-
-
-def _go_sum_map(text: str) -> dict[str, str]:
-    found: dict[str, set[str]] = {}
-    for match in _GO_SUM_RE.finditer(text):
-        found.setdefault(match.group(1), set()).add(match.group(2))
-    return {name: " ".join(sorted(versions)) for name, versions in found.items()}
-
-
-def _requirements_map(text: str) -> dict[str, str]:
-    return {match.group(1).lower(): match.group(2) for match in _REQ_RE.finditer(text)}
-
-
-def _yarn_map(text: str) -> dict[str, str]:
-    found: dict[str, set[str]] = {}
-    names: list[str] = []
-    for line in text.splitlines():
-        if line and not line.startswith((" ", "\t")):
-            names = _YARN_HEADER_RE.findall(line)
-            continue
-        match = _YARN_VERSION_RE.match(line)
-        if match:
-            for name in names:
-                found.setdefault(name, set()).add(match.group(1))
-    return {name: " ".join(sorted(versions)) for name, versions in found.items()}
-
-
-def _manifest_kind(path: str) -> str:
-    name = Path(path).name
-    lowered = path.replace("\\", "/")
-    if name in {"package.json", "package-lock.json", "npm-shrinkwrap.json"}:
-        return "json"
-    if name == "go.mod":
-        return "go.mod"
-    if name == "go.sum":
-        return "go.sum"
-    if name == "yarn.lock":
-        return "yarn"
-    if name in _OPAQUE_LOCKS:
-        return "opaque"
-    if (name.startswith("requirements") or "/requirements/" in lowered) and name.endswith(".txt"):
-        return "requirements"
-    return ""
-
-
-def _versions_for(kind: str, text: str) -> dict[str, str] | None:
-    if kind == "opaque":
-        return None
-    if kind == "json":
-        if not text.strip():
-            return {}
-        return _load_json_map(text)
-    if kind == "go.mod":
-        return _go_mod_map(text)
-    if kind == "go.sum":
-        return _go_sum_map(text)
-    if kind == "yarn":
-        return _yarn_map(text)
-    if kind == "requirements":
-        return _requirements_map(text)
-    return {}
-
-
-def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
-    old = _versions_for(kind, before)
-    new = _versions_for(kind, after)
-    if old is None or new is None:
-        return None
-    names = set(old) | set(new)
-    return {name for name in names if old.get(name) != new.get(name)}
-
-
-def _listed_versions(updates: list[dict], *, lower: bool = False) -> dict[str, set[tuple[str, str]]]:
-    found: dict[str, set[tuple[str, str]]] = {}
-    for item in updates:
-        name = str(item.get("packageName") or "").strip()
-        if lower:
-            name = name.lower()
-        if not name:
-            continue
-        pair = (str(item.get("fromVersion") or "").strip(), str(item.get("toVersion") or "").strip())
-        found.setdefault(name, set()).add(pair)
-    return found
-
-
-def _version_body(value: str) -> str:
-    match = _VERSION_PREFIX_RE.match(value)
-    return value[match.end() :] if match else value
-
-
-def _reached_listed_version(name: str, old: str, new: str, listed: dict[str, set[tuple[str, str]]]) -> bool:
-    """True when this package moved from its listed version to its listed version.
-
-    A leading v is optional. Any other prefix, such as an npm range, must be
-    unchanged, and the version text after it must be the listed one.
+    The cold-start spine is the only bootstrap. It path-filters the sibling,
+    so this script never imports it and never puts the scripts directory on sys.path.
     """
-    if not old or not new or old == new:
-        return False
-    old_prefix = _VERSION_PREFIX_RE.match(old)
-    new_prefix = _VERSION_PREFIX_RE.match(new)
-    old_mark = old_prefix.group(1) if old_prefix else ""
-    new_mark = new_prefix.group(1) if new_prefix else ""
-    if old_mark != new_mark and (old_mark not in {"", "v"} or new_mark not in {"", "v"}):
-        return False
-    old_body, new_body = _version_body(old), _version_body(new)
-    if not old_body or not new_body:
-        return False
-    return any(_version_body(frm) == old_body and _version_body(to) == new_body for frm, to in listed.get(name, ()))
-
-
-def _json_entry_version(parts: dict[str, object]) -> str:
-    lock = parts.get("lock")
-    if isinstance(lock, dict) and lock.get("version"):
-        return str(lock["version"])
-    spec = parts.get("spec")
-    if isinstance(spec, str):
-        return spec
-    if isinstance(spec, dict) and spec.get("version"):
-        return str(spec["version"])
-    return ""
-
-
-def _take_specs(block: object, parts: dict[str, dict[str, object]]) -> None:
-    if not isinstance(block, dict):
-        return
-    for name in list(block):
-        spec = block[name]
-        if isinstance(spec, str):
-            parts.setdefault(str(name), {})["spec"] = spec
-            del block[name]
-            continue
-        if not isinstance(spec, dict) or not spec.get("version"):
-            continue
-        nested = {
-            key: spec.pop(key) for key in ("dependencies", "optionalDependencies") if isinstance(spec.get(key), dict)
-        }
-        parts.setdefault(str(name), {})["spec"] = spec
-        if nested:
-            block[name] = nested
-        else:
-            del block[name]
-
-
-def _json_parts(text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
-    if not text.strip():
-        return {}, ""
-    try:
-        doc = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(doc, dict):
-        return None
-    parts: dict[str, dict[str, object]] = {}
-    for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
-        _take_specs(doc.get(section), parts)
-        block = doc.get(section)
-        if isinstance(block, dict) and not block:
-            doc.pop(section, None)
-    packages = doc.get("packages")
-    if isinstance(packages, dict):
-        root = packages.get("")
-        if isinstance(root, dict):
-            for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
-                _take_specs(root.get(section), parts)
-                block = root.get(section)
-                if isinstance(block, dict) and not block:
-                    root.pop(section, None)
-        for key in list(packages):
-            if not isinstance(key, str):
-                continue
-            name = _direct_lock_name(key)
-            meta = packages.get(key)
-            if not name or not isinstance(meta, dict):
-                continue
-            parts.setdefault(name, {})["lock"] = meta
-            del packages[key]
-        if not packages:
-            doc.pop("packages", None)
-    entries = {
-        name: (_json_entry_version(blob), json.dumps(blob, sort_keys=True, separators=(",", ":")))
-        for name, blob in parts.items()
-    }
-    return entries, json.dumps(doc, sort_keys=True, separators=(",", ":"))
-
-
-def _go_mod_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
-    entries: dict[str, list[tuple[str, str]]] = {}
-    residue: list[str] = []
-    for kind, line in _go_mod_lines(text):
-        code = line.split("//", 1)[0]
-        match = _GO_MOD_RE.match(code) if kind == "entry" else None
-        if match:
-            entries.setdefault(match.group(1), []).append((match.group(2), code.strip()))
-            continue
-        residue.append(line)
-    return entries, "".join(residue)
-
-
-def _go_sum_version(tokens: set[str]) -> str:
-    primaries = sorted({token.split("/go.mod", 1)[0] for token in tokens})
-    return primaries[0] if len(primaries) == 1 else " ".join(primaries)
-
-
-def _go_sum_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
-    grouped: dict[str, list[str]] = {}
-    versions: dict[str, set[str]] = {}
-    residue: list[str] = []
-    for line in text.splitlines(keepends=True):
-        body = line.strip()
-        match = _GO_SUM_RE.match(body)
-        if not body or not match:
-            residue.append(line)
-            continue
-        name, version = match.group(1), match.group(2)
-        grouped.setdefault(name, []).append(body)
-        versions.setdefault(name, set()).add(version)
-    entries = {name: (_go_sum_version(versions[name]), "\n".join(sorted(grouped[name]))) for name in grouped}
-    return entries, "".join(residue)
-
-
-def _req_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
-    entries: dict[str, list[tuple[str, str]]] = {}
-    residue: list[str] = []
-    for line in text.splitlines(keepends=True):
-        match = _REQ_RE.match(line)
-        if match:
-            entries.setdefault(match.group(1).lower(), []).append((match.group(2), line.strip()))
-            continue
-        residue.append(line)
-    return entries, "".join(residue)
-
-
-def _yarn_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
-    entries: dict[str, list[tuple[str, str]]] = {}
-    residue: list[str] = []
-    names: list[str] = []
-    block: list[str] = []
-    version = ""
-
-    def flush() -> None:
-        nonlocal names, block, version
-        if names:
-            item = (version, "\n".join(block))
-            for name in names:
-                entries.setdefault(name, []).append(item)
-        elif block:
-            residue.append("\n".join(block) + "\n")
-        names, block, version = [], [], ""
-
-    for raw in text.splitlines():
-        if raw and not raw.startswith((" ", "\t")):
-            flush()
-            names = _YARN_HEADER_RE.findall(raw)
-            block = [raw]
-            version = ""
-            continue
-        block.append(raw)
-        match = _YARN_VERSION_RE.match(raw)
-        if match:
-            version = match.group(1)
-    flush()
-    return entries, "".join(residue)
-
-
-def _split_entries(kind: str, text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
-    if kind == "json":
-        return _json_parts(text)
-    if kind == "go.mod":
-        return _go_mod_parts(text)
-    if kind == "go.sum":
-        return _go_sum_parts(text)
-    if kind == "requirements":
-        return _req_parts(text)
-    if kind == "yarn":
-        return _yarn_parts(text)
-    return None
-
-
-def _entry_blocks(entry: object) -> list[tuple[str, str]]:
-    if isinstance(entry, tuple):
-        return [entry]
-    if isinstance(entry, list):
-        return [item for item in entry if isinstance(item, tuple)]
-    return []
-
-
-def _stanza_versions(blocks: list[tuple[str, str]]) -> dict[str, str] | None:
-    found: dict[str, str] = {}
-    for version, payload in blocks:
-        key = payload.split("\n", 1)[0]
-        if not key or key in found:
-            return None
-        found[key] = version
-    return found
-
-
-def _blocks_explain(
-    name: str,
-    old_blocks: list[tuple[str, str]],
-    new_blocks: list[tuple[str, str]],
-    listed: dict[str, set[tuple[str, str]]],
-    *,
-    keyed: bool,
-) -> bool:
-    old_left = list(old_blocks)
-    new_left = list(new_blocks)
-    for block in list(old_left):
-        if block in new_left:
-            old_left.remove(block)
-            new_left.remove(block)
-    if not old_left and not new_left:
-        return True
-    if keyed:
-        old_map = _stanza_versions(old_left)
-        new_map = _stanza_versions(new_left)
-        if old_map is None or new_map is None or set(old_map) != set(new_map):
-            return False
-        return all(_reached_listed_version(name, old_map[key], new_map[key], listed) for key in old_map)
-    if len(old_left) != 1 or len(new_left) != 1:
-        return False
-    return _reached_listed_version(name, old_left[0][0], new_left[0][0], listed)
-
-
-def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) -> bool:
-    """True when every changed entry moved to its listed version.
-
-    Checksums on that entry are part of the change. A same-version entry,
-    an unlisted package, a replace line, a yarn key that appears or
-    disappears, or any other residue is not.
-    """
-    old_split = _split_entries(kind, before)
-    new_split = _split_entries(kind, after)
-    if old_split is None or new_split is None:
-        return False
-    old_entries, old_residue = old_split
-    new_entries, new_residue = new_split
-    if old_residue != new_residue:
-        return False
-    listed = _listed_versions(updates, lower=kind == "requirements")
-    names = set(old_entries) | set(new_entries)
-    return all(
-        _blocks_explain(
-            name,
-            _entry_blocks(old_entries.get(name)),
-            _entry_blocks(new_entries.get(name)),
-            listed,
-            keyed=kind == "yarn",
-        )
-        for name in names
+    script_dir = Path(__file__).resolve().parent
+    cold = runpy.run_path(str(script_dir / "trusted_formatter_loader_cold_start.py"))
+    cold["resolve_loader_for_dir"](script_dir)
+    scrub = sys.modules["scripts_dir_path_scrub"]
+    return scrub.bootstrap_module_from_scripts_dir(
+        script_dir,
+        "dependency_manifest_diff.py",
+        "dependency_manifest_diff",
     )
+
+
+_diff = _load_manifest_diff()
+_BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
 
 
 def _git_text(rev: str, path: str) -> str:
@@ -816,13 +391,13 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
     gaps: list[dict] = []
     seen = set(listed)
     for path in diff.stdout.splitlines():
-        kind = _manifest_kind(path)
+        kind = _diff._manifest_kind(path)
         if not kind:
             continue
         before = _git_text(base, path)
         after = _git_text("HEAD", path)
-        names = _changed_names(kind, before, after)
-        explained = names is not None and _entries_explain(kind, before, after, updates)
+        names = _diff._changed_names(kind, before, after)
+        explained = names is not None and _diff._entries_explain(kind, before, after, updates)
         if names is None or (before != after and names <= listed and not explained):
             labels = [path]
         else:
