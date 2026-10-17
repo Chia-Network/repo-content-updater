@@ -683,7 +683,7 @@ def _blocks_explain(
             new_left.remove(block)
     if not old_left and not new_left:
         return True
-    if not old_left or not new_left:
+    if len(old_left) != len(new_left):
         return False
     old_versions = {version for version, _payload in old_left}
     new_versions = {version for version, _payload in new_left}

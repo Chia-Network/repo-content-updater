@@ -897,6 +897,35 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIs(tainted["scan_conclusive"], False)
         self.assertNotEqual(tainted["status"], "clean")
 
+    def test_added_yarn_descriptor_at_the_listed_version_is_unresolved(self) -> None:
+        updates = [
+            {
+                "packageName": "lodash",
+                "fromVersion": "4.17.20",
+                "toVersion": "4.17.21",
+                "upstreamRepo": "lodash/lodash",
+            }
+        ]
+        old = 'lodash@^4.17.20:\n  version "4.17.20"\n  integrity "sha-old"\n'
+        added = (
+            'lodash@^4.17.21:\n  version "4.17.21"\n  integrity "sha-new"\n\n'
+            'lodash@npm:4.17.21:\n  version "4.17.21"\n  integrity "sha-evil"\n'
+        )
+        self.assertFalse(coverage._entries_explain("yarn", old, added, updates))
+        both = (
+            'lodash@^4.17.20:\n  version "4.17.20"\n  integrity "a"\n\n'
+            'lodash@npm:4.17.20:\n  version "4.17.20"\n  integrity "b"\n'
+        )
+        bumped = (
+            'lodash@^4.17.21:\n  version "4.17.21"\n  integrity "c"\n\n'
+            'lodash@npm:4.17.21:\n  version "4.17.21"\n  integrity "d"\n'
+        )
+        self.assertTrue(coverage._entries_explain("yarn", both, bumped, updates))
+        report = _run_listed_scan({"yarn.lock": old}, {"yarn.lock": added}, updates)
+        self.assertIn("yarn.lock", {item["package_name"] for item in report["dependencies"]})
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
+
     def test_empty_from_still_scans_the_to_tree(self) -> None:
         update = {
             "packageName": "lodash",
