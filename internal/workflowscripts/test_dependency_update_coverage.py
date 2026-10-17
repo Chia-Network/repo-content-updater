@@ -85,6 +85,10 @@ def _run_listed_scan(base: dict[str, str], head: dict[str, str], updates: list[d
         return json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
 
 
+def _bump(name: str, frm: str, to: str, repo: str) -> dict[str, str]:
+    return {"packageName": name, "fromVersion": frm, "toVersion": to, "upstreamRepo": repo}
+
+
 def _clean(name: str, repo: str) -> dict:
     return {
         "status": "clean",
@@ -838,35 +842,19 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
     def test_extra_yarn_descriptor_and_nested_lock_entry_stay_unresolved(self) -> None:
         def yarn(version: str, integrity: str, other: str) -> str:
             return (
-                f'lodash@^{version}:\n  version "{version}"\n  integrity "{integrity}"\n\n'
+                f'lodash@^4.17.20:\n  version "{version}"\n  integrity "{integrity}"\n\n'
                 f'lodash@^3.10.1:\n  version "3.10.1"\n  integrity "{other}"\n'
             )
 
         def lock(version: str, integrity: str, nested: str) -> str:
-            return (
-                json.dumps(
-                    {
-                        "lockfileVersion": 1,
-                        "dependencies": {
-                            "lodash": {
-                                "version": version,
-                                "integrity": integrity,
-                                "dependencies": {"minimist": {"version": "1.2.8", "integrity": nested}},
-                            }
-                        },
-                    }
-                )
-                + "\n"
-            )
-
-        listed = [
-            {
-                "packageName": "lodash",
-                "fromVersion": "4.17.20",
-                "toVersion": "4.17.21",
-                "upstreamRepo": "lodash/lodash",
+            lodash = {
+                "version": version,
+                "integrity": integrity,
+                "dependencies": {"minimist": {"version": "1.2.8", "integrity": nested}},
             }
-        ]
+            return json.dumps({"lockfileVersion": 1, "dependencies": {"lodash": lodash}}) + "\n"
+
+        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
         clean = _run_listed_scan(
             {
                 "yarn.lock": yarn("4.17.20", "sha-old", "sha-other"),
@@ -897,15 +885,31 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIs(tainted["scan_conclusive"], False)
         self.assertNotEqual(tainted["status"], "clean")
 
+        def stanza(selector: str, version: str, resolved: str) -> str:
+            return f'lodash@{selector}:\n  version "{version}"\n  resolved "{resolved}"\n  integrity "sha"\n'
+
+        base_lock = "\n".join(
+            (
+                stanza("^4.17.20", "4.17.20", "https://registry.yarnpkg.com/lodash/-/lodash-4.17.20.tgz"),
+                stanza("^4.0.0", "4.17.20", "https://registry.yarnpkg.com/lodash/-/lodash-4.17.20.tgz"),
+            )
+        )
+        head_lock = "\n".join(
+            (
+                stanza("^4.17.20", "4.17.21", "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz"),
+                stanza("^4.17.21", "4.17.21", "https://evil.example/lodash.tgz"),
+            )
+        )
+        swap = _run_listed_scan(
+            {"package.json": '{"dependencies":{"lodash":"^4.17.20"}}\n', "yarn.lock": base_lock},
+            {"package.json": '{"dependencies":{"lodash":"^4.17.21"}}\n', "yarn.lock": head_lock},
+            listed,
+        )
+        self.assertIs(swap["scan_conclusive"], False)
+        self.assertNotEqual(swap["status"], "clean")
+
     def test_added_yarn_descriptor_at_the_listed_version_is_unresolved(self) -> None:
-        updates = [
-            {
-                "packageName": "lodash",
-                "fromVersion": "4.17.20",
-                "toVersion": "4.17.21",
-                "upstreamRepo": "lodash/lodash",
-            }
-        ]
+        updates = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
         old = (
             'lodash@^4.17.20:\n  version "4.17.20"\n'
             '  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.20.tgz"\n'
@@ -926,22 +930,9 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertNotEqual(report["status"], "clean")
 
     def test_duplicate_require_pin_and_warn_stay_non_clean(self) -> None:
-        updates = [
-            {
-                "packageName": "github.com/spf13/cobra",
-                "fromVersion": "v1.8.0",
-                "toVersion": "v1.8.1",
-                "upstreamRepo": "spf13/cobra",
-            }
-        ]
-        old_mod = (
-            "module example.com/app\n\ngo 1.22\n\nrequire (\n"
-            "\tgithub.com/spf13/cobra v1.8.0\n\tgithub.com/foo/bar v1.2.3\n)\n"
-        )
-        new_mod = (
-            "module example.com/app\n\ngo 1.22\n\nrequire (\n"
-            "\tgithub.com/spf13/cobra v1.8.1\n\tgithub.com/foo/bar v1.9.9\n\tgithub.com/foo/bar v1.2.3\n)\n"
-        )
+        updates = [_bump("github.com/spf13/cobra", "v1.8.0", "v1.8.1", "spf13/cobra")]
+        old_mod = "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/spf13/cobra v1.8.0\n\tgithub.com/foo/bar v1.2.3\n)\n"
+        new_mod = "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/spf13/cobra v1.8.1\n\tgithub.com/foo/bar v1.9.9\n\tgithub.com/foo/bar v1.2.3\n)\n"
         report = _run_listed_scan(
             {"go.mod": old_mod, "requirements.txt": "requests==2.31.0\n"},
             {"go.mod": new_mod, "requirements.txt": "requests==9.9.9\nrequests==2.31.0\n"},

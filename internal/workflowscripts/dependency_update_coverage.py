@@ -672,11 +672,23 @@ def _entry_blocks(entry: object) -> list[tuple[str, str]]:
     return []
 
 
+def _stanza_versions(blocks: list[tuple[str, str]]) -> dict[str, str] | None:
+    found: dict[str, str] = {}
+    for version, payload in blocks:
+        key = payload.split("\n", 1)[0]
+        if not key or key in found:
+            return None
+        found[key] = version
+    return found
+
+
 def _blocks_explain(
     name: str,
     old_blocks: list[tuple[str, str]],
     new_blocks: list[tuple[str, str]],
     listed: dict[str, set[tuple[str, str]]],
+    *,
+    keyed: bool,
 ) -> bool:
     old_left = list(old_blocks)
     new_left = list(new_blocks)
@@ -686,6 +698,12 @@ def _blocks_explain(
             new_left.remove(block)
     if not old_left and not new_left:
         return True
+    if keyed:
+        old_map = _stanza_versions(old_left)
+        new_map = _stanza_versions(new_left)
+        if old_map is None or new_map is None or set(old_map) != set(new_map):
+            return False
+        return all(_reached_listed_version(name, old_map[key], new_map[key], listed) for key in old_map)
     if len(old_left) != 1 or len(new_left) != 1:
         return False
     return _reached_listed_version(name, old_left[0][0], new_left[0][0], listed)
@@ -695,8 +713,8 @@ def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) ->
     """True when every changed entry moved to its listed version.
 
     Checksums on that entry are part of the change. A same-version entry,
-    an unlisted package, a replace line, an extra descriptor, or any other
-    residue is not.
+    an unlisted package, a replace line, a yarn key that appears or
+    disappears, or any other residue is not.
     """
     old_split = _split_entries(kind, before)
     new_split = _split_entries(kind, after)
@@ -709,7 +727,13 @@ def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) ->
     listed = _listed_versions(updates, lower=kind == "requirements")
     names = set(old_entries) | set(new_entries)
     return all(
-        _blocks_explain(name, _entry_blocks(old_entries.get(name)), _entry_blocks(new_entries.get(name)), listed)
+        _blocks_explain(
+            name,
+            _entry_blocks(old_entries.get(name)),
+            _entry_blocks(new_entries.get(name)),
+            listed,
+            keyed=kind == "yarn",
+        )
         for name in names
     )
 
