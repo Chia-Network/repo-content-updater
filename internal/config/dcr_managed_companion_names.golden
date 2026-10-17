@@ -9,6 +9,7 @@ trusted-formatter-loader
 trusted-formatter-loader-cold-start
 upstream-malware-scan
 dependency-update-coverage
+dependency-manifest-diff
 dependency-cursor-review-prompts
 dependency-cursor-review-combine-outputs
 dependency-cursor-review-dependabot-context
