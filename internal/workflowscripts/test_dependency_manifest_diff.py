@@ -53,6 +53,10 @@ def _bump(name: str, frm: str, to: str, repo: str) -> dict[str, str]:
     return {"packageName": name, "fromVersion": frm, "toVersion": to, "upstreamRepo": repo}
 
 
+def _unresolved(report: dict) -> set[str]:
+    return {item["package_name"] for item in report["dependencies"] if item.get("not_scanned_reason") == "unresolved"}
+
+
 class DependencyManifestDiffTest(unittest.TestCase):
     def test_manifest_bump_missing_from_the_parsed_list_is_unresolved(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -549,6 +553,62 @@ class DependencyManifestDiffTest(unittest.TestCase):
         grouped = coverage.aggregate([_clean("lodash", "lodash/lodash"), planted])
         self.assertEqual(grouped["status"], "warn")
         self.assertIs(grouped["verdict_token_in_tree"], True)
+
+    def test_package_named_go_mod_does_not_hide_an_extra_require(self) -> None:
+        base = "module example.com/app\n\ngo 1.22\n\nrequire github.com/foo/bar v1.2.3\n"
+        head = (
+            "module example.com/app\n\ngo 1.22\n\n"
+            "require github.com/foo/bar v1.9.9\n"
+            "require github.com/foo/bar v1.2.3\n"
+        )
+        report = _run_listed_scan(
+            {"go.mod": base},
+            {"go.mod": head},
+            [_bump("go.mod", "1.0.0", "1.0.1", "evil/mod")],
+        )
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
+        unresolved = _unresolved(report)
+        self.assertIn("go.mod", unresolved)
+        self.assertIn("github.com/foo/bar", unresolved)
+
+    def test_package_named_requirements_txt_does_not_hide_a_duplicate_pin(self) -> None:
+        report = _run_listed_scan(
+            {"requirements.txt": "requests==2.31.0\n"},
+            {"requirements.txt": "requests==9.9.9\nrequests==2.31.0\n"},
+            [_bump("requirements.txt", "1.0.0", "1.0.1", "evil/mod")],
+        )
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
+        unresolved = _unresolved(report)
+        self.assertIn("requirements.txt", unresolved)
+        self.assertIn("requests", unresolved)
+
+    def test_listed_cobra_bump_and_package_named_go_mod_stay_unresolved(self) -> None:
+        old_mod = (
+            "module example.com/app\n\ngo 1.22\n\nrequire (\n"
+            "\tgithub.com/spf13/cobra v1.8.0\n"
+            "\tgithub.com/foo/bar v1.2.3\n)\n"
+        )
+        new_mod = (
+            "module example.com/app\n\ngo 1.22\n\nrequire (\n"
+            "\tgithub.com/spf13/cobra v1.8.1\n"
+            "\tgithub.com/foo/bar v1.9.9\n"
+            "\tgithub.com/foo/bar v1.2.3\n)\n"
+        )
+        report = _run_listed_scan(
+            {"go.mod": old_mod},
+            {"go.mod": new_mod},
+            [
+                _bump("github.com/spf13/cobra", "v1.8.0", "v1.8.1", "spf13/cobra"),
+                _bump("go.mod", "1.0.0", "1.0.1", "evil/mod"),
+            ],
+        )
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
+        unresolved = _unresolved(report)
+        self.assertIn("go.mod", unresolved)
+        self.assertIn("github.com/foo/bar", unresolved)
 
 
 if __name__ == "__main__":

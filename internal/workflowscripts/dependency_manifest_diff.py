@@ -344,9 +344,8 @@ def _single_version(entry: object) -> str | None:
 def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
     """Names whose one parsed version changed.
 
-    The version is taken from the same entries `_entries_explain` reads.
-    A name with more than one entry is not a label. Explain still compares
-    every entry, so a duplicate require or pin stays unresolved.
+    Versions come from the same entries `_entries_explain` reads.
+    A name with more than one entry is reported by `_multi_entry_names`.
     """
     old_split = _split_entries(kind, before)
     new_split = _split_entries(kind, after)
@@ -362,6 +361,19 @@ def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
             continue
         changed.add(name)
     return changed
+
+
+def _multi_entry_names(kind: str, before: str, after: str) -> set[str]:
+    """Names with more than one entry on either side. Same blocks as explain."""
+    found: set[str] = set()
+    for text in (before, after):
+        split = _split_entries(kind, text)
+        if split is None:
+            continue
+        for name, entry in split[0].items():
+            if len(_entry_blocks(entry)) > 1:
+                found.add(name)
+    return found
 
 
 def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) -> bool:

@@ -372,7 +372,9 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
 
     An unreadable base ref, when one was named, is itself unresolved.
     An entry is explained only when its package moved to the listed version.
-    Anything else in the file stays unresolved under the path.
+    Anything else in the file stays unresolved under the path. A listed
+    package with that path as its name does not hide the path. A dependency
+    with more than one entry is named as well.
     """
     base = _base_commit()
     if base is None:
@@ -398,15 +400,21 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
         after = _git_text("HEAD", path)
         names = _diff._changed_names(kind, before, after)
         explained = names is not None and _diff._entries_explain(kind, before, after, updates)
-        if names is None or (before != after and names <= listed and not explained):
-            labels = [path]
-        else:
-            labels = sorted(names)
-        for label in labels:
-            if label in seen:
-                continue
-            gaps.append(uncovered({"packageName": label}, "unresolved"))
-            seen.add(label)
+        file_unresolved = names is None or (before != after and not explained)
+        if file_unresolved and (names is None or names <= listed):
+            gaps.append(uncovered({"packageName": path}, "unresolved"))
+        elif names:
+            for label in sorted(names):
+                if label in seen:
+                    continue
+                gaps.append(uncovered({"packageName": label}, "unresolved"))
+                seen.add(label)
+        if names is not None and file_unresolved:
+            for label in sorted(_diff._multi_entry_names(kind, before, after)):
+                if label in seen:
+                    continue
+                gaps.append(uncovered({"packageName": label}, "unresolved"))
+                seen.add(label)
     return gaps
 
 
