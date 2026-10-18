@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -175,6 +176,9 @@ func TestRenderedTemplatesMatchPreviousOutput(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s %s: %v", file, c.name, err)
 			}
+			if file == "dependabot.yml" {
+				pipRegistryAllowsCodeExecution(t, got)
+			}
 			want, err := os.ReadFile(filepath.Join("testdata", "render", file+"."+c.name))
 			if err != nil {
 				t.Fatal(err)
@@ -291,9 +295,20 @@ func TestThisRepoDependabotScansTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	template, err := os.ReadFile(filepath.Join("..", "..", "templates", "dependabot.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ProcessTemplate(template, cfg.Variables, repoConfig.VarOverrides)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rendered, err := os.ReadFile(filepath.Join("..", "..", ".github", "dependabot.yml"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !bytes.Equal(got, rendered) {
+		t.Fatalf("rendered dependabot.yml does not match .github/dependabot.yml\n--- rendered ---\n%s\n--- committed ---\n%s", got, rendered)
 	}
 	fromRendered := githubActionsDirectories(t, rendered)
 	if strings.Join(fromOverride, "\n") != strings.Join(fromRendered, "\n") {
@@ -466,6 +481,39 @@ func githubActionsDirectories(t *testing.T, raw []byte) []string {
 	}
 	t.Fatal("github-actions update not found")
 	return nil
+}
+
+func pipRegistryAllowsCodeExecution(t *testing.T, raw []byte) {
+	t.Helper()
+	var doc struct {
+		Updates []struct {
+			Ecosystem  string   `yaml:"package-ecosystem"`
+			Registries []string `yaml:"registries"`
+			CodeExec   string   `yaml:"insecure-external-code-execution"`
+		} `yaml:"updates"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	pip := 0
+	for _, update := range doc.Updates {
+		if update.Ecosystem != "pip" {
+			if update.CodeExec != "" {
+				t.Errorf("%s sets insecure-external-code-execution", update.Ecosystem)
+			}
+			continue
+		}
+		pip++
+		if len(update.Registries) != 1 || update.Registries[0] != "chia-pypi" {
+			t.Errorf("pip registries = %#v, want [chia-pypi]", update.Registries)
+		}
+		if update.CodeExec != "allow" {
+			t.Errorf("pip insecure-external-code-execution = %q, want allow", update.CodeExec)
+		}
+	}
+	if pip != 1 {
+		t.Errorf("pip updates = %d, want 1", pip)
+	}
 }
 
 func isYAMLName(name string) bool {
