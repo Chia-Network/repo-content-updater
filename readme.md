@@ -82,5 +82,8 @@ The shared Dependabot template declares the anonymous `chia-pypi` Python
 registry at `https://pypi.chia.net/simple/` and enables it for pip updates.
 Public PyPI remains available; no credentials or per-repository override are
 required. Dependabot requires registries to be declared in its own configuration
-to allow network access, even when they do not require authentication. See
-[GitHub's registry access documentation](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/manage-your-dependency-security/configure-access-to-private-registries).
+to allow network access, even when they do not require authentication. Listing
+`registries` on a pip update disables manifest code execution, so that entry
+sets `insecure-external-code-execution: allow`. See
+[GitHub's registry access documentation](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/manage-your-dependency-security/configure-access-to-private-registries)
+and [`insecure-external-code-execution`](https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file#insecure-external-code-execution).
