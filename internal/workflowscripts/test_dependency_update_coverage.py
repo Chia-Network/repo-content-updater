@@ -450,6 +450,24 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIs(report["scan_conclusive"], False)
         self.assertEqual(report["findings"]["ioc"][0]["path"], "pkg/index.js")
 
+    def test_verify_commit_peels_tags_and_rejects_trees(self) -> None:
+        with TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            _git_repo(repo)
+            _commit(repo, "f.txt", "x\n", "init")
+            commit = _git(repo, "rev-parse", "HEAD")
+            tree = _git(repo, "rev-parse", "HEAD^{tree}")
+            _git(repo, "tag", "-a", "v1", "-m", "annotated")
+            previous = os.getcwd()
+            os.chdir(repo)
+            try:
+                self.assertEqual(coverage._verify_commit(commit), commit)
+                self.assertEqual(coverage._verify_commit("v1"), commit)
+                self.assertEqual(coverage._verify_commit(tree), "")
+                self.assertEqual(coverage._verify_commit("missing"), "")
+            finally:
+                os.chdir(previous)
+
 
 if __name__ == "__main__":
     unittest.main()
