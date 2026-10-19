@@ -326,8 +326,9 @@ def _git_text(rev: str, path: str) -> str:
 
 
 def _verify_commit(rev: str) -> str:
+    # Concatenate the peel. An f-string brace escape is a Go text/template action.
     proc = subprocess.run(
-        ["git", "rev-parse", "--verify", "--end-of-options", f"{rev}^{{commit}}"],
+        ["git", "rev-parse", "--verify", "--end-of-options", rev + "^{commit}"],
         check=False,
         capture_output=True,
         text=True,
