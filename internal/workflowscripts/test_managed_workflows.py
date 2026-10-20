@@ -246,6 +246,17 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn("require('./dependency-cursor-review-dependabot-context.js')", post_js)
         self.assertNotIn("RUNNER_TEMP", post_js)
         self.assertIn("function selectPostedMarker", post_js)
+        self.assertIn("timeout-minutes: 15", agent.split("steps:", 1)[0])
+        self.assertNotIn("timeout-minutes: 10", agent.split("steps:", 1)[0])
+        self.assertIn("timeout-minutes: 10", agent_step)
+        for job in (scan, agent):
+            self.assertIn("Tighten cache usage in review workflow", job)
+            self.assertIn('echo "ACTIONS_CACHE_URL=" >> "$GITHUB_ENV"', job)
+            self.assertLess(job.index("Tighten cache usage in review workflow"), job.index("uses: actions/checkout@v7"))
+            self.assertNotIn("actions/cache", job)
+            self.assertNotIn("cache:", job)
+            self.assertNotIn(": write", job)
+        self.assertIn("dcr-scan-input/malware_scan_summary.md", post_js)
 
     def test_tag_range_fetch_uses_peeled_shas(self) -> None:
         """Peeled commits and their version tags are inspectable after depth-1 fetches."""

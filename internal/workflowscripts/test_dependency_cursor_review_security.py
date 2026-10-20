@@ -49,7 +49,10 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             workflow,
         )
         self.assertIn("report_sha256=", workflow)
-        self.assertNotIn("malware_scan_summary.md", (_SCRIPTS / "dependency-cursor-review-post-comment.js").read_text())
+        post_comment = (_SCRIPTS / "dependency-cursor-review-post-comment.js").read_text()
+        self.assertIn("dcr-scan-input/malware_scan_summary.md", post_comment)
+        self.assertNotIn("readText('malware_scan_summary.md'", post_comment)
+        self.assertNotIn('readText("malware_scan_summary.md"', post_comment)
         self.assertNotIn("sys.path", workflow)
         self.assertIn("trusted-dcr-scripts", workflow)
         self.assertNotIn("cp --remove-destination", workflow)

@@ -301,7 +301,7 @@ class DependencyManifestDiffTest(unittest.TestCase):
             for path in ("package-lock.json", "go.mod", "go.sum"):
                 self.assertIn(path, summary, msg=summary)
 
-    def test_listed_lock_resolved_change_is_unresolved(self) -> None:
+    def test_listed_registry_lock_bump_is_conclusive(self) -> None:
         base_lock = {
             "lockfileVersion": 3,
             "packages": {
@@ -334,11 +334,12 @@ class DependencyManifestDiffTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertFalse(report["scan_conclusive"])
-        self.assertIn("package-lock.json", _unresolved(report))
+        self.assertIs(report["scan_conclusive"], True)
+        self.assertEqual(report["status"], "clean")
+        self.assertNotIn("dependencies", report)
         published = formatter.compose_published_review(report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
-        self.assertEqual(published["check"], "fail")
-        self.assertIs(published["may_complete"], False)
+        self.assertEqual(published["check"], "pass")
+        self.assertIs(published["may_complete"], True)
 
     def test_listed_lock_wrong_version_label_is_unresolved(self) -> None:
         old_url = "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz"
@@ -516,8 +517,9 @@ class DependencyManifestDiffTest(unittest.TestCase):
             },
             listed,
         )
-        self.assertFalse(clean["scan_conclusive"])
-        self.assertTrue({"yarn.lock", "package-lock.json"} <= _unresolved(clean))
+        self.assertIs(clean["scan_conclusive"], True)
+        self.assertEqual(clean["status"], "clean")
+        self.assertNotIn("dependencies", clean)
         tainted = _run_listed_scan(
             {
                 "yarn.lock": yarn("4.17.20", "sha-old", "sha-other"),
@@ -833,6 +835,145 @@ class DependencyManifestDiffTest(unittest.TestCase):
         published = formatter.compose_published_review(report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
         self.assertEqual(published["check"], "fail")
         self.assertIs(published["may_complete"], False)
+
+    def test_real_dependabot_npm_and_yarn_lock_bumps(self) -> None:
+        """Changed records from chia-docs#1138, chia-blockchain-gui#3141, and appsmith#9504."""
+        prettier_old = {
+            "version": "3.9.8",
+            "resolved": "https://registry.npmjs.org/prettier/-/prettier-3.9.8.tgz",
+            "integrity": "sha512-WRFq3Wn3WId7LLROfMLdH7xaFr2jR62wU8nLO6rQUOLOxNZUviyJQs1M0iIhLexSFy+L+w0ch66wtoO2jRjG0A==",
+            "license": "MIT",
+            "bin": {"prettier": "bin/prettier.cjs"},
+            "engines": {"node": ">=14"},
+            "funding": {"url": "https://github.com/prettier/prettier?sponsor=1"},
+        }
+        prettier_new = {
+            **prettier_old,
+            "version": "3.9.9",
+            "resolved": "https://registry.npmjs.org/prettier/-/prettier-3.9.9.tgz",
+            "integrity": "sha512-Z/CJHIkdujO/OtN7nXUii0Rf3VT5SRuhjBA82Xvu2XhBUgX3nhP67T0LHceBdQLex7OOFGTox+Q5Yg8Jk2Qivg==",
+        }
+        stylis = {
+            "version": "4.4.0",
+            "resolved": "https://registry.npmjs.org/stylis/-/stylis-4.4.0.tgz",
+            "integrity": "sha512-5Z9ZpRzfuH6l/UAvCPAPUo3665Nk2wLaZU3x+TLHKVzIz33+sbJqbtrYoC3KD4/uVOr2Zp+L0LySezP9OHV9yA==",
+            "license": "MIT",
+        }
+        nested = "node_modules/nano-css/node_modules/stylis"
+
+        def npm(prettier: dict, spec: str, rollup: str, nested_meta: dict) -> str:
+            return (
+                json.dumps(
+                    {
+                        "name": "chia-docs",
+                        "lockfileVersion": 3,
+                        "packages": {
+                            "": {"dependencies": {"prettier": spec}},
+                            "node_modules/prettier": prettier,
+                            "packages/api": {"devDependencies": {"@rollup/plugin-node-resolve": rollup}},
+                            nested: nested_meta,
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        listed = [_bump("prettier", "3.9.8", "3.9.9", "prettier/prettier")]
+        base_npm = npm(prettier_old, "^3.9.8", "^16.0.3", stylis)
+        head_npm = npm(prettier_new, "^3.9.9", "16.0.3", stylis)
+        entries, residue = manifest._json_parts(base_npm)
+        self.assertIn("stylis", entries)
+        self.assertNotIn(nested, residue)
+        report = _run_listed_scan(
+            {"package-lock.json": base_npm},
+            {"package-lock.json": head_npm},
+            listed,
+        )
+        self.assertIs(report["scan_conclusive"], True)
+        self.assertEqual(report["status"], "clean")
+        self.assertNotIn("dependencies", report)
+        published = formatter.compose_published_review(report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
+        self.assertEqual(published["check"], "pass")
+
+        swapped = dict(stylis, integrity="sha512-not-the-published-hash")
+        tainted = _run_listed_scan(
+            {"package-lock.json": base_npm},
+            {"package-lock.json": npm(prettier_new, "^3.9.9", "16.0.3", swapped)},
+            listed,
+        )
+        self.assertFalse(tainted["scan_conclusive"])
+        self.assertIn("package-lock.json", _unresolved(tainted))
+
+        handlebars_old = {
+            "version": "4.7.9",
+            "resolved": "https://registry.npmjs.org/handlebars/-/handlebars-4.7.9.tgz",
+            "integrity": "sha512-4E71E0rpOaQuJR2A3xDZ+GM1HyWYv1clR58tC8emQNeQe3RH7MAzSbat+V0wG78LQBo6m6bzSG/L4pBuCsgnUQ==",
+            "dependencies": {"minimist": "^1.2.5", "neo-async": "^2.6.2"},
+        }
+        handlebars_new = {
+            "version": "4.7.10",
+            "resolved": "https://registry.npmjs.org/handlebars/-/handlebars-4.7.10.tgz",
+            "integrity": "sha512-P5VJMVM7qgBn6vjXMw8WG9uVI+ncf2pi72j4de4yz5ZULLj2RGqLYaKOYGsgyrViQ0tePOVlN1tDCCXXtFqXKg==",
+            "dependencies": {"minimist": "^1.2.8", "neo-async": "^2.6.2"},
+        }
+        updates = [_bump("handlebars", "4.7.9", "4.7.10", "handlebars-lang/handlebars.js")]
+
+        def handlebars_lock(meta: dict, resolved: str) -> str:
+            body = {
+                "lockfileVersion": 3,
+                "packages": {"node_modules/handlebars": meta, nested: {**stylis, "resolved": resolved}},
+            }
+            return json.dumps(body)
+
+        old_handlebars = handlebars_lock(handlebars_old, stylis["resolved"])
+        moved_nested = handlebars_lock(
+            handlebars_new, "https://registry.npmjs.org/stylis/-/stylis-4.4.1.tgz"
+        )
+        moved_nested_doc = json.loads(moved_nested)
+        moved_nested_doc["packages"][nested]["version"] = "4.4.1"
+        moved_nested = json.dumps(moved_nested_doc)
+        explained_head = json.dumps(
+            {"lockfileVersion": 3, "packages": {"node_modules/handlebars": handlebars_new, nested: stylis}}
+        )
+        self.assertTrue(manifest._entries_explain("json", old_handlebars, explained_head, updates))
+        evil_deps = dict(handlebars_new)
+        evil_deps["dependencies"] = {**handlebars_new["dependencies"], "minimist": "https://evil.example/minimist.tgz"}
+        evil_head = json.dumps(
+            {"lockfileVersion": 3, "packages": {"node_modules/handlebars": evil_deps, nested: stylis}}
+        )
+        self.assertFalse(manifest._entries_explain("json", old_handlebars, evil_head, updates))
+        self.assertTrue(manifest._lock_covers_listed("json", old_handlebars, moved_nested, updates, {"stylis"}))
+        evil_nested = json.loads(moved_nested)
+        evil_nested["packages"][nested]["resolved"] = "https://evil.example/stylis.tgz"
+        self.assertFalse(
+            manifest._lock_covers_listed("json", old_handlebars, json.dumps(evil_nested), updates, {"stylis"})
+        )
+
+        yarn_old = (
+            'ua-parser-js@^0.7.18:\n'
+            '  version "0.7.22"\n'
+            '  resolved "https://registry.npmjs.org/ua-parser-js/-/ua-parser-js-0.7.22.tgz"\n'
+        )
+        yarn_new = (
+            'ua-parser-js@^0.7.18:\n'
+            '  version "0.7.31"\n'
+            '  resolved "https://registry.yarnpkg.com/ua-parser-js/-/ua-parser-js-0.7.31.tgz#649a656b191dffab4f21d5e053e27ca17cbff5c6"\n'
+            '  integrity sha512-qLK/Xe9E2uzmYI3qLeOmI0tEOt+TBBQyUIAh4aAgU05FVYzeZrKUdkAZfBNVGRaHVgV0TDkdEngJSw/SyQchkQ==\n'
+        )
+        yarn_updates = [_bump("ua-parser-js", "0.7.22", "0.7.31", "faisalman/ua-parser-js")]
+        yarn_report = _run_listed_scan({"yarn.lock": yarn_old}, {"yarn.lock": yarn_new}, yarn_updates)
+        self.assertIs(yarn_report["scan_conclusive"], True)
+        self.assertEqual(yarn_report["status"], "clean")
+        added = yarn_new + (
+            '\ncy-verify-downloads@^0.0.5:\n'
+            '  version "0.0.5"\n'
+            '  resolved "https://registry.yarnpkg.com/cy-verify-downloads/-/cy-verify-downloads-0.0.5.tgz#2f9c7da0f5fda125ecef2f19ca2b83b1890d3037"\n'
+            '  integrity sha512-aRK7VvKG5rmDJK4hjZ27KM2oOOz0cMO7z/j4zX8qCc4ffXZS1XRJkofUY0w5u6MCB/wUsNMs03VuvkeR2tNPoQ==\n'
+        )
+        self.assertFalse(manifest._entries_explain("yarn", yarn_old, added, yarn_updates))
+        added_report = _run_listed_scan({"yarn.lock": yarn_old}, {"yarn.lock": added}, yarn_updates)
+        self.assertFalse(added_report["scan_conclusive"])
+        self.assertIn("cy-verify-downloads", _unresolved(added_report))
 
 
 if __name__ == "__main__":

@@ -136,3 +136,29 @@ test('parseDependencyUpdate reads a grouped gomod list and leaves an unresolvabl
   assert.equal(parsed.packageName, '');
 });
 
+test('a release-note table does not invent packages or clear the update', () => {
+  const body = [
+    'Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21.',
+    '| Package | From | To |',
+    '| --- | --- | --- |',
+    '| [lodash](https://github.com/lodash/lodash) | `4.17.20` | `4.17.21` |',
+    '',
+    '| Package | From | To |',
+    '| --- | --- | --- |',
+    '| [lodash](https://github.com/evil/lodash) | `0.0.1` | `9.9.9` |',
+    'Updates `lodash` from 4.17.20 to 4.17.21',
+    '<details>',
+    '<summary>Release notes</summary>',
+    '| Package | From | To |',
+    '| --- | --- | --- |',
+    '| [lodash](https://github.com/evil/lodash) | `1.0.0` | `9.9.9` |',
+    '| [left-pad](https://github.com/left-pad/left-pad) | `1.0.0` | `1.3.0` |',
+    '</details>',
+  ].join('\n');
+  const parsed = parseDependencyUpdate('Bump lodash from 4.17.20 to 4.17.21', body);
+  assert.deepEqual(
+    parsed.updates.map((item) => [item.packageName, item.fromVersion, item.toVersion, item.upstreamRepo]),
+    [['lodash', '4.17.20', '4.17.21', 'lodash/lodash']],
+  );
+});
+

@@ -59,6 +59,10 @@ jobs:
       summary: ${{`{{ steps.malware_scan.outputs.summary }}`}}
       scan_conclusive: ${{`{{ steps.malware_scan.outputs.scan_conclusive }}`}}
     steps:
+      - name: Tighten cache usage in review workflow
+        shell: bash
+        run: echo "ACTIONS_CACHE_URL=" >> "$GITHUB_ENV"
+
       - name: Checkout trusted target-PR helper
         uses: actions/checkout@v7
         with:
@@ -252,10 +256,14 @@ jobs:
     needs: dependency-review-scan
     if: ${{`{{ needs.dependency-review-scan.result == 'success' && needs.dependency-review-scan.outputs.already_reviewed != 'true' }}`}}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
+      - name: Tighten cache usage in review workflow
+        shell: bash
+        run: echo "ACTIONS_CACHE_URL=" >> "$GITHUB_ENV"
+
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
@@ -454,6 +462,7 @@ jobs:
           done
 
       - name: Run Cursor agent
+        timeout-minutes: 10
         shell: bash
         env:
           CURSOR_API_KEY: ${{`{{ secrets.CURSOR_API_KEY }}`}}
