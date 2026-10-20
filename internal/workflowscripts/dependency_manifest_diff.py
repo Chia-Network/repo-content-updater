@@ -312,13 +312,13 @@ def _entry_blocks(entry: object) -> list[tuple[str, str]]:
     return []
 
 
-def _stanza_versions(blocks: list[tuple[str, str]]) -> dict[str, str] | None:
-    found: dict[str, str] = {}
+def _stanza_entries(blocks: list[tuple[str, str]]) -> dict[str, tuple[str, str]] | None:
+    found: dict[str, tuple[str, str]] = {}
     for version, payload in blocks:
         key = payload.split("\n", 1)[0]
         if not key or key in found:
             return None
-        found[key] = version
+        found[key] = (version, payload)
     return found
 
 
@@ -393,14 +393,18 @@ def _blocks_explain(
     if not old_left and not new_left:
         return True
     if keyed:
-        old_map = _stanza_versions(old_left)
-        new_map = _stanza_versions(new_left)
+        old_map = _stanza_entries(old_left)
+        new_map = _stanza_entries(new_left)
         if old_map is None or new_map is None or set(old_map) != set(new_map):
             return False
-        return all(_reached_listed_version(name, old_map[key], new_map[key], listed) for key in old_map)
+        return all(
+            _reached_listed_version(name, old_map[key][0], new_map[key][0], listed)
+            and _payload_ok([old_map[key]], [new_map[key]])
+            for key in old_map
+        )
     if len(old_left) != 1 or len(new_left) != 1:
         return False
-    return _reached_listed_version(name, old_left[0][0], new_left[0][0], listed)
+    return _reached_listed_version(name, old_left[0][0], new_left[0][0], listed) and _payload_ok(old_left, new_left)
 
 
 def _name_explained(
@@ -442,6 +446,34 @@ def _without_version(payload: str) -> str:
         return "\n".join(kept)
 
 
+def _lock_doc(doc: object) -> bool:
+    if not isinstance(doc, dict):
+        return False
+    if "lock" in doc:
+        return True
+    spec = doc.get("spec")
+    return isinstance(spec, dict) and any(key in spec for key in ("integrity", "resolved"))
+
+
+def _lock_text(payloads: list[str]) -> bool:
+    """Yarn stanza text. A module or requirement line keeps its version in the entry label."""
+    return any(re.search(r"(?m)^\s*(?:version|resolved|integrity)\s", payload) for payload in payloads)
+
+
+def _payload_ok(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
+    """A lock entry may change only its version text. A manifest spec is not a lock payload."""
+    payloads = [payload for _version, payload in (*old_blocks, *new_blocks)]
+    parsed: list[object] = []
+    for payload in payloads:
+        try:
+            parsed.append(json.loads(payload))
+        except json.JSONDecodeError:
+            return _version_bump(old_blocks, new_blocks) if _lock_text(payloads) else True
+    if any(_lock_doc(doc) for doc in parsed):
+        return _version_bump(old_blocks, new_blocks)
+    return True
+
+
 def _version_bump(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
     """True when entries match, or one entry changes only its version text."""
     if old_blocks == new_blocks:
@@ -454,11 +486,10 @@ def _version_bump(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str,
 
 
 def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict], names: set[str]) -> bool:
-    """True when a listed lock bump explains the file.
+    """True when every entry is unchanged or a version-text bump.
 
-    An unlisted name may change only its version text. A resolved URL,
-    integrity hash, leftover bytes, or a lock that never moves a listed
-    package stays unresolved.
+    A resolved URL, integrity hash, leftover bytes, or a lock that never
+    moves a listed package stays unresolved.
     """
     listed = _listed_versions(updates, kind=kind)
     if not any(_canonical_package_name(kind, name) in listed for name in names):
@@ -474,10 +505,6 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
     for name in set(old_entries) | set(new_entries):
         old_blocks = _entry_blocks(old_entries.get(name))
         new_blocks = _entry_blocks(new_entries.get(name))
-        if _canonical_package_name(kind, name) in listed:
-            if not _name_explained(kind, name, old_blocks, new_blocks, listed):
-                return False
-            continue
         if not _version_bump(old_blocks, new_blocks):
             return False
     return True
@@ -533,9 +560,9 @@ def _multi_entry_names(kind: str, before: str, after: str, updates: list[dict]) 
 def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) -> bool:
     """True when every changed entry moved to its listed version.
 
-    Checksums on that entry are part of the change. A same-version entry,
-    an unlisted package, a replace line, a yarn key that appears or
-    disappears, or any other residue is not.
+    A lock entry is explained only when the rest of that entry is unchanged.
+    A same-version entry, an unlisted package, a replace line, a yarn key
+    that appears or disappears, or any other residue is not.
 
     go.sum keeps one block per version. The listed bump matches when `to`
     is present and `from` was present before, including when `from` was removed.

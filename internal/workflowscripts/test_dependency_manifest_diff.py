@@ -301,7 +301,7 @@ class DependencyManifestDiffTest(unittest.TestCase):
             for path in ("package-lock.json", "go.mod", "go.sum"):
                 self.assertIn(path, summary, msg=summary)
 
-    def test_listed_lodash_lock_bump_is_conclusive(self) -> None:
+    def test_listed_lock_resolved_change_is_unresolved(self) -> None:
         base_lock = {
             "lockfileVersion": 3,
             "packages": {
@@ -334,9 +334,11 @@ class DependencyManifestDiffTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertIs(report["scan_conclusive"], True)
-        self.assertEqual(report["status"], "clean")
-        self.assertEqual(report["package_name"], "lodash")
+        self.assertFalse(report["scan_conclusive"])
+        self.assertIn("package-lock.json", _unresolved(report))
+        published = formatter.compose_published_review(report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
+        self.assertEqual(published["check"], "fail")
+        self.assertIs(published["may_complete"], False)
 
     def test_listed_cobra_sum_bump_is_conclusive(self) -> None:
         def go_sum(version: str, digest: str) -> str:
@@ -473,8 +475,8 @@ class DependencyManifestDiffTest(unittest.TestCase):
             },
             listed,
         )
-        self.assertIs(clean["scan_conclusive"], True)
-        self.assertEqual(clean["status"], "clean")
+        self.assertFalse(clean["scan_conclusive"])
+        self.assertTrue({"yarn.lock", "package-lock.json"} <= _unresolved(clean))
         tainted = _run_listed_scan(
             {
                 "yarn.lock": yarn("4.17.20", "sha-old", "sha-other"),
@@ -787,6 +789,9 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertFalse(report["scan_conclusive"])
         self.assertIn("minimist", _unresolved(report))
         self.assertNotEqual(report["status"], "clean")
+        published = formatter.compose_published_review(report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
+        self.assertEqual(published["check"], "fail")
+        self.assertIs(published["may_complete"], False)
 
 
 if __name__ == "__main__":
