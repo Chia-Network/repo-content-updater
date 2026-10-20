@@ -106,8 +106,8 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
         )
         self.assertEqual(len(fail_check), 2)
         self.assertLess(
-            verdict.index("Post or update PR comment"),
             verdict.index("Fail the check on a blocking review"),
+            verdict.index("Post or update PR comment"),
         )
         self.assertIn("--enforce-check", fail_check[1])
         self.assertNotIn("status != 'clean'", fail_check[1])

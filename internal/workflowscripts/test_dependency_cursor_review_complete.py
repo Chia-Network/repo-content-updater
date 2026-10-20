@@ -45,6 +45,7 @@ class CombineCompleteTest(unittest.TestCase):
                     "status": "clean",
                     "scan_conclusive": True,
                     "verdict_token_in_tree": False,
+                    "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
                 }
             payload = (json.dumps(report) + "\n").encode()
             report_path = root / "sealed-scan-report.json"
@@ -364,7 +365,8 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertNotIn("compat essay", written["result"])
         self.assertNotIn("needs human review", written["result"])
-        self.assertIs(written["complete"], True)
+        self.assertIs(written["complete"], False)
+        self.assertEqual(written["check"], "fail")
 
     def test_conclusive_planted_verdict_line_does_not_complete(self) -> None:
         written = self._run(
@@ -408,6 +410,7 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("`incomplete_coverage:1`", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertIs(written["complete"], False)
+        self.assertEqual(written["check"], "fail")
         mixed = self._run(
             benign,
             merge,
@@ -516,7 +519,8 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("**Verdict: malicious**", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertNotIn("needs human review", written["result"])
-        self.assertIs(written["complete"], True)
+        self.assertIs(written["complete"], False)
+        self.assertEqual(written["check"], "fail")
 
     def test_buried_malicious_line_is_not_published_as_benign(self) -> None:
         written = self._run(
@@ -549,10 +553,12 @@ class CombineCompleteTest(unittest.TestCase):
             },
         )
         self.assertIn("**Verdict: benign**", written["result"])
+        self.assertIn("child_process", written["result"])
         self.assertIn("**Merge**", written["result"])
         self.assertIn("Existing call sites still typecheck.", written["result"])
         self.assertNotIn("needs human review", written["result"])
         self.assertIs(written["complete"], True)
+        self.assertEqual(written["check"], "pass")
 
     def test_compatibility_body_strips_verdict_banner_and_patch_id(self) -> None:
         written = self._run(
@@ -854,6 +860,141 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertNotIn("Entry point only.", written["result"])
         self.assertIn("**Don't merge**", written["result"])
         self.assertIn("Needs a changelog.", written["result"])
+        self.assertEqual(written["check"], "fail")
+        self.assertIs(written["complete"], False)
+
+    def test_omitted_findings_fail_closed(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nClear.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nFine.\\n"}',
+            report={"status": "clean", "scan_conclusive": True, "verdict_token_in_tree": False},
+        )
+        self.assertIn("**Verdict: malicious**", written["result"])
+        self.assertEqual(written["check"], "fail")
+        self.assertIs(written["complete"], False)
+        shaped = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nClear.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nFine.\\n"}',
+            report={
+                "status": "clean",
+                "scan_conclusive": True,
+                "verdict_token_in_tree": False,
+                "findings": [],
+            },
+        )
+        self.assertEqual(shaped["check"], "fail")
+        self.assertIs(shaped["complete"], False)
+
+    def test_unread_shipped_blob_fails_the_check(self) -> None:
+        benign = '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nClear.\\n"}'
+        merge = '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nFine.\\n"}'
+        for cause in ("nul blob", "git-lfs pointer", "unreadable blob"):
+            with self.subTest(cause=cause):
+                written = self._run(
+                    benign,
+                    merge,
+                    report={
+                        "status": "not_scanned",
+                        "scan_conclusive": False,
+                        "not_scanned_reason": "incomplete_coverage",
+                        "verdict_token_in_tree": False,
+                        "unread": [{"file": "pkg/payload.js", "cause": cause}],
+                        "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+                    },
+                )
+                self.assertIn("**Verdict: suspicious**", written["result"])
+                self.assertEqual(written["check"], "fail")
+                self.assertIs(written["complete"], False)
+        shaped = self._run(
+            benign,
+            merge,
+            report={
+                "status": "not_scanned",
+                "scan_conclusive": False,
+                "not_scanned_reason": "incomplete_coverage",
+                "verdict_token_in_tree": False,
+                "unread": "nul blob",
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            },
+        )
+        self.assertEqual(shaped["check"], "fail")
+        self.assertIs(shaped["complete"], False)
+
+    def _enforce(
+        self,
+        report: object,
+        *,
+        digest: str | None = None,
+        drop_report: bool = False,
+        stored: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payload = report if isinstance(report, bytes) else (json.dumps(report) + "\n").encode()
+            report_path = root / "sealed-scan-report.json"
+            if not drop_report:
+                report_path.write_bytes(payload)
+            stored_path = root / "cursor_output.json"
+            if stored is not None:
+                stored_path.write_text(stored, encoding="utf-8")
+            env = os.environ.copy()
+            env["DCR_SCAN_REPORT"] = str(report_path)
+            env["DCR_MALWARE_JSON"] = str(root / "cursor_output_malware.json")
+            env["DCR_COMPAT_JSON"] = str(root / "cursor_output_compatibility.json")
+            env["DCR_COMBINED_JSON"] = str(stored_path)
+            env["MALWARE_SCAN_REPORT_SHA256"] = digest if digest is not None else hashlib.sha256(payload).hexdigest()
+            return subprocess.run(
+                [sys.executable, "-I", str(_COMBINE), "--enforce-check"],
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+    def test_enforce_recomputes_the_sealed_report(self) -> None:
+        clean = {
+            "status": "clean",
+            "scan_conclusive": True,
+            "verdict_token_in_tree": False,
+            "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+        }
+        passed = self._enforce(clean, stored='{"check": "fail"}')
+        self.assertEqual(passed.returncode, 0, msg=passed.stderr or passed.stdout)
+        blocked = {
+            **clean,
+            "status": "warn",
+            "findings": {
+                "unicode": [{"kind": "unicode", "file": "pkg/index.js", "line": "1", "match": "bidi"}],
+                "confusable": [],
+                "ioc": [],
+                "heuristic": [],
+            },
+        }
+        failed = self._enforce(blocked, stored='{"check": "pass"}')
+        self.assertNotEqual(failed.returncode, 0, msg=failed.stderr or failed.stdout)
+        self.assertIn("did not pass", failed.stderr)
+        unread = {
+            **clean,
+            "status": "not_scanned",
+            "scan_conclusive": False,
+            "not_scanned_reason": "incomplete_coverage",
+            "unread": [{"file": "pkg/payload.js", "cause": "nul blob"}],
+        }
+        dropped = self._enforce(unread, stored='{"check": "pass"}')
+        self.assertNotEqual(dropped.returncode, 0, msg=dropped.stderr or dropped.stdout)
+        omitted = self._enforce(
+            {"status": "clean", "scan_conclusive": True, "verdict_token_in_tree": False},
+            stored='{"check": "pass"}',
+        )
+        self.assertNotEqual(omitted.returncode, 0)
+        malformed = self._enforce(b"not-json\n", stored='{"check": "pass"}')
+        self.assertNotEqual(malformed.returncode, 0)
+        missing = self._enforce(clean, drop_report=True)
+        self.assertNotEqual(missing.returncode, 0)
+        mismatch = self._enforce(clean, digest=hashlib.sha256(b"other").hexdigest())
+        self.assertNotEqual(mismatch.returncode, 0)
+        self.assertIn("digest mismatch", mismatch.stderr)
 
 
 if __name__ == "__main__":

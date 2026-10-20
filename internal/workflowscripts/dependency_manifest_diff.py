@@ -425,21 +425,40 @@ def _single_version(entry: object) -> str | None:
     return blocks[0][0]
 
 
+def _without_version(payload: str) -> str:
+    """Entry text with version labels removed."""
+
+    def strip(node: object) -> object:
+        if isinstance(node, dict):
+            return {key: strip(value) for key, value in node.items() if key != "version"}
+        if isinstance(node, list):
+            return [strip(item) for item in node]
+        return node
+
+    try:
+        return json.dumps(strip(json.loads(payload)), sort_keys=True, separators=(",", ":"))
+    except json.JSONDecodeError:
+        kept = [line for line in payload.splitlines() if not re.match(r"^\s*version\s", line)]
+        return "\n".join(kept)
+
+
 def _version_bump(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
-    """True when the only change is one entry moving to a different version."""
+    """True when entries match, or one entry changes only its version text."""
     if old_blocks == new_blocks:
         return True
     if len(old_blocks) != 1 or len(new_blocks) != 1:
         return False
-    return old_blocks[0][0] != new_blocks[0][0]
+    old_version, old_payload = old_blocks[0]
+    new_version, new_payload = new_blocks[0]
+    return old_version != new_version and _without_version(old_payload) == _without_version(new_payload)
 
 
 def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict], names: set[str]) -> bool:
     """True when a listed lock bump explains the file.
 
-    An unlisted name may move to another version. That is transitive residue.
-    A same-version payload change, leftover bytes, or a lock that never moves
-    a listed package stays unresolved.
+    An unlisted name may change only its version text. A resolved URL,
+    integrity hash, leftover bytes, or a lock that never moves a listed
+    package stays unresolved.
     """
     listed = _listed_versions(updates, kind=kind)
     if not any(_canonical_package_name(kind, name) in listed for name in names):

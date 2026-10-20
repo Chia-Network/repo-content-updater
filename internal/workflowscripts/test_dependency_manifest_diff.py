@@ -692,9 +692,8 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertNotIn("poetry.lock", " ".join(poetry.get("errors") or []))
         published = formatter.compose_published_review(poetry, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
         self.assertEqual(published["verdict"], "benign")
-        self.assertEqual(
-            formatter.required_check(str(published["verdict"]), formatter.blocking_findings(poetry)), "pass"
-        )
+        self.assertEqual(published["check"], "pass")
+        self.assertIs(published["may_complete"], True)
 
         def lock(lodash: str, minimist: str) -> str:
             return (
@@ -719,22 +718,75 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertEqual(residue["status"], "clean")
         self.assertNotIn("minimist", " ".join(residue.get("errors") or []))
         published = formatter.compose_published_review(residue, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
-        self.assertEqual(
-            formatter.required_check(str(published["verdict"]), formatter.blocking_findings(residue)), "pass"
-        )
+        self.assertEqual(published["check"], "pass")
+        self.assertIs(published["may_complete"], True)
         blocked_review = formatter.compose_published_review(
             residue, _BLOCK_REVIEW, "COMPATIBILITY_RECOMMENDATION: Don't merge\n"
         )
         self.assertEqual(blocked_review["verdict"], "malicious")
-        self.assertEqual(
-            formatter.required_check(str(blocked_review["verdict"]), formatter.blocking_findings(residue)), "fail"
-        )
-        self.assertEqual(formatter.required_check("malicious", []), "fail")
-        self.assertEqual(formatter.required_check("scan_failed", []), "fail")
+        self.assertEqual(blocked_review["check"], "fail")
+        self.assertIs(blocked_review["may_complete"], False)
+        failed = {
+            "status": "not_scanned",
+            "scan_conclusive": False,
+            "not_scanned_reason": "scanner_tools_missing",
+            "verdict_token_in_tree": False,
+            "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+        }
+        scan_failed = formatter.compose_published_review(failed, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
+        self.assertEqual(scan_failed["verdict"], "scan_failed")
+        self.assertEqual(scan_failed["check"], "fail")
 
         blocked = json.loads(json.dumps(residue))
         blocked["findings"]["unicode"] = [{"kind": "unicode", "file": "pkg/index.js", "line": 1, "match": "bidi"}]
-        self.assertEqual(formatter.required_check("benign", formatter.blocking_findings(blocked)), "fail")
+        blocked_finding = formatter.compose_published_review(
+            blocked, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n"
+        )
+        self.assertEqual(blocked_finding["check"], "fail")
+        self.assertIs(blocked_finding["may_complete"], False)
+
+    def test_unlisted_resolved_change_stays_unresolved(self) -> None:
+        def lock(lodash: str, minimist: str, resolved: str, integrity: str) -> str:
+            return (
+                json.dumps(
+                    {
+                        "lockfileVersion": 3,
+                        "packages": {
+                            "node_modules/lodash": {"version": lodash},
+                            "node_modules/minimist": {
+                                "version": minimist,
+                                "resolved": resolved,
+                                "integrity": integrity,
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
+        report = _run_listed_scan(
+            {
+                "package-lock.json": lock(
+                    "4.17.20",
+                    "1.2.0",
+                    "https://registry.npmjs.org/minimist/-/minimist-1.2.0.tgz",
+                    "sha512-old",
+                )
+            },
+            {
+                "package-lock.json": lock(
+                    "4.17.21",
+                    "1.2.8",
+                    "https://github.com/evil/minimist/tarball/deadbeef",
+                    "sha512-new",
+                )
+            },
+            listed,
+        )
+        self.assertFalse(report["scan_conclusive"])
+        self.assertIn("minimist", _unresolved(report))
+        self.assertNotEqual(report["status"], "clean")
 
 
 if __name__ == "__main__":

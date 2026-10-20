@@ -32,7 +32,8 @@ _INCONCLUSIVE_REPORT = {
     "verdict_token_in_tree": False,
 }
 _CONCLUSIVE_BYTES = (
-    b'{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false}\n'
+    b'{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false,'
+    b'"findings":{"ioc":[],"unicode":[],"confusable":[],"heuristic":[]}}\n'
 )
 
 
