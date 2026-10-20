@@ -465,15 +465,11 @@ _TARBALL_RE = re.compile(
     r"^https://registry\.(?:npmjs\.org|yarnpkg\.com)/"
     r"(?:(?P<scope>@[^/]+)/)?(?P<name>[^/]+)/-/(?P<base>[^/]+)-(?P<version>.+)\.tgz$"
 )
-_NPM_RESOLUTION_RE = re.compile(r"^(@?[^@\s]+)@npm:(.+)$")
 _YARN_VERSION_LINE = re.compile(r'^\s*version:?\s+"?([^"\s]+)"?')
 _YARN_RESOLVED_LINE = re.compile(r'^\s*resolved:?\s+"?([^"\s]+)')
-_YARN_RESOLUTION_LINE = re.compile(r'^\s*resolution:?\s+"?([^"\s]+)')
 _YARN_HASH_LINE = re.compile(r"^\s*(?:integrity|checksum)\b", re.I)
-_PROTOCOL_RE = re.compile(r"://|file:|git\+|npm:|link:|workspace:|portal:")
-_PLAIN_SEMVER_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _FOLD_SPEC_RE = re.compile(r"^(?:\^|=)?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$")
-_RECORD_KEYS = frozenset({"version", "resolved", "integrity", "checksum", "resolution"})
+_LOCATOR_KEYS = frozenset({"version", "resolved", "integrity", "checksum"})
 _SPEC_SECTIONS = frozenset({"dependencies", "devDependencies", "optionalDependencies", "peerDependencies"})
 
 
@@ -489,115 +485,70 @@ def _canonical_tarball(url: str, version: str, package: str) -> bool:
     return found == package
 
 
-def _npm_resolution(value: str, package: str, version: str) -> bool:
-    match = _NPM_RESOLUTION_RE.fullmatch(value.strip().strip('"'))
-    if not match or not package or not version or match.group(1) != package:
-        return False
-    return match.group(2) == version
-
-
-def _plain_semver(value: str) -> bool:
-    return _PROTOCOL_RE.search(value) is None and _PLAIN_SEMVER_RE.fullmatch(value) is not None
-
-
-def _locator_canonical(node: dict[str, object], package: str) -> bool:
-    version = node.get("version") if isinstance(node.get("version"), str) else ""
-    resolved = node.get("resolved") if isinstance(node.get("resolved"), str) else ""
-    resolution = node.get("resolution") if isinstance(node.get("resolution"), str) else ""
-    if resolved and _canonical_tarball(resolved, version, package):
-        return True
-    return bool(resolution) and _npm_resolution(resolution, package, version)
-
-
-def _safe_bin_path(value: str) -> bool:
-    """Package-relative path. A URL, a drive, or `..` is not."""
-    if not value or value.startswith(("/", "\\")) or ":" in value or "\\" in value:
-        return False
-    return all(part not in {"", ".", ".."} for part in value.split("/"))
-
-
-def _normalize_bin(value: object) -> object:
-    if isinstance(value, str):
-        return "#" if _safe_bin_path(value) else value
-    if isinstance(value, dict):
-        return {
-            key: "#" if isinstance(item, str) and _safe_bin_path(item) else item for key, item in value.items()
-        }
-    return value
-
-
 def _fold_spec(value: str) -> str:
     """Bare `X`, `^X`, and `=X` are the same residue spelling. `~`, `v`, and `V` are not."""
     match = _FOLD_SPEC_RE.fullmatch(value)
     return match.group(1) if match else value
 
 
-def _normalize_record(node: dict[str, object], package: str) -> dict[str, object]:
-    """Drop registry locators only. Every other field stays for the byte compare."""
-    canonical = _locator_canonical(node, package)
-    version = node.get("version") if isinstance(node.get("version"), str) else ""
-    normalized: dict[str, object] = {}
-    for key, value in node.items():
-        if key == "version" and isinstance(value, str) and _plain_semver(value):
-            continue
-        if key in {"integrity", "checksum"} and canonical:
-            continue
-        if key == "resolved" and isinstance(value, str) and _canonical_tarball(value, version, package):
-            continue
-        if key == "resolution" and isinstance(value, str) and _npm_resolution(value, package, version):
-            continue
-        if key == "bin":
-            normalized[key] = _normalize_bin(value)
-            continue
-        if key in _SPEC_SECTIONS and isinstance(value, dict):
-            normalized[key] = _normalize_dependency_map(value)
-            continue
-        normalized[key] = _normalize_node(value, package) if isinstance(value, (dict, list)) else value
-    return normalized
-
-
-def _normalize_dependency_map(node: dict[str, object]) -> dict[str, object]:
+def _fold_residue(node: object) -> object:
+    """Fold bare, `^`, and `=` spellings in residue maps. Nested lock records stay as written."""
+    if isinstance(node, list):
+        return [_fold_residue(item) for item in node]
+    if not isinstance(node, dict):
+        return node
     folded: dict[str, object] = {}
-    for dep, spec in node.items():
-        if isinstance(spec, str):
-            folded[dep] = _fold_spec(spec)
-        else:
-            folded[dep] = _normalize_node(spec, str(dep))
+    for key, value in node.items():
+        if key in _SPEC_SECTIONS and isinstance(value, dict):
+            section: dict[str, object] = {}
+            for dep, spec in value.items():
+                section[str(dep)] = _fold_spec(spec) if isinstance(spec, str) else _fold_residue(spec)
+            folded[key] = section
+            continue
+        folded[key] = _fold_residue(value)
     return folded
 
 
-def _normalize_node(node: object, package: str) -> object:
-    if isinstance(node, list):
-        return [_normalize_node(item, package) for item in node]
-    if not isinstance(node, dict):
-        return node
-    if "spec" in node and "path" not in node:
-        spec = node.get("spec")
-        name = node.get("name") if isinstance(node.get("name"), str) and node.get("name") else package
-        if isinstance(spec, str):
-            return {"spec": _fold_spec(spec)}
-        if isinstance(spec, dict):
-            return {"spec": _normalize_record(spec, name)}
-    path = node.get("path") if isinstance(node.get("path"), str) else ""
-    record_name = _direct_lock_name(path) if path else ""
-    if not record_name and isinstance(node.get("name"), str) and any(key in node for key in _RECORD_KEYS):
-        record_name = str(node.get("name"))
-    if any(key in node for key in _RECORD_KEYS) and (record_name or package):
-        return _normalize_record(node, record_name or package)
-    normalized: dict[str, object] = {}
-    for key, value in node.items():
-        if key in _SPEC_SECTIONS and isinstance(value, dict):
-            normalized[key] = _normalize_dependency_map(value)
-            continue
-        normalized[key] = _normalize_node(value, package)
-    return normalized
+def _lock_record(doc: object) -> tuple[str, dict[str, object]] | None:
+    if not isinstance(doc, dict):
+        return None
+    spec = doc.get("spec")
+    if isinstance(spec, str):
+        return None
+    if isinstance(spec, dict):
+        name = doc.get("name") if isinstance(doc.get("name"), str) else ""
+        return name, spec
+    path = doc.get("path") if isinstance(doc.get("path"), str) else ""
+    name = _direct_lock_name(path) if path else ""
+    if not name and isinstance(doc.get("name"), str):
+        name = str(doc["name"])
+    if path or any(key in doc for key in _LOCATOR_KEYS):
+        return name, doc
+    return None
 
 
-def _normalize_yarn(payload: str) -> str:
-    header = payload.split("\n", 1)[0]
-    names = _YARN_HEADER_RE.findall(header)
+def _text(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _both_resolved_canonical(old_name: str, old: dict[str, object], new_name: str, new: dict[str, object]) -> bool:
+    """Both install locators are the registry tarball for that side's name and version."""
+    old_resolved, new_resolved = _text(old.get("resolved")), _text(new.get("resolved"))
+    if not old_resolved or not new_resolved:
+        return False
+    return _canonical_tarball(old_resolved, _text(old.get("version")), old_name) and _canonical_tarball(
+        new_resolved, _text(new.get("version")), new_name
+    )
+
+
+def _without_locators(record: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in record.items() if key not in _LOCATOR_KEYS}
+
+
+def _yarn_locator(payload: str) -> tuple[str, str, str]:
+    names = _YARN_HEADER_RE.findall(payload.split("\n", 1)[0])
     package = names[0] if len(names) == 1 else ""
-    version = resolved = resolution = ""
+    version = resolved = ""
     for line in payload.splitlines():
         found = _YARN_VERSION_LINE.match(line)
         if found and not version:
@@ -605,43 +556,47 @@ def _normalize_yarn(payload: str) -> str:
         found = _YARN_RESOLVED_LINE.match(line)
         if found and not resolved:
             resolved = found.group(1)
-        found = _YARN_RESOLUTION_LINE.match(line)
-        if found and not resolution:
-            resolution = found.group(1)
-    record = {"version": version, "resolved": resolved, "resolution": resolution}
-    canonical = _locator_canonical(record, package)
-    kept: list[str] = []
-    for line in payload.splitlines():
-        found = _YARN_VERSION_LINE.match(line)
-        if found:
-            if not _plain_semver(found.group(1)):
-                kept.append(line)
-            continue
-        if _YARN_HASH_LINE.match(line):
-            if not canonical:
-                kept.append(line)
-            continue
-        found = _YARN_RESOLVED_LINE.match(line)
-        if found:
-            if not _canonical_tarball(found.group(1), version, package):
-                kept.append(line)
-            continue
-        found = _YARN_RESOLUTION_LINE.match(line)
-        if found:
-            if not _npm_resolution(found.group(1), package, version):
-                kept.append(line)
-            continue
-        kept.append(line)
+    return package, version, resolved
+
+
+def _yarn_without_locators(payload: str) -> str:
+    kept = [
+        line
+        for line in payload.splitlines()
+        if not (_YARN_VERSION_LINE.match(line) or _YARN_RESOLVED_LINE.match(line) or _YARN_HASH_LINE.match(line))
+    ]
     return "\n".join(kept)
 
 
-def _normalize(payload: str) -> str:
-    """One canonical form. Callers byte-compare the result."""
+def _payloads_match(old: str, new: str) -> bool:
+    """Drop version and registry locators only when `resolved` is canonical on both sides.
+
+    Every other entry is compared as written, version included. `resolution` does not make an entry canonical.
+    """
+    if old == new:
+        return True
     try:
-        doc = json.loads(payload)
+        old_doc = json.loads(old)
+        new_doc = json.loads(new)
     except json.JSONDecodeError:
-        return _normalize_yarn(payload)
-    return json.dumps(_normalize_node(doc, ""), sort_keys=True, separators=(",", ":"))
+        old_package, old_version, old_resolved = _yarn_locator(old)
+        new_package, new_version, new_resolved = _yarn_locator(new)
+        if not (
+            old_resolved
+            and new_resolved
+            and _canonical_tarball(old_resolved, old_version, old_package)
+            and _canonical_tarball(new_resolved, new_version, new_package)
+        ):
+            return False
+        return _yarn_without_locators(old) == _yarn_without_locators(new)
+    old_record, new_record = _lock_record(old_doc), _lock_record(new_doc)
+    if old_record is None or new_record is None:
+        return False
+    old_name, old_body = old_record
+    new_name, new_body = new_record
+    if not _both_resolved_canonical(old_name, old_body, new_name, new_body):
+        return False
+    return _without_locators(old_body) == _without_locators(new_body)
 
 
 def _payload_id(payload: str) -> str:
@@ -681,22 +636,19 @@ def _residues_match(kind: str, old: str, new: str) -> bool:
     if kind != "json":
         return False
     try:
-        json.loads(old)
-        json.loads(new)
+        old_doc = json.loads(old)
+        new_doc = json.loads(new)
     except json.JSONDecodeError:
         return False
-    return _normalize(old) == _normalize(new)
+    return _fold_residue(old_doc) == _fold_residue(new_doc)
 
 
-def _lock_doc(doc: object) -> bool:
-    if not isinstance(doc, dict):
+def _string_spec(payload: str) -> bool:
+    try:
+        doc = json.loads(payload)
+    except json.JSONDecodeError:
         return False
-    if "path" in doc or "lock" in doc:
-        return True
-    if any(key in doc for key in ("integrity", "resolved", "checksum")):
-        return True
-    spec = doc.get("spec")
-    return isinstance(spec, dict) and any(key in spec for key in ("integrity", "resolved", "checksum"))
+    return isinstance(doc, dict) and set(doc) == {"spec"} and isinstance(doc.get("spec"), str)
 
 
 def _lock_text(payloads: list[str]) -> bool:
@@ -707,21 +659,20 @@ def _lock_text(payloads: list[str]) -> bool:
 
 
 def _payload_ok(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
-    """A lock entry may change its version and registry locators. A manifest spec is not a lock payload."""
+    """A manifest string spec is the version label. A lock record is compared as a pair."""
     payloads = [payload for _version, payload in (*old_blocks, *new_blocks)]
-    parsed: list[object] = []
+    if payloads and all(_string_spec(payload) for payload in payloads):
+        return True
     for payload in payloads:
         try:
-            parsed.append(json.loads(payload))
+            json.loads(payload)
         except json.JSONDecodeError:
             return _version_bump(old_blocks, new_blocks) if _lock_text(payloads) else True
-    if any(_lock_doc(doc) for doc in parsed):
-        return _version_bump(old_blocks, new_blocks)
-    return True
+    return _version_bump(old_blocks, new_blocks)
 
 
 def _version_bump(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
-    """True when each paired entry matches, or changes only its version and registry locators."""
+    """True when each paired entry matches, or both resolved URLs are the registry tarball."""
     if old_blocks == new_blocks:
         return True
     pairs = _pair_blocks(old_blocks, new_blocks)
@@ -730,7 +681,7 @@ def _version_bump(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str,
     for old, new in pairs:
         if old == new:
             continue
-        if old[0] == new[0] or _normalize(old[1]) != _normalize(new[1]):
+        if old[0] == new[0] or not _payloads_match(old[1], new[1]):
             return False
     return True
 

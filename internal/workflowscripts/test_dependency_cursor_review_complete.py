@@ -164,7 +164,13 @@ class CombineCompleteTest(unittest.TestCase):
                 self.assertIn("**Merge**", written["result"])
                 self.assertIn("Call sites are unchanged.", written["result"])
                 self.assertIs(written["complete"], False)
-                self.assertEqual(written["check"], "fail" if reason == "to_ref_unresolved" else "pass")
+                closed = {
+                    "incomplete_coverage",
+                    "from_ref_unresolved",
+                    "to_ref_unresolved",
+                    "untrusted_version_text",
+                }
+                self.assertEqual(written["check"], "fail" if reason in closed else "pass")
 
     def test_to_ref_unresolved_with_empty_unread_fails_the_check(self) -> None:
         written = self._run(
@@ -183,8 +189,8 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIs(written["complete"], False)
         self.assertIn("**Verdict: suspicious**", written["result"])
 
-    def test_incomplete_scan_with_agent_suspicious_passes(self) -> None:
-        """An official suspicious line is dropped on an inconclusive scan, so the check passes."""
+    def test_incomplete_scan_with_agent_suspicious_fails_the_check(self) -> None:
+        """An official suspicious line is dropped on an inconclusive scan, and the check fails closed."""
         agent = "MALWARE_REVIEW_VERDICT: suspicious\nEVIDENCE: pkg/a.py:3: coverage gap\n"
         written = self._run(
             json.dumps({"result": agent}),
@@ -199,7 +205,7 @@ class CombineCompleteTest(unittest.TestCase):
         )
         self.assertIn("**Verdict: suspicious**", written["result"])
         self.assertNotIn("**Verdict: malicious**", written["result"])
-        self.assertEqual(written["check"], "pass")
+        self.assertEqual(written["check"], "fail")
 
     def test_incomplete_scan_names_unread_files(self) -> None:
         written = self._run(

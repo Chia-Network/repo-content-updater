@@ -59,14 +59,6 @@ jobs:
       summary: ${{`{{ steps.malware_scan.outputs.summary }}`}}
       scan_conclusive: ${{`{{ steps.malware_scan.outputs.scan_conclusive }}`}}
     steps:
-      - name: Tighten cache usage in review workflow
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf '%s' "${ACTIONS_RESULTS_URL:-}" > "${RUNNER_TEMP}/dcr-results-url"
-          echo "ACTIONS_CACHE_URL=" >> "$GITHUB_ENV"
-          echo "ACTIONS_RESULTS_URL=" >> "$GITHUB_ENV"
-
       - name: Checkout trusted target-PR helper
         uses: actions/checkout@v7
         with:
@@ -100,6 +92,9 @@ jobs:
       - name: Checkout repository
         if: steps.target_pr.outputs.already_reviewed != 'true'
         uses: actions/checkout@v7
+        env:
+          ACTIONS_CACHE_URL: ""
+          ACTIONS_RESULTS_URL: ""
         with:
           ref: ${{`{{ steps.target_pr.outputs.head_sha }}`}}
           persist-credentials: false
@@ -223,17 +218,11 @@ jobs:
             : > upstream_changed_files.txt
           fi
 
-      - name: Prepare review artifact upload
-        if: always() && steps.target_pr.outputs.already_reviewed != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          url="$(cat "${RUNNER_TEMP}/dcr-results-url" 2>/dev/null || true)"
-          echo "ACTIONS_RESULTS_URL=${url}" >> "$GITHUB_ENV"
-
       - name: Upload scan inputs
         if: always() && steps.target_pr.outputs.already_reviewed != 'true'
         uses: actions/upload-artifact@v7
+        env:
+          ACTIONS_RESULTS_URL: "${ACTIONS_RESULTS_URL}"
         with:
           name: dcr-scan-${{`{{ github.run_id }}`}}
           retention-days: 1
@@ -244,13 +233,6 @@ jobs:
             upstream_changed_files.txt
             cursor_prompt_malware.txt
             cursor_prompt_compatibility.txt
-
-      - name: Tighten cache usage in review workflow
-        if: always() && steps.target_pr.outputs.already_reviewed != 'true'
-        shell: bash
-        run: |
-          echo "ACTIONS_CACHE_URL=" >> "$GITHUB_ENV"
-          echo "ACTIONS_RESULTS_URL=" >> "$GITHUB_ENV"
 
       - name: Bind review marker to peeled commit
         id: bind_review
@@ -279,16 +261,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Tighten cache usage in review workflow
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf '%s' "${ACTIONS_RESULTS_URL:-}" > "${RUNNER_TEMP}/dcr-results-url"
-          echo "ACTIONS_CACHE_URL=" >> "$GITHUB_ENV"
-          echo "ACTIONS_RESULTS_URL=" >> "$GITHUB_ENV"
-
       - name: Checkout repository
         uses: actions/checkout@v7
+        env:
+          ACTIONS_CACHE_URL: ""
+          ACTIONS_RESULTS_URL: ""
         with:
           ref: ${{`{{ needs.dependency-review-scan.outputs.head_sha }}`}}
           persist-credentials: false
@@ -315,6 +292,8 @@ jobs:
 
       - name: Download scan prompts
         uses: actions/download-artifact@v8
+        env:
+          ACTIONS_RESULTS_URL: "${ACTIONS_RESULTS_URL}"
         with:
           name: dcr-scan-${{`{{ github.run_id }}`}}
           path: dcr-scan-input
@@ -491,6 +470,9 @@ jobs:
           CURSOR_API_KEY: ${{`{{ secrets.CURSOR_API_KEY }}`}}
           GITHUB_TOKEN: ""
           GH_TOKEN: ""
+          ACTIONS_CACHE_URL: ""
+          ACTIONS_RESULTS_URL: ""
+          ACTIONS_RUNTIME_TOKEN: ""
         run: |
           set -euo pipefail
           if [ -n "${GITHUB_TOKEN:-}" ] || [ -n "${GH_TOKEN:-}" ]; then
@@ -515,17 +497,11 @@ jobs:
           run_agent_prompt "dcr-scan-input/cursor_prompt_malware.txt" "cursor_output_malware.json"
           run_agent_prompt "dcr-scan-input/cursor_prompt_compatibility.txt" "cursor_output_compatibility.json"
 
-      - name: Prepare review artifact upload
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          url="$(cat "${RUNNER_TEMP}/dcr-results-url" 2>/dev/null || true)"
-          echo "ACTIONS_RESULTS_URL=${url}" >> "$GITHUB_ENV"
-
       - name: Upload agent outputs
         if: always()
         uses: actions/upload-artifact@v7
+        env:
+          ACTIONS_RESULTS_URL: "${ACTIONS_RESULTS_URL}"
         with:
           name: dcr-agent-${{`{{ github.run_id }}`}}
           retention-days: 1
@@ -533,13 +509,6 @@ jobs:
           path: |
             cursor_output_malware.json
             cursor_output_compatibility.json
-
-      - name: Tighten cache usage in review workflow
-        if: always()
-        shell: bash
-        run: |
-          echo "ACTIONS_CACHE_URL=" >> "$GITHUB_ENV"
-          echo "ACTIONS_RESULTS_URL=" >> "$GITHUB_ENV"
 
   dependency-review:
     needs:

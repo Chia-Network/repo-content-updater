@@ -249,12 +249,24 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn("timeout-minutes: 15", agent.split("steps:", 1)[0])
         self.assertNotIn("timeout-minutes: 10", agent.split("steps:", 1)[0])
         self.assertIn("timeout-minutes: 10", agent_step)
+        self.assertIn('ACTIONS_CACHE_URL: ""', agent_step)
+        self.assertIn('ACTIONS_RESULTS_URL: ""', agent_step)
+        self.assertIn('ACTIONS_RUNTIME_TOKEN: ""', agent_step)
+        self.assertNotIn("${ACTIONS_RESULTS_URL}", agent_step)
+        download = agent.split("- name: Download scan prompts\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn('ACTIONS_RESULTS_URL: "${ACTIONS_RESULTS_URL}"', download)
+        upload_scan = scan.split("- name: Upload scan inputs\n", 1)[1].split("\n      - name:", 1)[0]
+        upload_agent = agent.split("- name: Upload agent outputs\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn('ACTIONS_RESULTS_URL: "${ACTIONS_RESULTS_URL}"', upload_scan)
+        self.assertIn('ACTIONS_RESULTS_URL: "${ACTIONS_RESULTS_URL}"', upload_agent)
         for job in (scan, agent):
-            self.assertIn("Tighten cache usage in review workflow", job)
-            self.assertIn('echo "ACTIONS_CACHE_URL=" >> "$GITHUB_ENV"', job)
-            self.assertIn('echo "ACTIONS_RESULTS_URL=" >> "$GITHUB_ENV"', job)
-            self.assertLess(job.index("Tighten cache usage in review workflow"), job.index("uses: actions/checkout@v7"))
-            self.assertLess(job.index("Prepare review artifact upload"), job.index("uses: actions/upload-artifact@v7"))
+            head = job.split("- name: Checkout repository\n", 1)[1].split("\n      - name:", 1)[0]
+            self.assertIn('ACTIONS_CACHE_URL: ""', head)
+            self.assertIn('ACTIONS_RESULTS_URL: ""', head)
+            self.assertNotIn("${ACTIONS_RESULTS_URL}", head)
+            self.assertNotIn("dcr-results-url", job)
+            self.assertNotIn("ACTIONS_RESULTS_URL=", job)
+            self.assertNotIn('>> "$GITHUB_ENV"', job)
             self.assertNotIn("actions/cache", job)
             self.assertNotIn("cache:", job)
             self.assertNotIn(": write", job)

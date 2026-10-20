@@ -751,8 +751,8 @@ class DependencyManifestDiffTest(unittest.TestCase):
                     {
                         "lockfileVersion": 3,
                         "packages": {
-                            "node_modules/lodash": {"version": lodash},
-                            "node_modules/minimist": {"version": minimist},
+                            "node_modules/lodash": {"version": lodash, "resolved": f"https://registry.npmjs.org/lodash/-/lodash-{lodash}.tgz", "integrity": "sha-" + lodash},
+                            "node_modules/minimist": {"version": minimist, "resolved": f"https://registry.npmjs.org/minimist/-/minimist-{minimist}.tgz", "integrity": "sha-" + minimist},
                         },
                     }
                 )
@@ -936,23 +936,34 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertIn("cy-verify-downloads", _unresolved(added_report))
 
     def test_locator_bytes_fail_closed(self) -> None:
-        """Non-canonical locators, protocol versions, residue spelling, bin paths, and lockfile v1."""
+        """Non-canonical locators stay byte-for-byte. Residue folds only bare, `^`, and `=` specs."""
         updates = [_bump("left-pad", "1.2.3", "1.2.4", "left-pad/left-pad")]
         canonical = "https://registry.npmjs.org/left-pad/-/left-pad-{}.tgz"
         evil = "https://evil.example/left-pad.tgz"
+        mini = "https://registry.npmjs.org/minimist/-/minimist-1.2.5.tgz"
 
-        def npm(version: str, resolved: str, integrity: str, **extra: object) -> str:
-            entry: dict[str, object] = {"version": version, "resolved": resolved, "integrity": integrity, **extra}
+        def npm(version: str, resolved: str, integrity: str | None = None, **extra: object) -> str:
+            entry: dict[str, object] = {"version": version, "resolved": resolved, **extra}
+            if integrity is not None:
+                entry["integrity"] = integrity
             return json.dumps({"lockfileVersion": 3, "packages": {"node_modules/left-pad": entry}})
 
         def explains(before: str, after: str, listed: list[dict] | None = None) -> bool:
             return manifest._entries_explain("json", before, after, updates if listed is None else listed)
 
         old = npm("1.2.3", canonical.format("1.2.3"), "sha-old", bin="bin/left-pad.js")
+        self.assertTrue(explains(old, npm("1.2.4", canonical.format("1.2.4"), "sha-new", bin="bin/left-pad.js")))
         self.assertFalse(explains(npm("1.2.3", evil, "sha-old"), npm("1.2.4", evil, "sha-new")))
-        self.assertFalse(explains(old, npm("file:../evil", canonical.format("1.2.3"), "sha-old"), [_bump("left-pad", "1.2.3", "file:../evil", "left-pad/left-pad")]))
+        self.assertFalse(explains(npm("1.2.3", "file:../pwned"), npm("1.2.4", "file:../pwned")))
+        self.assertFalse(
+            explains(
+                npm("1.2.3", evil, "sha-old", resolution="left-pad@npm:1.2.3"),
+                npm("1.2.4", "file:../pwned", "sha-new", resolution="left-pad@npm:1.2.4"),
+            )
+        )
+        self.assertFalse(explains(npm("1.2.3", canonical.format("1.2.3")), npm("1.2.4", canonical.format("1.2.4"), "sha-new", resolution="left-pad@npm:1.2.4")))
+        self.assertFalse(explains(old, npm("1.2.4", canonical.format("1.2.4"), "sha-new", bin="bin/cli.js")))
         self.assertFalse(explains(old, npm("1.2.4", canonical.format("1.2.4"), "sha-new", bin="../evil.js")))
-        self.assertTrue(explains(old, npm("1.2.4", canonical.format("1.2.4"), "sha-new", bin="bin/cli.js")))
 
         def residue(spec: str) -> str:
             return json.dumps({"packages": {"packages/api": {"dependencies": {"moment": spec}}}})
@@ -962,14 +973,24 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertFalse(manifest._residues_match("json", residue("~2.31.0"), residue("^2.31.0")))
         self.assertFalse(manifest._residues_match("json", residue("v2.31.0"), residue("2.31.0")))
         self.assertFalse(manifest._residues_match("json", residue("V2.31.0"), residue("2.31.0")))
-        self.assertFalse(explains(residue("~2.31.0"), residue("^2.31.0")))
 
-        def v1(version: str, resolved: str, integrity: str) -> str:
-            body = {"lockfileVersion": 1, "dependencies": {"left-pad": {"version": version, "resolved": resolved, "integrity": integrity}}}
-            return json.dumps(body)
+        def v1(version: str, resolved: str, integrity: str, **extra: object) -> str:
+            spec = {"version": version, "resolved": resolved, "integrity": integrity, **extra}
+            return json.dumps({"lockfileVersion": 1, "dependencies": {"left-pad": spec}})
 
         self.assertTrue(explains(v1("1.2.3", canonical.format("1.2.3"), "sha-old"), v1("1.2.4", canonical.format("1.2.4"), "sha-new")))
         self.assertFalse(explains(v1("1.2.3", evil, "sha-old"), v1("1.2.4", evil, "sha-new")))
+        self.assertFalse(explains(v1("1.2.3", canonical.format("1.2.3"), "sha-old"), v1("1.2.4", canonical.format("1.2.4"), "sha-new", scripts={"preinstall": "echo pwned"})))
+
+        def nested(integrity: str) -> str:
+            pad = {"version": "1.2.3", "resolved": canonical.format("1.2.3"), "integrity": "sha-old", "dependencies": {"minimist": {"version": "1.2.5", "resolved": mini, "integrity": integrity}}}
+            return json.dumps({"lockfileVersion": 1, "dependencies": {"left-pad": pad}})
+
+        self.assertFalse(manifest._residues_match("json", nested("sha-a"), nested("sha-b")))
+        self.assertFalse(explains(nested("sha-a"), nested("sha-b")))
+        yarn_old = 'left-pad@^1.2.3:\n  version "1.2.3"\n  resolved "file:../pwned"\n'
+        yarn_new = 'left-pad@^1.2.3:\n  version "1.2.4"\n  resolved "file:../pwned"\n'
+        self.assertFalse(manifest._entries_explain("yarn", yarn_old, yarn_new, updates))
 
 
 if __name__ == "__main__":
