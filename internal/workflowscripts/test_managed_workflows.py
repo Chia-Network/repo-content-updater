@@ -254,11 +254,11 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn('ACTIONS_RUNTIME_TOKEN: ""', agent_step)
         self.assertNotIn("${ACTIONS_RESULTS_URL}", agent_step)
         download = agent.split("- name: Download scan prompts\n", 1)[1].split("\n      - name:", 1)[0]
-        self.assertIn('ACTIONS_RESULTS_URL: "${ACTIONS_RESULTS_URL}"', download)
         upload_scan = scan.split("- name: Upload scan inputs\n", 1)[1].split("\n      - name:", 1)[0]
         upload_agent = agent.split("- name: Upload agent outputs\n", 1)[1].split("\n      - name:", 1)[0]
-        self.assertIn('ACTIONS_RESULTS_URL: "${ACTIONS_RESULTS_URL}"', upload_scan)
-        self.assertIn('ACTIONS_RESULTS_URL: "${ACTIONS_RESULTS_URL}"', upload_agent)
+        for step in (download, upload_scan, upload_agent):
+            self.assertNotIn("ACTIONS_RESULTS_URL", step)
+        self.assertEqual(workflow.count("ACTIONS_RESULTS_URL"), 3)
         for job in (scan, agent):
             head = job.split("- name: Checkout repository\n", 1)[1].split("\n      - name:", 1)[0]
             self.assertIn('ACTIONS_CACHE_URL: ""', head)

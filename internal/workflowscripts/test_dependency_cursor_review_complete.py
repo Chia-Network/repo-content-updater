@@ -164,13 +164,7 @@ class CombineCompleteTest(unittest.TestCase):
                 self.assertIn("**Merge**", written["result"])
                 self.assertIn("Call sites are unchanged.", written["result"])
                 self.assertIs(written["complete"], False)
-                closed = {
-                    "incomplete_coverage",
-                    "from_ref_unresolved",
-                    "to_ref_unresolved",
-                    "untrusted_version_text",
-                }
-                self.assertEqual(written["check"], "fail" if reason in closed else "pass")
+                self.assertEqual(written["check"], "fail")
 
     def test_to_ref_unresolved_with_empty_unread_fails_the_check(self) -> None:
         written = self._run(
