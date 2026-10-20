@@ -683,8 +683,8 @@ class DependencyManifestDiffTest(unittest.TestCase):
     def test_poetry_lock_and_transitive_residue_pass_when_the_verdict_is_pass(self) -> None:
         listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
         poetry = _run_listed_scan(
-            {"poetry.lock": "[[package]]\nname = \"lodash\"\nversion = \"4.17.20\"\n"},
-            {"poetry.lock": "[[package]]\nname = \"lodash\"\nversion = \"4.17.21\"\n"},
+            {"poetry.lock": '[[package]]\nname = "lodash"\nversion = "4.17.20"\n'},
+            {"poetry.lock": '[[package]]\nname = "lodash"\nversion = "4.17.21"\n'},
             listed,
         )
         self.assertIs(poetry["scan_conclusive"], True)
@@ -692,7 +692,9 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertNotIn("poetry.lock", " ".join(poetry.get("errors") or []))
         published = formatter.compose_published_review(poetry, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
         self.assertEqual(published["verdict"], "benign")
-        self.assertEqual(formatter.required_check(poetry, _PASS_REVIEW, str(published["verdict"])), "pass")
+        self.assertEqual(
+            formatter.required_check(str(published["verdict"]), formatter.blocking_findings(poetry)), "pass"
+        )
 
         def lock(lodash: str, minimist: str) -> str:
             return (
@@ -717,14 +719,22 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertEqual(residue["status"], "clean")
         self.assertNotIn("minimist", " ".join(residue.get("errors") or []))
         published = formatter.compose_published_review(residue, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
-        self.assertEqual(formatter.required_check(residue, _PASS_REVIEW, str(published["verdict"])), "pass")
-        self.assertEqual(formatter.required_check(residue, _BLOCK_REVIEW, "benign"), "fail")
+        self.assertEqual(
+            formatter.required_check(str(published["verdict"]), formatter.blocking_findings(residue)), "pass"
+        )
+        blocked_review = formatter.compose_published_review(
+            residue, _BLOCK_REVIEW, "COMPATIBILITY_RECOMMENDATION: Don't merge\n"
+        )
+        self.assertEqual(blocked_review["verdict"], "malicious")
+        self.assertEqual(
+            formatter.required_check(str(blocked_review["verdict"]), formatter.blocking_findings(residue)), "fail"
+        )
+        self.assertEqual(formatter.required_check("malicious", []), "fail")
+        self.assertEqual(formatter.required_check("scan_failed", []), "fail")
 
         blocked = json.loads(json.dumps(residue))
-        blocked["findings"]["unicode"] = [
-            {"kind": "unicode", "file": "pkg/index.js", "line": 1, "match": "bidi"}
-        ]
-        self.assertEqual(formatter.required_check(blocked, _PASS_REVIEW, "benign"), "fail")
+        blocked["findings"]["unicode"] = [{"kind": "unicode", "file": "pkg/index.js", "line": 1, "match": "bidi"}]
+        self.assertEqual(formatter.required_check("benign", formatter.blocking_findings(blocked)), "fail")
 
 
 if __name__ == "__main__":

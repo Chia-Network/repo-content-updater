@@ -176,7 +176,7 @@ def main() -> None:
     )
     malware_text = published["malware_text"]
     compatibility_text = published["compatibility_text"]
-    check = formatter.required_check(report, agent_text, str(published.get("verdict") or ""))
+    check = formatter.required_check(str(published.get("verdict") or ""), formatter.blocking_findings(report))
     agents_ok = bool(_successful_analysis_text(malware_path)) and bool(_successful_analysis_text(compatibility_path))
     # scan_failed and incomplete coverage must not stamp the patch-id skip marker.
     complete = agents_ok and published.get("may_complete") is True
