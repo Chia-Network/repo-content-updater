@@ -110,6 +110,7 @@ class CombineCompleteTest(unittest.TestCase):
             '{"result": "compat ok"}',
         )
         self.assertIs(written["complete"], True)
+        self.assertEqual(written["check"], "pass")
 
     def test_not_scanned_without_findings_stays_blocking(self) -> None:
         written = self._run(
@@ -162,6 +163,7 @@ class CombineCompleteTest(unittest.TestCase):
                 self.assertIn("**Merge**", written["result"])
                 self.assertIn("Call sites are unchanged.", written["result"])
                 self.assertIs(written["complete"], False)
+                self.assertEqual(written["check"], "pass")
 
     def test_incomplete_scan_names_unread_files(self) -> None:
         written = self._run(
@@ -625,6 +627,7 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertNotIn("API unchanged.", written["result"])
         self.assertIn("Compatibility recommendation withheld", written["result"])
         self.assertNotIn("needs human review", written["result"])
+        self.assertEqual(written["check"], "fail")
 
     def test_unicode_trick_stays_blocking_when_agent_says_benign(self) -> None:
         written = self._run(
@@ -657,6 +660,7 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("**Don't merge**", written["result"])
         self.assertNotIn("Behavior changed.", written["result"])
         self.assertNotIn("needs human review", written["result"])
+        self.assertEqual(written["check"], "fail")
 
     def test_scanner_that_did_not_run_states_that_and_still_calls_compatibility(self) -> None:
         written = self._run(
@@ -678,6 +682,7 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("**Merge**", written["result"])
         self.assertIn("Call sites are unchanged.", written["result"])
         self.assertIs(written["complete"], False)
+        self.assertEqual(written["check"], "fail")
 
     def test_scanner_ioc_wins_over_did_not_run(self) -> None:
         written = self._run(

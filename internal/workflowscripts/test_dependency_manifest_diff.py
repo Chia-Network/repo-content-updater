@@ -11,7 +11,11 @@ from unittest.mock import patch
 
 import dependency_manifest_diff as manifest
 import dependency_update_coverage as coverage
+import malware_verdict_formatter as formatter
 from test_dependency_update_coverage import _clean, _commit, _git
+
+_PASS_REVIEW = "MALWARE_REVIEW_VERDICT: benign\n\nLockfile change is the listed bump.\n"
+_BLOCK_REVIEW = "MALWARE_REVIEW_VERDICT: malicious\n\nDo not merge.\n"
 
 
 def _run_listed_scan(base: dict[str, str], head: dict[str, str], updates: list[dict]) -> dict:
@@ -675,6 +679,52 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertEqual(separators["status"], "clean")
         self.assertEqual(separators["package_name"], "Foo_Bar.Baz")
         self.assertEqual(separators["not_scanned_reason"], "")
+
+    def test_poetry_lock_and_transitive_residue_pass_when_the_verdict_is_pass(self) -> None:
+        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
+        poetry = _run_listed_scan(
+            {"poetry.lock": "[[package]]\nname = \"lodash\"\nversion = \"4.17.20\"\n"},
+            {"poetry.lock": "[[package]]\nname = \"lodash\"\nversion = \"4.17.21\"\n"},
+            listed,
+        )
+        self.assertIs(poetry["scan_conclusive"], True)
+        self.assertEqual(poetry["status"], "clean")
+        self.assertNotIn("poetry.lock", " ".join(poetry.get("errors") or []))
+        published = formatter.compose_published_review(poetry, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
+        self.assertEqual(published["verdict"], "benign")
+        self.assertEqual(formatter.required_check(poetry, _PASS_REVIEW, str(published["verdict"])), "pass")
+
+        def lock(lodash: str, minimist: str) -> str:
+            return (
+                json.dumps(
+                    {
+                        "lockfileVersion": 3,
+                        "packages": {
+                            "node_modules/lodash": {"version": lodash},
+                            "node_modules/minimist": {"version": minimist},
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        residue = _run_listed_scan(
+            {"package-lock.json": lock("4.17.20", "1.2.0")},
+            {"package-lock.json": lock("4.17.21", "1.2.8")},
+            listed,
+        )
+        self.assertIs(residue["scan_conclusive"], True)
+        self.assertEqual(residue["status"], "clean")
+        self.assertNotIn("minimist", " ".join(residue.get("errors") or []))
+        published = formatter.compose_published_review(residue, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
+        self.assertEqual(formatter.required_check(residue, _PASS_REVIEW, str(published["verdict"])), "pass")
+        self.assertEqual(formatter.required_check(residue, _BLOCK_REVIEW, "benign"), "fail")
+
+        blocked = json.loads(json.dumps(residue))
+        blocked["findings"]["unicode"] = [
+            {"kind": "unicode", "file": "pkg/index.js", "line": 1, "match": "bidi"}
+        ]
+        self.assertEqual(formatter.required_check(blocked, _PASS_REVIEW, "benign"), "fail")
 
 
 if __name__ == "__main__":

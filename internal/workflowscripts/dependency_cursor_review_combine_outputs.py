@@ -168,13 +168,15 @@ def main() -> None:
         script_dir / "malware_verdict_formatter.py",
         "trusted_malware_verdict_formatter",
     )
+    agent_text = _extract_text(malware_payload)
     published = formatter.compose_published_review(
         report,
-        _extract_text(malware_payload),
+        agent_text,
         _extract_text(compatibility_payload),
     )
     malware_text = published["malware_text"]
     compatibility_text = published["compatibility_text"]
+    check = formatter.required_check(report, agent_text, str(published.get("verdict") or ""))
     agents_ok = bool(_successful_analysis_text(malware_path)) and bool(_successful_analysis_text(compatibility_path))
     # scan_failed and incomplete coverage must not stamp the patch-id skip marker.
     complete = agents_ok and published.get("may_complete") is True
@@ -187,11 +189,26 @@ def main() -> None:
     combined = {
         "result": combined_text,
         "complete": complete,
+        "check": check,
         "malware_review": malware_review,
         "compatibility_review": compatibility_review,
     }
     combined_path.write_text(json.dumps(combined, indent=2), encoding="utf-8")
 
 
+def _enforce_stored_check() -> None:
+    """Exit from the check already stored by required_check. Does not decide again."""
+    path = _env_path("DCR_COMBINED_JSON")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        _fail_closed("Combined review is missing.")
+    if not isinstance(payload, dict) or payload.get("check") != "pass":
+        _fail_closed("Dependency review did not pass.")
+
+
 if __name__ == "__main__":
-    main()
+    if "--enforce-check" in sys.argv:
+        _enforce_stored_check()
+    else:
+        main()

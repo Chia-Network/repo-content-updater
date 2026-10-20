@@ -368,14 +368,23 @@ def _base_commit() -> str | None:
     return _verify_commit(ref) or _verify_commit(f"origin/{ref}") or ""
 
 
+# Lockfiles whose extra names are transitive residue once a listed bump is explained.
+_TRANSITIVE_LOCKS = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock"})
+
+
 def manifest_gaps(updates: list[dict]) -> list[dict]:
-    """Direct manifest and lockfile bumps missing from the parsed list.
+    """Direct manifest bumps missing from the parsed list.
 
     An unreadable base ref, when one was named, is itself unresolved.
     An entry is explained only when its package moved to the listed version.
     Anything else in the file stays unresolved under the path. A listed
     package with that path as its name does not hide the path. A dependency
     with more than one unexplained entry is named as well.
+
+    An opaque lockfile cannot name a package, so it is not a gap. Unlisted
+    names in a npm or Yarn lock are transitive residue when every listed
+    name in that lock moved to its listed version. Both stay inputs to the
+    review instead of uncovered dependencies.
     """
     base = _base_commit()
     if base is None:
@@ -395,13 +404,19 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
     seen = set(listed)
     for path in diff.stdout.splitlines():
         kind = _diff._manifest_kind(path)
-        if not kind:
+        if not kind or kind == "opaque":
             continue
         before = _git_text(base, path)
         after = _git_text("HEAD", path)
         names = _diff._changed_names(kind, before, after)
         explained = names is not None and _diff._entries_explain(kind, before, after, updates)
         file_unresolved = names is None or (before != after and not explained)
+        if (
+            Path(path).name in _TRANSITIVE_LOCKS
+            and names
+            and _diff._lock_covers_listed(kind, before, after, updates, names)
+        ):
+            continue
         if file_unresolved and (names is None or _diff._names_listed(kind, names, listed)):
             gaps.append(uncovered({"packageName": path}, "unresolved"))
         elif names:
