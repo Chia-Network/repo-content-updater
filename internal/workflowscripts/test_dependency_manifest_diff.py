@@ -629,6 +629,53 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertIs(report["scan_conclusive"], False)
         self.assertNotEqual(report["status"], "clean")
 
+    def test_go_sum_bump_that_keeps_old_lines_is_covered(self) -> None:
+        def go_sum(*versions: tuple[str, str]) -> str:
+            rows = []
+            for version, digest in versions:
+                rows.append(f"github.com/spf13/cobra {version} h1:{digest}")
+                rows.append(f"github.com/spf13/cobra {version}/go.mod h1:{digest}")
+            return "\n".join(rows) + "\n"
+
+        old_digest = "a" * 43 + "="
+        new_digest = "b" * 43 + "="
+        base = go_sum(("v1.8.0", old_digest))
+        head = go_sum(("v1.8.0", old_digest), ("v1.8.1", new_digest))
+        updates = [_bump("github.com/spf13/cobra", "v1.8.0", "v1.8.1", "spf13/cobra")]
+        report = _run_listed_scan({"go.sum": base}, {"go.sum": head}, updates)
+        self.assertIs(report["scan_conclusive"], True)
+        self.assertEqual(report["status"], "clean")
+        self.assertEqual(report["package_name"], "github.com/spf13/cobra")
+        self.assertEqual(report["not_scanned_reason"], "")
+        rewritten = go_sum(("v1.8.0", "c" * 43 + "="), ("v1.8.1", new_digest))
+        self.assertFalse(manifest._entries_explain("go.sum", base, rewritten, updates))
+        extra = go_sum(("v1.8.0", old_digest), ("v1.8.1", new_digest), ("v1.9.0", "d" * 43 + "="))
+        self.assertFalse(manifest._entries_explain("go.sum", base, extra, updates))
+        both = go_sum(("v1.8.0", old_digest), ("v1.8.1", new_digest))
+        self.assertTrue(manifest._entries_explain("go.sum", both, go_sum(("v1.8.1", new_digest)), updates))
+
+    def test_mixed_case_requirement_name_is_covered(self) -> None:
+        self.assertEqual(manifest._requirement_name("PyYAML"), "pyyaml")
+        self.assertEqual(manifest._requirement_name("Foo_Bar.Baz"), "foo-bar-baz")
+        report = _run_listed_scan(
+            {"requirements.txt": "PyYAML==5.4.1\n"},
+            {"requirements.txt": "PyYAML==6.0.1\n"},
+            [_bump("PyYAML", "5.4.1", "6.0.1", "yaml/pyyaml")],
+        )
+        self.assertIs(report["scan_conclusive"], True)
+        self.assertEqual(report["status"], "clean")
+        self.assertEqual(report["package_name"], "PyYAML")
+        self.assertEqual(report["not_scanned_reason"], "")
+        separators = _run_listed_scan(
+            {"requirements.txt": "Foo.Bar_Baz==1.0.0\n"},
+            {"requirements.txt": "Foo.Bar_Baz==1.1.0\n"},
+            [_bump("Foo_Bar.Baz", "1.0.0", "1.1.0", "example/foo-bar-baz")],
+        )
+        self.assertIs(separators["scan_conclusive"], True)
+        self.assertEqual(separators["status"], "clean")
+        self.assertEqual(separators["package_name"], "Foo_Bar.Baz")
+        self.assertEqual(separators["not_scanned_reason"], "")
+
 
 if __name__ == "__main__":
     unittest.main()
