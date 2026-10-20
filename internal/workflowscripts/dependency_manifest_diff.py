@@ -485,25 +485,12 @@ def _version_bump(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str,
     return old_version != new_version and _without_version(old_payload) == _without_version(new_payload)
 
 
-def _lock_entry_covered(
-    kind: str,
-    name: str,
-    old_blocks: list[tuple[str, str]],
-    new_blocks: list[tuple[str, str]],
-    listed: dict[str, set[tuple[str, str]]],
-) -> bool:
-    """A listed name must reach its listed version. Every entry may change only version text."""
-    if _canonical_package_name(kind, name) in listed:
-        return _name_explained(kind, name, old_blocks, new_blocks, listed)
-    return _version_bump(old_blocks, new_blocks)
-
-
 def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict], names: set[str]) -> bool:
     """True when a listed package moves to its listed version.
 
-    Every entry may change only its version text. A listed name that lands
-    on another version stays unresolved, as does a resolved URL, an integrity
-    hash, leftover bytes, or a lock that never moves a listed package.
+    A listed name must be explained. Every other name may change only its
+    version text. A resolved URL, an integrity hash, leftover bytes, or a
+    lock that never moves a listed package stays unresolved.
     """
     listed = _listed_versions(updates, kind=kind)
     if not any(_canonical_package_name(kind, name) in listed for name in names):
@@ -517,13 +504,13 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
     if old_residue != new_residue:
         return False
     for name in set(old_entries) | set(new_entries):
-        if not _lock_entry_covered(
-            kind,
-            name,
-            _entry_blocks(old_entries.get(name)),
-            _entry_blocks(new_entries.get(name)),
-            listed,
-        ):
+        old_blocks = _entry_blocks(old_entries.get(name))
+        new_blocks = _entry_blocks(new_entries.get(name))
+        if _canonical_package_name(kind, name) in listed:
+            if not _name_explained(kind, name, old_blocks, new_blocks, listed):
+                return False
+            continue
+        if not _version_bump(old_blocks, new_blocks):
             return False
     return True
 

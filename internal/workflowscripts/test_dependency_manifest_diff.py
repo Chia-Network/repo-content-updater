@@ -340,35 +340,46 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertEqual(published["check"], "fail")
         self.assertIs(published["may_complete"], False)
 
-    def test_listed_lock_must_reach_the_listed_version(self) -> None:
-        def lock(version: str) -> str:
+    def test_listed_lock_wrong_version_label_is_unresolved(self) -> None:
+        old_url = "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz"
+        integrity = "sha512-lodash-old"
+        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
+
+        def npm(version: str) -> str:
             body = {
                 "lockfileVersion": 3,
                 "packages": {
                     "node_modules/lodash": {
                         "version": version,
-                        "resolved": "https://registry.npmjs.org/lodash/-/lodash.tgz",
-                        "integrity": "sha512-same",
+                        "resolved": old_url,
+                        "integrity": integrity,
                     }
                 },
             }
             return json.dumps(body) + "\n"
 
-        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
-        wrong = _run_listed_scan(
-            {"package-lock.json": lock("4.17.20")},
-            {"package-lock.json": lock("9.9.9")},
-            listed,
-        )
-        self.assertFalse(wrong["scan_conclusive"])
-        self.assertIn("package-lock.json", _unresolved(wrong))
-        reached = _run_listed_scan(
-            {"package-lock.json": lock("4.17.20")},
-            {"package-lock.json": lock("4.17.21")},
-            listed,
-        )
-        self.assertIs(reached["scan_conclusive"], True)
-        self.assertEqual(reached["status"], "clean")
+        def yarn(version: str) -> str:
+            return (
+                "lodash@^4.17.20:\n"
+                f'  version "{version}"\n'
+                f'  resolved "{old_url}"\n'
+                f'  integrity "{integrity}"\n'
+            )
+
+        for path, render in (
+            ("package-lock.json", npm),
+            ("npm-shrinkwrap.json", npm),
+            ("yarn.lock", yarn),
+        ):
+            with self.subTest(path=path):
+                report = _run_listed_scan({path: render("4.17.20")}, {path: render("9.9.9")}, listed)
+                self.assertFalse(report["scan_conclusive"])
+                self.assertIn(path, _unresolved(report))
+                published = formatter.compose_published_review(
+                    report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n"
+                )
+                self.assertEqual(published["check"], "fail")
+                self.assertIs(published["may_complete"], False)
 
     def test_listed_cobra_sum_bump_is_conclusive(self) -> None:
         def go_sum(version: str, digest: str) -> str:
