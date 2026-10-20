@@ -168,16 +168,18 @@ def main() -> None:
         script_dir / "malware_verdict_formatter.py",
         "trusted_malware_verdict_formatter",
     )
+    agent_text = _extract_text(malware_payload)
     published = formatter.compose_published_review(
         report,
-        _extract_text(malware_payload),
+        agent_text,
         _extract_text(compatibility_payload),
     )
     malware_text = published["malware_text"]
     compatibility_text = published["compatibility_text"]
+    check = str(published.get("check") or "fail")
     agents_ok = bool(_successful_analysis_text(malware_path)) and bool(_successful_analysis_text(compatibility_path))
-    # scan_failed and incomplete coverage must not stamp the patch-id skip marker.
-    complete = agents_ok and published.get("may_complete") is True
+    # The patch-id marker is stamped only when the published check passed.
+    complete = agents_ok and check == "pass" and published.get("may_complete") is True
     malware_review = {"result": malware_text}
     compatibility_review = {"result": compatibility_text}
 
@@ -187,11 +189,43 @@ def main() -> None:
     combined = {
         "result": combined_text,
         "complete": complete,
+        "check": check,
         "malware_review": malware_review,
         "compatibility_review": compatibility_review,
     }
     combined_path.write_text(json.dumps(combined, indent=2), encoding="utf-8")
 
 
+def _optional_analysis(name: str) -> str:
+    """Agent text when the file is present. A skipped agent leaves this empty."""
+    value = os.environ.get(name, "").strip()
+    if not value or not Path(value).is_file():
+        return ""
+    return _extract_text(_load_any(value))
+
+
+def _enforce_published_check() -> None:
+    """Recompute the check from the sealed report. A stored check string is ignored."""
+    _drop_pr_head_scripts_from_sys_path()
+    report = _sealed_report()
+    ns = _host_namespace()
+    resolve_loader_bundle = ns["resolve_loader_bundle"]
+    loader, script_dir = resolve_loader_bundle(_SCRIPT_CANDIDATES)
+    formatter = loader.import_module_from_trusted_script(
+        script_dir / "malware_verdict_formatter.py",
+        "trusted_malware_verdict_formatter",
+    )
+    published = formatter.compose_published_review(
+        report,
+        _optional_analysis("DCR_MALWARE_JSON"),
+        _optional_analysis("DCR_COMPAT_JSON"),
+    )
+    if published.get("check") != "pass":
+        _fail_closed("Dependency review did not pass.")
+
+
 if __name__ == "__main__":
-    main()
+    if "--enforce-check" in sys.argv:
+        _enforce_published_check()
+    else:
+        main()

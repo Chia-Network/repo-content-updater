@@ -222,9 +222,10 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertLess(verdict.index("Checkout default-branch helpers"), verdict.index("Post or update PR comment"))
         self.assertLess(
             verdict.index("Post or update PR comment"),
-            verdict.index("Fail the check unless the scan is clean"),
+            verdict.index("Fail the check on a blocking review"),
         )
-        self.assertIn("needs.dependency-review-scan.outputs.status != 'clean'", verdict)
+        self.assertIn("--enforce-check", verdict)
+        self.assertNotIn("needs.dependency-review-scan.outputs.status != 'clean'", verdict)
         self.assertIn("needs.dependency-review-scan.outputs.already_reviewed != 'true'", verdict)
         self.assertIn("DCR_SCAN_REPORT:", verdict)
         self.assertIn("DCR_MALWARE_JSON:", verdict)

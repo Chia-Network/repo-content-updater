@@ -11,7 +11,11 @@ from unittest.mock import patch
 
 import dependency_manifest_diff as manifest
 import dependency_update_coverage as coverage
+import malware_verdict_formatter as formatter
 from test_dependency_update_coverage import _clean, _commit, _git
+
+_PASS_REVIEW = "MALWARE_REVIEW_VERDICT: benign\n\nLockfile change is the listed bump.\n"
+_BLOCK_REVIEW = "MALWARE_REVIEW_VERDICT: malicious\n\nDo not merge.\n"
 
 
 def _run_listed_scan(base: dict[str, str], head: dict[str, str], updates: list[dict]) -> dict:
@@ -297,7 +301,7 @@ class DependencyManifestDiffTest(unittest.TestCase):
             for path in ("package-lock.json", "go.mod", "go.sum"):
                 self.assertIn(path, summary, msg=summary)
 
-    def test_listed_lodash_lock_bump_is_conclusive(self) -> None:
+    def test_listed_lock_resolved_change_is_unresolved(self) -> None:
         base_lock = {
             "lockfileVersion": 3,
             "packages": {
@@ -330,9 +334,52 @@ class DependencyManifestDiffTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertIs(report["scan_conclusive"], True)
-        self.assertEqual(report["status"], "clean")
-        self.assertEqual(report["package_name"], "lodash")
+        self.assertFalse(report["scan_conclusive"])
+        self.assertIn("package-lock.json", _unresolved(report))
+        published = formatter.compose_published_review(report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
+        self.assertEqual(published["check"], "fail")
+        self.assertIs(published["may_complete"], False)
+
+    def test_listed_lock_wrong_version_label_is_unresolved(self) -> None:
+        old_url = "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz"
+        integrity = "sha512-lodash-old"
+        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
+
+        def npm(version: str) -> str:
+            body = {
+                "lockfileVersion": 3,
+                "packages": {
+                    "node_modules/lodash": {
+                        "version": version,
+                        "resolved": old_url,
+                        "integrity": integrity,
+                    }
+                },
+            }
+            return json.dumps(body) + "\n"
+
+        def yarn(version: str) -> str:
+            return (
+                "lodash@^4.17.20:\n"
+                f'  version "{version}"\n'
+                f'  resolved "{old_url}"\n'
+                f'  integrity "{integrity}"\n'
+            )
+
+        for path, render in (
+            ("package-lock.json", npm),
+            ("npm-shrinkwrap.json", npm),
+            ("yarn.lock", yarn),
+        ):
+            with self.subTest(path=path):
+                report = _run_listed_scan({path: render("4.17.20")}, {path: render("9.9.9")}, listed)
+                self.assertFalse(report["scan_conclusive"])
+                self.assertIn(path, _unresolved(report))
+                published = formatter.compose_published_review(
+                    report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n"
+                )
+                self.assertEqual(published["check"], "fail")
+                self.assertIs(published["may_complete"], False)
 
     def test_listed_cobra_sum_bump_is_conclusive(self) -> None:
         def go_sum(version: str, digest: str) -> str:
@@ -469,8 +516,8 @@ class DependencyManifestDiffTest(unittest.TestCase):
             },
             listed,
         )
-        self.assertIs(clean["scan_conclusive"], True)
-        self.assertEqual(clean["status"], "clean")
+        self.assertFalse(clean["scan_conclusive"])
+        self.assertTrue({"yarn.lock", "package-lock.json"} <= _unresolved(clean))
         tainted = _run_listed_scan(
             {
                 "yarn.lock": yarn("4.17.20", "sha-old", "sha-other"),
@@ -675,6 +722,117 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertEqual(separators["status"], "clean")
         self.assertEqual(separators["package_name"], "Foo_Bar.Baz")
         self.assertEqual(separators["not_scanned_reason"], "")
+
+    def test_poetry_lock_and_transitive_residue_pass_when_the_verdict_is_pass(self) -> None:
+        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
+        poetry = _run_listed_scan(
+            {"poetry.lock": '[[package]]\nname = "lodash"\nversion = "4.17.20"\n'},
+            {"poetry.lock": '[[package]]\nname = "lodash"\nversion = "4.17.21"\n'},
+            listed,
+        )
+        self.assertIs(poetry["scan_conclusive"], True)
+        self.assertEqual(poetry["status"], "clean")
+        self.assertNotIn("poetry.lock", " ".join(poetry.get("errors") or []))
+        published = formatter.compose_published_review(poetry, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
+        self.assertEqual(published["verdict"], "benign")
+        self.assertEqual(published["check"], "pass")
+        self.assertIs(published["may_complete"], True)
+
+        def lock(lodash: str, minimist: str) -> str:
+            return (
+                json.dumps(
+                    {
+                        "lockfileVersion": 3,
+                        "packages": {
+                            "node_modules/lodash": {"version": lodash},
+                            "node_modules/minimist": {"version": minimist},
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        residue = _run_listed_scan(
+            {"package-lock.json": lock("4.17.20", "1.2.0")},
+            {"package-lock.json": lock("4.17.21", "1.2.8")},
+            listed,
+        )
+        self.assertIs(residue["scan_conclusive"], True)
+        self.assertEqual(residue["status"], "clean")
+        self.assertNotIn("minimist", " ".join(residue.get("errors") or []))
+        published = formatter.compose_published_review(residue, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
+        self.assertEqual(published["check"], "pass")
+        self.assertIs(published["may_complete"], True)
+        blocked_review = formatter.compose_published_review(
+            residue, _BLOCK_REVIEW, "COMPATIBILITY_RECOMMENDATION: Don't merge\n"
+        )
+        self.assertEqual(blocked_review["verdict"], "malicious")
+        self.assertEqual(blocked_review["check"], "fail")
+        self.assertIs(blocked_review["may_complete"], False)
+        failed = {
+            "status": "not_scanned",
+            "scan_conclusive": False,
+            "not_scanned_reason": "scanner_tools_missing",
+            "verdict_token_in_tree": False,
+            "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+        }
+        scan_failed = formatter.compose_published_review(failed, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
+        self.assertEqual(scan_failed["verdict"], "scan_failed")
+        self.assertEqual(scan_failed["check"], "fail")
+
+        blocked = json.loads(json.dumps(residue))
+        blocked["findings"]["unicode"] = [{"kind": "unicode", "file": "pkg/index.js", "line": 1, "match": "bidi"}]
+        blocked_finding = formatter.compose_published_review(
+            blocked, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n"
+        )
+        self.assertEqual(blocked_finding["check"], "fail")
+        self.assertIs(blocked_finding["may_complete"], False)
+
+    def test_unlisted_resolved_change_stays_unresolved(self) -> None:
+        def lock(lodash: str, minimist: str, resolved: str, integrity: str) -> str:
+            return (
+                json.dumps(
+                    {
+                        "lockfileVersion": 3,
+                        "packages": {
+                            "node_modules/lodash": {"version": lodash},
+                            "node_modules/minimist": {
+                                "version": minimist,
+                                "resolved": resolved,
+                                "integrity": integrity,
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
+        report = _run_listed_scan(
+            {
+                "package-lock.json": lock(
+                    "4.17.20",
+                    "1.2.0",
+                    "https://registry.npmjs.org/minimist/-/minimist-1.2.0.tgz",
+                    "sha512-old",
+                )
+            },
+            {
+                "package-lock.json": lock(
+                    "4.17.21",
+                    "1.2.8",
+                    "https://github.com/evil/minimist/tarball/deadbeef",
+                    "sha512-new",
+                )
+            },
+            listed,
+        )
+        self.assertFalse(report["scan_conclusive"])
+        self.assertIn("minimist", _unresolved(report))
+        self.assertNotEqual(report["status"], "clean")
+        published = formatter.compose_published_review(report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
+        self.assertEqual(published["check"], "fail")
+        self.assertIs(published["may_complete"], False)
 
 
 if __name__ == "__main__":

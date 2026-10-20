@@ -102,16 +102,15 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
         self.assertNotIn("dependency-cursor-review-post-comment.js", agent)
         self.assertNotIn("dependency-cursor-review-dependabot-context.js", agent)
         fail_check = verdict.split(
-            "- name: Fail the check unless the scan is clean\n", 1
+            "- name: Fail the check on a blocking review\n", 1
         )
         self.assertEqual(len(fail_check), 2)
         self.assertLess(
             verdict.index("Post or update PR comment"),
-            verdict.index("Fail the check unless the scan is clean"),
+            verdict.index("Fail the check on a blocking review"),
         )
-        self.assertIn(
-            "needs.dependency-review-scan.outputs.status != 'clean'", fail_check[1]
-        )
+        self.assertIn("--enforce-check", fail_check[1])
+        self.assertNotIn("status != 'clean'", fail_check[1])
         self.assertNotIn("already_reviewed", fail_check[1])
         self.assertIn("exit 1", fail_check[1])
         self.assertNotIn("warn_only", fail_check[1])

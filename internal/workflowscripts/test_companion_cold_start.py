@@ -73,7 +73,8 @@ class CompanionColdStartTest(unittest.TestCase):
             # proves python -I cold start, not an early exit.
             payload = (
                 b'{"status":"clean","scan_conclusive":true,'
-                b'"verdict_token_in_tree":false}\n'
+                b'"verdict_token_in_tree":false,'
+                b'"findings":{"ioc":[],"unicode":[],"confusable":[],"heuristic":[]}}\n'
             )
             report = root / "sealed-scan-report.json"
             report.write_bytes(payload)

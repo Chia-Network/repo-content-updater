@@ -45,6 +45,7 @@ class CombineCompleteTest(unittest.TestCase):
                     "status": "clean",
                     "scan_conclusive": True,
                     "verdict_token_in_tree": False,
+                    "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
                 }
             payload = (json.dumps(report) + "\n").encode()
             report_path = root / "sealed-scan-report.json"
@@ -110,6 +111,7 @@ class CombineCompleteTest(unittest.TestCase):
             '{"result": "compat ok"}',
         )
         self.assertIs(written["complete"], True)
+        self.assertEqual(written["check"], "pass")
 
     def test_not_scanned_without_findings_stays_blocking(self) -> None:
         written = self._run(
@@ -162,6 +164,25 @@ class CombineCompleteTest(unittest.TestCase):
                 self.assertIn("**Merge**", written["result"])
                 self.assertIn("Call sites are unchanged.", written["result"])
                 self.assertIs(written["complete"], False)
+                self.assertEqual(written["check"], "pass")
+
+    def test_incomplete_scan_with_agent_suspicious_passes(self) -> None:
+        """An official suspicious line is dropped on an inconclusive scan, so the check passes."""
+        agent = "MALWARE_REVIEW_VERDICT: suspicious\nEVIDENCE: pkg/a.py:3: coverage gap\n"
+        written = self._run(
+            json.dumps({"result": agent}),
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nCall sites are unchanged.\\n"}',
+            report={
+                "status": "not_scanned",
+                "scan_conclusive": False,
+                "not_scanned_reason": "incomplete_coverage",
+                "verdict_token_in_tree": False,
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            },
+        )
+        self.assertIn("**Verdict: suspicious**", written["result"])
+        self.assertNotIn("**Verdict: malicious**", written["result"])
+        self.assertEqual(written["check"], "pass")
 
     def test_incomplete_scan_names_unread_files(self) -> None:
         written = self._run(
@@ -344,7 +365,8 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertNotIn("compat essay", written["result"])
         self.assertNotIn("needs human review", written["result"])
-        self.assertIs(written["complete"], True)
+        self.assertIs(written["complete"], False)
+        self.assertEqual(written["check"], "fail")
 
     def test_conclusive_planted_verdict_line_does_not_complete(self) -> None:
         written = self._run(
@@ -388,6 +410,7 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("`incomplete_coverage:1`", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertIs(written["complete"], False)
+        self.assertEqual(written["check"], "fail")
         mixed = self._run(
             benign,
             merge,
@@ -496,7 +519,8 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("**Verdict: malicious**", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertNotIn("needs human review", written["result"])
-        self.assertIs(written["complete"], True)
+        self.assertIs(written["complete"], False)
+        self.assertEqual(written["check"], "fail")
 
     def test_buried_malicious_line_is_not_published_as_benign(self) -> None:
         written = self._run(
@@ -529,10 +553,12 @@ class CombineCompleteTest(unittest.TestCase):
             },
         )
         self.assertIn("**Verdict: benign**", written["result"])
+        self.assertIn("child_process", written["result"])
         self.assertIn("**Merge**", written["result"])
         self.assertIn("Existing call sites still typecheck.", written["result"])
         self.assertNotIn("needs human review", written["result"])
         self.assertIs(written["complete"], True)
+        self.assertEqual(written["check"], "pass")
 
     def test_compatibility_body_strips_verdict_banner_and_patch_id(self) -> None:
         written = self._run(
@@ -625,6 +651,7 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertNotIn("API unchanged.", written["result"])
         self.assertIn("Compatibility recommendation withheld", written["result"])
         self.assertNotIn("needs human review", written["result"])
+        self.assertEqual(written["check"], "fail")
 
     def test_unicode_trick_stays_blocking_when_agent_says_benign(self) -> None:
         written = self._run(
@@ -657,6 +684,7 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("**Don't merge**", written["result"])
         self.assertNotIn("Behavior changed.", written["result"])
         self.assertNotIn("needs human review", written["result"])
+        self.assertEqual(written["check"], "fail")
 
     def test_scanner_that_did_not_run_states_that_and_still_calls_compatibility(self) -> None:
         written = self._run(
@@ -678,6 +706,7 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIn("**Merge**", written["result"])
         self.assertIn("Call sites are unchanged.", written["result"])
         self.assertIs(written["complete"], False)
+        self.assertEqual(written["check"], "fail")
 
     def test_scanner_ioc_wins_over_did_not_run(self) -> None:
         written = self._run(
@@ -831,6 +860,8 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertNotIn("Entry point only.", written["result"])
         self.assertIn("**Don't merge**", written["result"])
         self.assertIn("Needs a changelog.", written["result"])
+        self.assertEqual(written["check"], "fail")
+        self.assertIs(written["complete"], False)
 
 
 if __name__ == "__main__":
