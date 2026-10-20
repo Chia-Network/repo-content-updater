@@ -402,17 +402,17 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
         names = _diff._changed_names(kind, before, after)
         explained = names is not None and _diff._entries_explain(kind, before, after, updates)
         file_unresolved = names is None or (before != after and not explained)
-        if file_unresolved and (names is None or names <= listed):
+        if file_unresolved and (names is None or _diff._names_listed(kind, names, listed)):
             gaps.append(uncovered({"packageName": path}, "unresolved"))
         elif names:
             for label in sorted(names):
-                if label in seen:
+                if _diff._names_listed(kind, {label}, seen):
                     continue
                 gaps.append(uncovered({"packageName": label}, "unresolved"))
                 seen.add(label)
         if names is not None and file_unresolved:
             for label in sorted(_diff._multi_entry_names(kind, before, after, updates)):
-                if label in seen:
+                if _diff._names_listed(kind, {label}, seen):
                     continue
                 gaps.append(uncovered({"packageName": label}, "unresolved"))
                 seen.add(label)

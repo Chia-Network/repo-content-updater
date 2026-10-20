@@ -31,6 +31,8 @@ _OPAQUE_LOCKS = {
     "Gemfile.lock",
     "composer.lock",
 }
+# PEP 503: lowercase, and collapse each run of `-`, `_`, or `.` to one `-`.
+_PEP503_SEPARATORS = re.compile(r"[-_.]+")
 
 
 def _direct_lock_name(key: str) -> str:
@@ -80,12 +82,26 @@ def _manifest_kind(path: str) -> str:
     return ""
 
 
-def _listed_versions(updates: list[dict], *, lower: bool = False) -> dict[str, set[tuple[str, str]]]:
+def _requirement_name(name: str) -> str:
+    """PEP 503 name. Requirements parsing and Dependabot names both use this."""
+    return _PEP503_SEPARATORS.sub("-", name).lower()
+
+
+def _canonical_package_name(kind: str, name: str) -> str:
+    if kind == "requirements":
+        return _requirement_name(name)
+    return name
+
+
+def _names_listed(kind: str, names: set[str], listed: set[str]) -> bool:
+    known = {_canonical_package_name(kind, name) for name in listed}
+    return all(_canonical_package_name(kind, name) in known for name in names)
+
+
+def _listed_versions(updates: list[dict], *, kind: str = "") -> dict[str, set[tuple[str, str]]]:
     found: dict[str, set[tuple[str, str]]] = {}
     for item in updates:
-        name = str(item.get("packageName") or "").strip()
-        if lower:
-            name = name.lower()
+        name = _canonical_package_name(kind, str(item.get("packageName") or "").strip())
         if not name:
             continue
         pair = (str(item.get("fromVersion") or "").strip(), str(item.get("toVersion") or "").strip())
@@ -206,14 +222,14 @@ def _go_mod_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
     return entries, "".join(residue)
 
 
-def _go_sum_version(tokens: set[str]) -> str:
-    primaries = sorted({token.split("/go.mod", 1)[0] for token in tokens})
-    return primaries[0] if len(primaries) == 1 else " ".join(primaries)
+def _go_sum_version(token: str) -> str:
+    """Module version, without the `/go.mod` checksum suffix."""
+    return token.split("/go.mod", 1)[0]
 
 
-def _go_sum_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
-    grouped: dict[str, list[str]] = {}
-    versions: dict[str, set[str]] = {}
+def _go_sum_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
+    """One block per module version. Versions of a module stay a set."""
+    grouped: dict[str, dict[str, list[str]]] = {}
     residue: list[str] = []
     for line in text.splitlines(keepends=True):
         body = line.strip()
@@ -221,10 +237,12 @@ def _go_sum_parts(text: str) -> tuple[dict[str, tuple[str, str]], str]:
         if not body or not match:
             residue.append(line)
             continue
-        name, version = match.group(1), match.group(2)
-        grouped.setdefault(name, []).append(body)
-        versions.setdefault(name, set()).add(version)
-    entries = {name: (_go_sum_version(versions[name]), "\n".join(sorted(grouped[name]))) for name in grouped}
+        module, version = match.group(1), _go_sum_version(match.group(2))
+        grouped.setdefault(module, {}).setdefault(version, []).append(body)
+    entries = {
+        module: [(version, "\n".join(sorted(rows))) for version, rows in sorted(by_version.items())]
+        for module, by_version in grouped.items()
+    }
     return entries, "".join(residue)
 
 
@@ -234,7 +252,7 @@ def _req_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
     for line in text.splitlines(keepends=True):
         match = _REQ_RE.match(line)
         if match:
-            entries.setdefault(match.group(1).lower(), []).append((match.group(2), line.strip()))
+            entries.setdefault(_requirement_name(match.group(1)), []).append((match.group(2), line.strip()))
             continue
         residue.append(line)
     return entries, "".join(residue)
@@ -304,6 +322,60 @@ def _stanza_versions(blocks: list[tuple[str, str]]) -> dict[str, str] | None:
     return found
 
 
+def _version_map(blocks: list[tuple[str, str]]) -> dict[str, str] | None:
+    found: dict[str, str] = {}
+    for version, payload in blocks:
+        if version in found:
+            return None
+        found[version] = payload
+    return found
+
+
+def _version_named(versions: dict[str, str], listed: str) -> str | None:
+    body = _version_body(listed)
+    if not body:
+        return None
+    found = [version for version in versions if _version_body(version) == body]
+    if len(found) != 1:
+        return None
+    return found[0]
+
+
+def _sum_update_covers(old: dict[str, str], new: dict[str, str], frm: str, to: str) -> bool:
+    """True when `to` is in the new set and `from` was in the old set.
+
+    Removing `from` matches. Keeping those lines and adding `to` matches.
+    A checksum rewrite of any version that stays does not.
+    """
+    to_key = _version_named(new, to)
+    from_key = _version_named(old, frm)
+    if to_key is None or from_key is None or _version_body(from_key) == _version_body(to_key):
+        return False
+    removed = set(old) - set(new)
+    added = set(new) - set(old)
+    if removed - {from_key} or added - {to_key}:
+        return False
+    stayed = set(old) & set(new)
+    if any(old[key] != new[key] for key in stayed):
+        return False
+    return bool(removed or added)
+
+
+def _go_sum_explained(
+    name: str,
+    old_blocks: list[tuple[str, str]],
+    new_blocks: list[tuple[str, str]],
+    listed: dict[str, set[tuple[str, str]]],
+) -> bool:
+    old = _version_map(old_blocks)
+    new = _version_map(new_blocks)
+    if old is None or new is None:
+        return False
+    if old == new:
+        return True
+    return any(_sum_update_covers(old, new, frm, to) for frm, to in listed.get(name, ()))
+
+
 def _blocks_explain(
     name: str,
     old_blocks: list[tuple[str, str]],
@@ -329,6 +401,18 @@ def _blocks_explain(
     if len(old_left) != 1 or len(new_left) != 1:
         return False
     return _reached_listed_version(name, old_left[0][0], new_left[0][0], listed)
+
+
+def _name_explained(
+    kind: str,
+    name: str,
+    old_blocks: list[tuple[str, str]],
+    new_blocks: list[tuple[str, str]],
+    listed: dict[str, set[tuple[str, str]]],
+) -> bool:
+    if kind == "go.sum":
+        return _go_sum_explained(name, old_blocks, new_blocks, listed)
+    return _blocks_explain(name, old_blocks, new_blocks, listed, keyed=kind == "yarn")
 
 
 def _single_version(entry: object) -> str | None:
@@ -375,15 +459,14 @@ def _multi_entry_names(kind: str, before: str, after: str, updates: list[dict]) 
         return set()
     old_entries = old_split[0]
     new_entries = new_split[0]
-    listed = _listed_versions(updates, lower=kind == "requirements")
-    keyed = kind == "yarn"
+    listed = _listed_versions(updates, kind=kind)
     found: set[str] = set()
     for name in set(old_entries) | set(new_entries):
         old_blocks = _entry_blocks(old_entries.get(name))
         new_blocks = _entry_blocks(new_entries.get(name))
         if len(old_blocks) <= 1 and len(new_blocks) <= 1:
             continue
-        if _blocks_explain(name, old_blocks, new_blocks, listed, keyed=keyed):
+        if _name_explained(kind, name, old_blocks, new_blocks, listed):
             continue
         found.add(name)
     return found
@@ -395,6 +478,9 @@ def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) ->
     Checksums on that entry are part of the change. A same-version entry,
     an unlisted package, a replace line, a yarn key that appears or
     disappears, or any other residue is not.
+
+    go.sum keeps one block per version. The listed bump matches when `to`
+    is present and `from` was present before, including when `from` was removed.
     """
     old_split = _split_entries(kind, before)
     new_split = _split_entries(kind, after)
@@ -404,15 +490,15 @@ def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) ->
     new_entries, new_residue = new_split
     if old_residue != new_residue:
         return False
-    listed = _listed_versions(updates, lower=kind == "requirements")
+    listed = _listed_versions(updates, kind=kind)
     names = set(old_entries) | set(new_entries)
     return all(
-        _blocks_explain(
+        _name_explained(
+            kind,
             name,
             _entry_blocks(old_entries.get(name)),
             _entry_blocks(new_entries.get(name)),
             listed,
-            keyed=kind == "yarn",
         )
         for name in names
     )
