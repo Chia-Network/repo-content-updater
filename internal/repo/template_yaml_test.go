@@ -486,6 +486,10 @@ func githubActionsDirectories(t *testing.T, raw []byte) []string {
 func pipRegistryAllowsCodeExecution(t *testing.T, raw []byte) {
 	t.Helper()
 	var doc struct {
+		Registries map[string]struct {
+			Type string `yaml:"type"`
+			URL  string `yaml:"url"`
+		} `yaml:"registries"`
 		Updates []struct {
 			Ecosystem  string   `yaml:"package-ecosystem"`
 			Registries []string `yaml:"registries"`
@@ -495,17 +499,29 @@ func pipRegistryAllowsCodeExecution(t *testing.T, raw []byte) {
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
+	for name, url := range map[string]string{
+		"chia-pypi":      "https://pypi.chia.net/simple/",
+		"chia-downloads": "https://download.chia.net/simple/",
+	} {
+		registry, ok := doc.Registries[name]
+		if !ok || registry.Type != "python-index" || registry.URL != url {
+			t.Errorf("registry %s = %#v, want python-index at %s", name, registry, url)
+		}
+	}
 	pip := 0
 	for _, update := range doc.Updates {
 		if update.Ecosystem != "pip" {
+			if len(update.Registries) != 0 {
+				t.Errorf("%s references pip registries: %#v", update.Ecosystem, update.Registries)
+			}
 			if update.CodeExec != "" {
 				t.Errorf("%s sets insecure-external-code-execution", update.Ecosystem)
 			}
 			continue
 		}
 		pip++
-		if len(update.Registries) != 1 || update.Registries[0] != "chia-pypi" {
-			t.Errorf("pip registries = %#v, want [chia-pypi]", update.Registries)
+		if len(update.Registries) != 2 || update.Registries[0] != "chia-pypi" || update.Registries[1] != "chia-downloads" {
+			t.Errorf("pip registries = %#v, want [chia-pypi chia-downloads]", update.Registries)
 		}
 		if update.CodeExec != "allow" {
 			t.Errorf("pip insecure-external-code-execution = %q, want allow", update.CodeExec)

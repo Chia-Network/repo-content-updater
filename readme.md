@@ -80,6 +80,11 @@ If you need to override any of the default settings on a per-repo basis, you can
 
 The shared Dependabot template declares the anonymous `chia-pypi` Python
 registry at `https://pypi.chia.net/simple/` and enables it for pip updates.
+It also declares and references `chia-downloads` at
+`https://download.chia.net/simple/`: the index links wheel files and redirects
+missing package lookups to that host. Both hosts must be allowed by Dependabot's
+proxy. The downloads host serves files, not a browsable package index; it is
+declared so those requests are allowed.
 Public PyPI remains available; no credentials or per-repository override are
 required. Dependabot requires registries to be declared in its own configuration
 to allow network access, even when they do not require authentication. Listing
