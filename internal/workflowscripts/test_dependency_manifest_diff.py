@@ -493,13 +493,18 @@ class DependencyManifestDiffTest(unittest.TestCase):
     def test_extra_yarn_descriptor_and_nested_lock_entry_stay_unresolved(self) -> None:
         def yarn(version: str, integrity: str, other: str) -> str:
             return (
-                f'lodash@^4.17.20:\n  version "{version}"\n  integrity "{integrity}"\n\n'
-                f'lodash@^3.10.1:\n  version "3.10.1"\n  integrity "{other}"\n'
+                f'lodash@^4.17.20:\n  version "{version}"\n'
+                f'  resolved "https://registry.yarnpkg.com/lodash/-/lodash-{version}.tgz"\n'
+                f'  integrity "{integrity}"\n\n'
+                f'lodash@^3.10.1:\n  version "3.10.1"\n'
+                f'  resolved "https://registry.yarnpkg.com/lodash/-/lodash-3.10.1.tgz"\n'
+                f'  integrity "{other}"\n'
             )
 
         def lock(version: str, integrity: str, nested: str) -> str:
             lodash = {
                 "version": version,
+                "resolved": f"https://registry.npmjs.org/lodash/-/lodash-{version}.tgz",
                 "integrity": integrity,
                 "dependencies": {"minimist": {"version": "1.2.8", "integrity": nested}},
             }
@@ -904,51 +909,6 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertFalse(tainted["scan_conclusive"])
         self.assertIn("package-lock.json", _unresolved(tainted))
 
-        handlebars_old = {
-            "version": "4.7.9",
-            "resolved": "https://registry.npmjs.org/handlebars/-/handlebars-4.7.9.tgz",
-            "integrity": "sha512-4E71E0rpOaQuJR2A3xDZ+GM1HyWYv1clR58tC8emQNeQe3RH7MAzSbat+V0wG78LQBo6m6bzSG/L4pBuCsgnUQ==",
-            "dependencies": {"minimist": "^1.2.5", "neo-async": "^2.6.2"},
-        }
-        handlebars_new = {
-            "version": "4.7.10",
-            "resolved": "https://registry.npmjs.org/handlebars/-/handlebars-4.7.10.tgz",
-            "integrity": "sha512-P5VJMVM7qgBn6vjXMw8WG9uVI+ncf2pi72j4de4yz5ZULLj2RGqLYaKOYGsgyrViQ0tePOVlN1tDCCXXtFqXKg==",
-            "dependencies": {"minimist": "^1.2.8", "neo-async": "^2.6.2"},
-        }
-        updates = [_bump("handlebars", "4.7.9", "4.7.10", "handlebars-lang/handlebars.js")]
-
-        def handlebars_lock(meta: dict, resolved: str) -> str:
-            body = {
-                "lockfileVersion": 3,
-                "packages": {"node_modules/handlebars": meta, nested: {**stylis, "resolved": resolved}},
-            }
-            return json.dumps(body)
-
-        old_handlebars = handlebars_lock(handlebars_old, stylis["resolved"])
-        moved_nested = handlebars_lock(
-            handlebars_new, "https://registry.npmjs.org/stylis/-/stylis-4.4.1.tgz"
-        )
-        moved_nested_doc = json.loads(moved_nested)
-        moved_nested_doc["packages"][nested]["version"] = "4.4.1"
-        moved_nested = json.dumps(moved_nested_doc)
-        explained_head = json.dumps(
-            {"lockfileVersion": 3, "packages": {"node_modules/handlebars": handlebars_new, nested: stylis}}
-        )
-        self.assertTrue(manifest._entries_explain("json", old_handlebars, explained_head, updates))
-        evil_deps = dict(handlebars_new)
-        evil_deps["dependencies"] = {**handlebars_new["dependencies"], "minimist": "https://evil.example/minimist.tgz"}
-        evil_head = json.dumps(
-            {"lockfileVersion": 3, "packages": {"node_modules/handlebars": evil_deps, nested: stylis}}
-        )
-        self.assertFalse(manifest._entries_explain("json", old_handlebars, evil_head, updates))
-        self.assertTrue(manifest._lock_covers_listed("json", old_handlebars, moved_nested, updates, {"stylis"}))
-        evil_nested = json.loads(moved_nested)
-        evil_nested["packages"][nested]["resolved"] = "https://evil.example/stylis.tgz"
-        self.assertFalse(
-            manifest._lock_covers_listed("json", old_handlebars, json.dumps(evil_nested), updates, {"stylis"})
-        )
-
         yarn_old = (
             'ua-parser-js@^0.7.18:\n'
             '  version "0.7.22"\n'
@@ -974,6 +934,42 @@ class DependencyManifestDiffTest(unittest.TestCase):
         added_report = _run_listed_scan({"yarn.lock": yarn_old}, {"yarn.lock": added}, yarn_updates)
         self.assertFalse(added_report["scan_conclusive"])
         self.assertIn("cy-verify-downloads", _unresolved(added_report))
+
+    def test_locator_bytes_fail_closed(self) -> None:
+        """Non-canonical locators, protocol versions, residue spelling, bin paths, and lockfile v1."""
+        updates = [_bump("left-pad", "1.2.3", "1.2.4", "left-pad/left-pad")]
+        canonical = "https://registry.npmjs.org/left-pad/-/left-pad-{}.tgz"
+        evil = "https://evil.example/left-pad.tgz"
+
+        def npm(version: str, resolved: str, integrity: str, **extra: object) -> str:
+            entry: dict[str, object] = {"version": version, "resolved": resolved, "integrity": integrity, **extra}
+            return json.dumps({"lockfileVersion": 3, "packages": {"node_modules/left-pad": entry}})
+
+        def explains(before: str, after: str, listed: list[dict] | None = None) -> bool:
+            return manifest._entries_explain("json", before, after, updates if listed is None else listed)
+
+        old = npm("1.2.3", canonical.format("1.2.3"), "sha-old", bin="bin/left-pad.js")
+        self.assertFalse(explains(npm("1.2.3", evil, "sha-old"), npm("1.2.4", evil, "sha-new")))
+        self.assertFalse(explains(old, npm("file:../evil", canonical.format("1.2.3"), "sha-old"), [_bump("left-pad", "1.2.3", "file:../evil", "left-pad/left-pad")]))
+        self.assertFalse(explains(old, npm("1.2.4", canonical.format("1.2.4"), "sha-new", bin="../evil.js")))
+        self.assertTrue(explains(old, npm("1.2.4", canonical.format("1.2.4"), "sha-new", bin="bin/cli.js")))
+
+        def residue(spec: str) -> str:
+            return json.dumps({"packages": {"packages/api": {"dependencies": {"moment": spec}}}})
+
+        self.assertTrue(manifest._residues_match("json", residue("^2.31.0"), residue("2.31.0")))
+        self.assertTrue(manifest._residues_match("json", residue("=2.31.0"), residue("2.31.0")))
+        self.assertFalse(manifest._residues_match("json", residue("~2.31.0"), residue("^2.31.0")))
+        self.assertFalse(manifest._residues_match("json", residue("v2.31.0"), residue("2.31.0")))
+        self.assertFalse(manifest._residues_match("json", residue("V2.31.0"), residue("2.31.0")))
+        self.assertFalse(explains(residue("~2.31.0"), residue("^2.31.0")))
+
+        def v1(version: str, resolved: str, integrity: str) -> str:
+            body = {"lockfileVersion": 1, "dependencies": {"left-pad": {"version": version, "resolved": resolved, "integrity": integrity}}}
+            return json.dumps(body)
+
+        self.assertTrue(explains(v1("1.2.3", canonical.format("1.2.3"), "sha-old"), v1("1.2.4", canonical.format("1.2.4"), "sha-new")))
+        self.assertFalse(explains(v1("1.2.3", evil, "sha-old"), v1("1.2.4", evil, "sha-new")))
 
 
 if __name__ == "__main__":

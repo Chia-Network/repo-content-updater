@@ -252,7 +252,9 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         for job in (scan, agent):
             self.assertIn("Tighten cache usage in review workflow", job)
             self.assertIn('echo "ACTIONS_CACHE_URL=" >> "$GITHUB_ENV"', job)
+            self.assertIn('echo "ACTIONS_RESULTS_URL=" >> "$GITHUB_ENV"', job)
             self.assertLess(job.index("Tighten cache usage in review workflow"), job.index("uses: actions/checkout@v7"))
+            self.assertLess(job.index("Prepare review artifact upload"), job.index("uses: actions/upload-artifact@v7"))
             self.assertNotIn("actions/cache", job)
             self.assertNotIn("cache:", job)
             self.assertNotIn(": write", job)

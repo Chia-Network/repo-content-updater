@@ -171,15 +171,19 @@ def _take_specs(block: object, parts: dict[str, dict[str, object]]) -> None:
             del block[name]
 
 
-def _json_blocks(blob: dict[str, object]) -> list[tuple[str, str]]:
+def _json_blocks(blob: dict[str, object], name: str) -> list[tuple[str, str]]:
     """One block per manifest spec and per lockfile path. Paths do not collapse."""
     blocks: list[tuple[str, str]] = []
     spec = blob.get("spec")
     if isinstance(spec, str):
         blocks.append((spec, json.dumps({"spec": spec}, separators=(",", ":"))))
     elif isinstance(spec, dict):
+        # `name` is the dependencies key. Lockfile v1 has no packages path.
         blocks.append(
-            (str(spec.get("version") or ""), json.dumps({"spec": spec}, sort_keys=True, separators=(",", ":")))
+            (
+                str(spec.get("version") or ""),
+                json.dumps({"name": name, "spec": spec}, sort_keys=True, separators=(",", ":")),
+            )
         )
     locks = blob.get("locks")
     if isinstance(locks, list):
@@ -232,7 +236,7 @@ def _json_parts(text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
             doc.pop("packages", None)
     entries: dict[str, tuple[str, str] | list[tuple[str, str]]] = {}
     for name, blob in parts.items():
-        blocks = _json_blocks(blob)
+        blocks = _json_blocks(blob, name)
         if len(blocks) == 1:
             entries[name] = blocks[0]
         elif blocks:
@@ -465,9 +469,11 @@ _NPM_RESOLUTION_RE = re.compile(r"^(@?[^@\s]+)@npm:(.+)$")
 _YARN_VERSION_LINE = re.compile(r'^\s*version:?\s+"?([^"\s]+)"?')
 _YARN_RESOLVED_LINE = re.compile(r'^\s*resolved:?\s+"?([^"\s]+)')
 _YARN_RESOLUTION_LINE = re.compile(r'^\s*resolution:?\s+"?([^"\s]+)')
-_YARN_DROP_LINE = re.compile(r"^\s*(?:integrity|checksum)\b", re.I)
-_SPEC_PREFIX_RE = re.compile(r"^[~^=vV](\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$")
-_EXACT_VERSION_RE = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?")
+_YARN_HASH_LINE = re.compile(r"^\s*(?:integrity|checksum)\b", re.I)
+_PROTOCOL_RE = re.compile(r"://|file:|git\+|npm:|link:|workspace:|portal:")
+_PLAIN_SEMVER_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+_FOLD_SPEC_RE = re.compile(r"^(?:\^|=)?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$")
+_RECORD_KEYS = frozenset({"version", "resolved", "integrity", "checksum", "resolution"})
 _SPEC_SECTIONS = frozenset({"dependencies", "devDependencies", "optionalDependencies", "peerDependencies"})
 
 
@@ -485,89 +491,157 @@ def _canonical_tarball(url: str, version: str, package: str) -> bool:
 
 def _npm_resolution(value: str, package: str, version: str) -> bool:
     match = _NPM_RESOLUTION_RE.fullmatch(value.strip().strip('"'))
-    if not match or match.group(1) != package:
+    if not match or not package or not version or match.group(1) != package:
         return False
-    return _version_body(match.group(2)) == _version_body(version)
+    return match.group(2) == version
 
 
-def _normalize_spec_text(value: str) -> str:
-    """Keep the range operator and replace an exact version body. Other text stays."""
-    prefix = _VERSION_PREFIX_RE.match(value)
-    mark = prefix.group(1) if prefix else ""
-    body = value[len(mark) :]
-    if _EXACT_VERSION_RE.fullmatch(body):
-        return mark + "#"
+def _plain_semver(value: str) -> bool:
+    return _PROTOCOL_RE.search(value) is None and _PLAIN_SEMVER_RE.fullmatch(value) is not None
+
+
+def _locator_canonical(node: dict[str, object], package: str) -> bool:
+    version = node.get("version") if isinstance(node.get("version"), str) else ""
+    resolved = node.get("resolved") if isinstance(node.get("resolved"), str) else ""
+    resolution = node.get("resolution") if isinstance(node.get("resolution"), str) else ""
+    if resolved and _canonical_tarball(resolved, version, package):
+        return True
+    return bool(resolution) and _npm_resolution(resolution, package, version)
+
+
+def _safe_bin_path(value: str) -> bool:
+    """Package-relative path. A URL, a drive, or `..` is not."""
+    if not value or value.startswith(("/", "\\")) or ":" in value or "\\" in value:
+        return False
+    return all(part not in {"", ".", ".."} for part in value.split("/"))
+
+
+def _normalize_bin(value: object) -> object:
+    if isinstance(value, str):
+        return "#" if _safe_bin_path(value) else value
+    if isinstance(value, dict):
+        return {
+            key: "#" if isinstance(item, str) and _safe_bin_path(item) else item for key, item in value.items()
+        }
     return value
 
 
-def _strip_lock_object(node: dict[str, object], package: str) -> dict[str, object]:
+def _fold_spec(value: str) -> str:
+    """Bare `X`, `^X`, and `=X` are the same residue spelling. `~`, `v`, and `V` are not."""
+    match = _FOLD_SPEC_RE.fullmatch(value)
+    return match.group(1) if match else value
+
+
+def _normalize_record(node: dict[str, object], package: str) -> dict[str, object]:
+    """Drop registry locators only. Every other field stays for the byte compare."""
+    canonical = _locator_canonical(node, package)
     version = node.get("version") if isinstance(node.get("version"), str) else ""
-    stripped: dict[str, object] = {}
+    normalized: dict[str, object] = {}
     for key, value in node.items():
-        if key in {"version", "integrity", "checksum"}:
+        if key == "version" and isinstance(value, str) and _plain_semver(value):
+            continue
+        if key in {"integrity", "checksum"} and canonical:
             continue
         if key == "resolved" and isinstance(value, str) and _canonical_tarball(value, version, package):
             continue
         if key == "resolution" and isinstance(value, str) and _npm_resolution(value, package, version):
             continue
-        stripped[key] = value
-    return stripped
+        if key == "bin":
+            normalized[key] = _normalize_bin(value)
+            continue
+        if key in _SPEC_SECTIONS and isinstance(value, dict):
+            normalized[key] = _normalize_dependency_map(value)
+            continue
+        normalized[key] = _normalize_node(value, package) if isinstance(value, (dict, list)) else value
+    return normalized
 
 
-def _without_version(payload: str) -> str:
-    """Entry text without install locators.
-
-    A registry tarball URL, an integrity or checksum, and a Yarn `resolution`
-    for this package version are locators. Any other resolved URL stays, so a
-    swapped host still fails the comparison. Nested dependency objects are
-    not locators.
-    """
-    try:
-        doc = json.loads(payload)
-    except json.JSONDecodeError:
-        return _without_version_text(payload)
-    if isinstance(doc, dict):
-        doc = _strip_json_locators(doc)
-    return json.dumps(doc, sort_keys=True, separators=(",", ":"))
+def _normalize_dependency_map(node: dict[str, object]) -> dict[str, object]:
+    folded: dict[str, object] = {}
+    for dep, spec in node.items():
+        if isinstance(spec, str):
+            folded[dep] = _fold_spec(spec)
+        else:
+            folded[dep] = _normalize_node(spec, str(dep))
+    return folded
 
 
-def _strip_json_locators(node: dict[str, object]) -> dict[str, object]:
-    spec = node.get("spec")
+def _normalize_node(node: object, package: str) -> object:
+    if isinstance(node, list):
+        return [_normalize_node(item, package) for item in node]
+    if not isinstance(node, dict):
+        return node
+    if "spec" in node and "path" not in node:
+        spec = node.get("spec")
+        name = node.get("name") if isinstance(node.get("name"), str) and node.get("name") else package
+        if isinstance(spec, str):
+            return {"spec": _fold_spec(spec)}
+        if isinstance(spec, dict):
+            return {"spec": _normalize_record(spec, name)}
     path = node.get("path") if isinstance(node.get("path"), str) else ""
-    package = _direct_lock_name(path) if path else ""
-    if isinstance(spec, str) and "path" not in node:
-        return {"spec": _normalize_spec_text(spec)}
-    if isinstance(spec, dict) and "path" not in node:
-        return {"spec": _strip_lock_object(spec, package)}
-    return _strip_lock_object(node, package)
+    record_name = _direct_lock_name(path) if path else ""
+    if not record_name and isinstance(node.get("name"), str) and any(key in node for key in _RECORD_KEYS):
+        record_name = str(node.get("name"))
+    if any(key in node for key in _RECORD_KEYS) and (record_name or package):
+        return _normalize_record(node, record_name or package)
+    normalized: dict[str, object] = {}
+    for key, value in node.items():
+        if key in _SPEC_SECTIONS and isinstance(value, dict):
+            normalized[key] = _normalize_dependency_map(value)
+            continue
+        normalized[key] = _normalize_node(value, package)
+    return normalized
 
 
-def _without_version_text(payload: str) -> str:
+def _normalize_yarn(payload: str) -> str:
     header = payload.split("\n", 1)[0]
     names = _YARN_HEADER_RE.findall(header)
     package = names[0] if len(names) == 1 else ""
-    version = ""
+    version = resolved = resolution = ""
     for line in payload.splitlines():
-        match = _YARN_VERSION_LINE.match(line)
-        if match:
-            version = match.group(1)
-            break
+        found = _YARN_VERSION_LINE.match(line)
+        if found and not version:
+            version = found.group(1)
+        found = _YARN_RESOLVED_LINE.match(line)
+        if found and not resolved:
+            resolved = found.group(1)
+        found = _YARN_RESOLUTION_LINE.match(line)
+        if found and not resolution:
+            resolution = found.group(1)
+    record = {"version": version, "resolved": resolved, "resolution": resolution}
+    canonical = _locator_canonical(record, package)
     kept: list[str] = []
     for line in payload.splitlines():
-        if _YARN_VERSION_LINE.match(line) or _YARN_DROP_LINE.match(line):
-            continue
-        resolved = _YARN_RESOLVED_LINE.match(line)
-        if resolved:
-            if not _canonical_tarball(resolved.group(1), version, package):
+        found = _YARN_VERSION_LINE.match(line)
+        if found:
+            if not _plain_semver(found.group(1)):
                 kept.append(line)
             continue
-        resolution = _YARN_RESOLUTION_LINE.match(line)
-        if resolution:
-            if not _npm_resolution(resolution.group(1), package, version):
+        if _YARN_HASH_LINE.match(line):
+            if not canonical:
+                kept.append(line)
+            continue
+        found = _YARN_RESOLVED_LINE.match(line)
+        if found:
+            if not _canonical_tarball(found.group(1), version, package):
+                kept.append(line)
+            continue
+        found = _YARN_RESOLUTION_LINE.match(line)
+        if found:
+            if not _npm_resolution(found.group(1), package, version):
                 kept.append(line)
             continue
         kept.append(line)
     return "\n".join(kept)
+
+
+def _normalize(payload: str) -> str:
+    """One canonical form. Callers byte-compare the result."""
+    try:
+        doc = json.loads(payload)
+    except json.JSONDecodeError:
+        return _normalize_yarn(payload)
+    return json.dumps(_normalize_node(doc, ""), sort_keys=True, separators=(",", ":"))
 
 
 def _payload_id(payload: str) -> str:
@@ -601,42 +675,17 @@ def _pair_blocks(
     return [(block, new_by_id[key]) for key, block in zip(old_ids, old)]
 
 
-def _equivalent_spec(value: str) -> str:
-    match = _SPEC_PREFIX_RE.fullmatch(value)
-    return match.group(1) if match else value
-
-
-def _normalize_residue(node: object) -> object:
-    """Dependency specs that spell the same version (`^1.2.3` and `1.2.3`) compare equal."""
-    if isinstance(node, dict):
-        normalized: dict[str, object] = {}
-        for key, value in node.items():
-            if key in _SPEC_SECTIONS and isinstance(value, dict):
-                normalized[key] = {
-                    dep: _equivalent_spec(spec) if isinstance(spec, str) else _normalize_residue(spec)
-                    for dep, spec in value.items()
-                }
-                continue
-            normalized[key] = _normalize_residue(value)
-        return normalized
-    if isinstance(node, list):
-        return [_normalize_residue(item) for item in node]
-    return node
-
-
 def _residues_match(kind: str, old: str, new: str) -> bool:
     if old == new:
         return True
     if kind != "json":
         return False
     try:
-        old_doc = json.loads(old)
-        new_doc = json.loads(new)
+        json.loads(old)
+        json.loads(new)
     except json.JSONDecodeError:
         return False
-    old_norm = json.dumps(_normalize_residue(old_doc), sort_keys=True, separators=(",", ":"))
-    new_norm = json.dumps(_normalize_residue(new_doc), sort_keys=True, separators=(",", ":"))
-    return old_norm == new_norm
+    return _normalize(old) == _normalize(new)
 
 
 def _lock_doc(doc: object) -> bool:
@@ -681,7 +730,7 @@ def _version_bump(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str,
     for old, new in pairs:
         if old == new:
             continue
-        if old[0] == new[0] or _without_version(old[1]) != _without_version(new[1]):
+        if old[0] == new[0] or _normalize(old[1]) != _normalize(new[1]):
             return False
     return True
 
@@ -692,138 +741,7 @@ def _pair_explained(
     new: tuple[str, str],
     listed: dict[str, set[tuple[str, str]]],
 ) -> bool:
-    if not _reached_listed_version(name, old[0], new[0], listed):
-        return False
-    if _payload_ok([old], [new]):
-        return True
-    # A listed release may replace registry description fields. The tarball URL may not.
-    return name in listed and _release_metadata_ok(name, old, new)
-
-
-_RELEASE_META = frozenset(
-    {
-        "bin",
-        "bundleDependencies",
-        "cpu",
-        "dependencies",
-        "deprecated",
-        "dev",
-        "devDependencies",
-        "engines",
-        "funding",
-        "hasInstallScript",
-        "inBundle",
-        "license",
-        "optional",
-        "optionalDependencies",
-        "os",
-        "peerDependencies",
-        "peerDependenciesMeta",
-    }
-)
-
-
-def _resolved_fields_ok(package: str, payload: str, version: str) -> bool:
-    try:
-        doc = json.loads(payload)
-    except json.JSONDecodeError:
-        return False
-    if isinstance(doc, dict) and isinstance(doc.get("spec"), dict):
-        doc = doc["spec"]
-    if not isinstance(doc, dict):
-        return False
-    path = doc.get("path")
-    if isinstance(path, str) and path and _direct_lock_name(path) != package:
-        return False
-    resolved = doc.get("resolved")
-    if isinstance(resolved, str) and not _canonical_tarball(resolved, version, package):
-        return False
-    resolution = doc.get("resolution")
-    if isinstance(resolution, str) and not _npm_resolution(resolution, package, version):
-        return False
-    return True
-
-
-def _embedded_lock(value: object) -> bool:
-    return isinstance(value, dict) and any(key in value for key in ("integrity", "resolved", "version"))
-
-
-def _embedded_map_ok(old: dict[str, object], new: dict[str, object]) -> bool:
-    """Embedded lockfile v1 records are other installs. A same-version hash swap is not metadata."""
-    for key in set(old) | set(new):
-        before, after = old.get(key), new.get(key)
-        if before == after:
-            continue
-        if not isinstance(before, dict) or not isinstance(after, dict):
-            return False
-        if str(before.get("version") or "") == str(after.get("version") or ""):
-            return False
-        if _without_version(json.dumps(before)) != _without_version(json.dumps(after)):
-            return False
-    return True
-
-
-def _spec_text(value: object) -> bool:
-    """A version range. A URL or other install locator is not a range."""
-    if not isinstance(value, str) or not value or "://" in value or any(char.isspace() for char in value):
-        return False
-    prefix = _VERSION_PREFIX_RE.match(value)
-    body = value[prefix.end() :] if prefix else value
-    return _EXACT_VERSION_RE.fullmatch(body) is not None
-
-
-def _dependency_change_ok(old: object, new: object) -> bool:
-    """Listed dependency ranges may move. An embedded lock or a URL may not."""
-    old_map = old if isinstance(old, dict) else {}
-    new_map = new if isinstance(new, dict) else {}
-    if not isinstance(new_map, dict) or (old is not None and not isinstance(old, dict)):
-        return False
-    if any(_embedded_lock(value) for value in (*old_map.values(), *new_map.values())):
-        return _embedded_map_ok(old_map, new_map)
-    for key in set(old_map) | set(new_map):
-        before, after = old_map.get(key), new_map.get(key)
-        if before == after:
-            continue
-        if not _spec_text(after) or (before is not None and not _spec_text(before)):
-            return False
-    return True
-
-
-def _meta_change_ok(old: object, new: object) -> bool:
-    if isinstance(old, dict) or isinstance(new, dict):
-        old_map = old if isinstance(old, dict) else {}
-        new_map = new if isinstance(new, dict) else {}
-        if not isinstance(old_map, dict) or not isinstance(new_map, dict):
-            return False
-        embedded = any(_embedded_lock(value) for value in (*old_map.values(), *new_map.values()))
-        return _embedded_map_ok(old_map, new_map) if embedded else True
-    return not isinstance(old, list) and not isinstance(new, list)
-
-
-def _release_metadata_ok(package: str, old: tuple[str, str], new: tuple[str, str]) -> bool:
-    if not _resolved_fields_ok(package, old[1], old[0]) or not _resolved_fields_ok(package, new[1], new[0]):
-        return False
-    try:
-        old_doc = json.loads(_without_version(old[1]))
-        new_doc = json.loads(_without_version(new[1]))
-    except json.JSONDecodeError:
-        return False
-    if isinstance(old_doc, dict) and isinstance(old_doc.get("spec"), dict):
-        old_doc = old_doc["spec"]
-    if isinstance(new_doc, dict) and isinstance(new_doc.get("spec"), dict):
-        new_doc = new_doc["spec"]
-    if not isinstance(old_doc, dict) or not isinstance(new_doc, dict):
-        return False
-    for key in set(old_doc) | set(new_doc):
-        if old_doc.get(key) == new_doc.get(key):
-            continue
-        if key in _SPEC_SECTIONS:
-            if not _dependency_change_ok(old_doc.get(key), new_doc.get(key)):
-                return False
-            continue
-        if key not in _RELEASE_META or not _meta_change_ok(old_doc.get(key), new_doc.get(key)):
-            return False
-    return True
+    return _reached_listed_version(name, old[0], new[0], listed) and _payload_ok([old], [new])
 
 
 def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict], names: set[str]) -> bool:

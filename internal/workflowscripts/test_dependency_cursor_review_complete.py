@@ -164,7 +164,24 @@ class CombineCompleteTest(unittest.TestCase):
                 self.assertIn("**Merge**", written["result"])
                 self.assertIn("Call sites are unchanged.", written["result"])
                 self.assertIs(written["complete"], False)
-                self.assertEqual(written["check"], "pass")
+                self.assertEqual(written["check"], "fail" if reason == "to_ref_unresolved" else "pass")
+
+    def test_to_ref_unresolved_with_empty_unread_fails_the_check(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs in the files that were read.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nCall sites are unchanged.\\n"}',
+            report={
+                "status": "not_scanned",
+                "scan_conclusive": False,
+                "not_scanned_reason": "to_ref_unresolved",
+                "verdict_token_in_tree": False,
+                "unread": [],
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            },
+        )
+        self.assertEqual(written["check"], "fail")
+        self.assertIs(written["complete"], False)
+        self.assertIn("**Verdict: suspicious**", written["result"])
 
     def test_incomplete_scan_with_agent_suspicious_passes(self) -> None:
         """An official suspicious line is dropped on an inconclusive scan, so the check passes."""
