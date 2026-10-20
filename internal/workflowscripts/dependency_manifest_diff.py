@@ -467,7 +467,7 @@ _TARBALL_RE = re.compile(
     r"(?:(?P<scope>@[^/]+)/)?(?P<name>[^/]+)/-/(?P<base>[^/]+)-(?P<version>" + _SEMVER + r")\.tgz$"
 )
 _YARN_VERSION_LINE = re.compile(r'^\s*version:?\s+"?([^"\s]+)"?')
-_YARN_RESOLVED_LINE = re.compile(r'^\s*resolved:?\s+"?([^"\s]+)')
+_YARN_RESOLVED_LINE = re.compile(r'^\s*"?resolved"?:?\s+"?([^"\s]+)')
 _YARN_HASH_LINE = re.compile(r"^\s*(?:integrity|checksum)\b", re.I)
 _FOLD_SPEC_RE = re.compile(rf"^(?:\^|=)?({_SEMVER})$")
 _LOCATOR_KEYS = frozenset({"version", "resolved", "integrity", "checksum"})

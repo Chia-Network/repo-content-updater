@@ -143,6 +143,8 @@ class CombineCompleteTest(unittest.TestCase):
             "to_ref_unresolved",
             "untrusted_version_text",
             "tag_resolution_failed",
+            "not_scanned",
+            "not_conclusive",
         ):
             with self.subTest(reason=reason):
                 written = self._run(

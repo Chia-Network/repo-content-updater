@@ -469,5 +469,32 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 os.chdir(previous)
 
 
+    def test_missing_scan_report_fails_the_check(self) -> None:
+        update = {
+            "packageName": "left-pad",
+            "fromVersion": "1.2.3",
+            "toVersion": "1.2.4",
+            "upstreamRepo": "left-pad/left-pad",
+        }
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scan.sh"
+            script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+            dest = root / "child"
+            dest.mkdir()
+            with patch.object(coverage, "_clone", lambda *_args, **_kwargs: True):
+                record = coverage._scan_one(update, dest, script)
+        self.assertEqual(record["not_scanned_reason"], "not_scanned")
+        benign = "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n"
+        merge = "COMPATIBILITY_RECOMMENDATION: Merge\n\nFine.\n"
+        published = formatter.compose_published_review(record, benign, merge)
+        self.assertEqual(published["check"], "fail")
+        self.assertIs(published["may_complete"], False)
+        record["not_scanned_reason"] = "not_conclusive"
+        concluded = formatter.compose_published_review(record, benign, merge)
+        self.assertEqual(concluded["check"], "fail")
+        self.assertIs(concluded["may_complete"], False)
+
+
 if __name__ == "__main__":
     unittest.main()

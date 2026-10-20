@@ -55,3 +55,18 @@ class LockLocatorCanonicalTest(unittest.TestCase):
         updates = [_bump("1.2.3", "1.2.4")]
         self.assertFalse(manifest._entries_explain("yarn", old, new, updates))
         self.assertFalse(manifest._lock_covers_listed("yarn", old, new, updates, {"left-pad"}))
+
+    def test_quoted_resolved_key_counts(self) -> None:
+        registry = "https://registry.npmjs.org/left-pad/-/left-pad-{}.tgz"
+
+        def stanza(version: str) -> str:
+            return (
+                "left-pad@^1.2.3:\n"
+                f'  version "{version}"\n'
+                f'  resolved "{registry.format(version)}"\n'
+                '  "resolved" "file:vendor/pwned.tgz"\n'
+            )
+
+        updates = [_bump("1.2.3", "1.2.4")]
+        self.assertFalse(manifest._entries_explain("yarn", stanza("1.2.3"), stanza("1.2.4"), updates))
+        self.assertFalse(manifest._lock_covers_listed("yarn", stanza("1.2.3"), stanza("1.2.4"), updates, {"left-pad"}))
