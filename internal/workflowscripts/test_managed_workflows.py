@@ -221,8 +221,8 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("RUNNER_TEMP", post)
         self.assertLess(verdict.index("Checkout default-branch helpers"), verdict.index("Post or update PR comment"))
         self.assertLess(
-            verdict.index("Fail the check on a blocking review"),
             verdict.index("Post or update PR comment"),
+            verdict.index("Fail the check on a blocking review"),
         )
         self.assertIn("--enforce-check", verdict)
         self.assertNotIn("needs.dependency-review-scan.outputs.status != 'clean'", verdict)
