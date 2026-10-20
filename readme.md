@@ -2,6 +2,8 @@
 
 Manages files across repos in a GitHub org based on [custom properties](https://docs.github.com/en/organizations/managing-organization-settings/managing-custom-properties-for-repositories-in-your-organization). 
 
+Archived repositories are skipped by both the `license` and `managed-files` commands, including targeted `--repo` runs. Their custom properties can remain configured; no clone, file update, push, or PR is attempted.
+
 ## Manage Licenses
 
 `repo-content-updater license --github-token ghp_xxx`

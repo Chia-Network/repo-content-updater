@@ -65,6 +65,17 @@ func (c *Content) CheckLicenses(cfg *config.Config, onlyRepo string) error {
 
 // UpdateLicense ensures the license is up to date for the given repo
 func (c *Content) UpdateLicense(repoName string, cfg *config.Config, props CustomProperties) error {
+	repo, _, err := ghDo(func() (*github.Repository, *github.Response, error) {
+		return c.githubClient.Repositories.Get(context.TODO(), c.githubOrg, repoName)
+	})
+	if err != nil {
+		return fmt.Errorf("error getting repo info: %w", err)
+	}
+	if repo.GetArchived() {
+		log.Printf("Skipping archived repository %s\n", repoName)
+		return nil
+	}
+
 	defer removeDirIfExists(repoDir(repoName))
 
 	r, w, err := c.cloneRepo(repoName)
@@ -150,13 +161,6 @@ func (c *Content) UpdateLicense(repoName string, cfg *config.Config, props Custo
 	err = c.commit(w, repoName, message)
 	if err != nil {
 		return err
-	}
-
-	repo, _, err := ghDo(func() (*github.Repository, *github.Response, error) {
-		return c.githubClient.Repositories.Get(context.TODO(), c.githubOrg, repoName)
-	})
-	if err != nil {
-		return fmt.Errorf("error getting repo info: %w", err)
 	}
 
 	var DefaultBranch string
