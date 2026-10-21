@@ -16,7 +16,7 @@ Looks for the `managed-files` custom property on a repo, and parses out a comma 
 
 For example, the value could be: `group:base,go-test`. This would pull in the base group of files and the go-test file.
 
-Files listed under `default_files` are applied to every non-archived, non-fork repo whose name does not contain "private" or end in "-dos", even when the repo has no `managed-files` property. The default is `dependabot-actions`, a GitHub Actions-only Dependabot config. Default files are adopt-only: a file is written only when the path is absent or an existing file carries the default template's own first line, so an existing full managed config or other unmanaged file is left untouched. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot`. Opting out of any file that writes the same repo path also opts out of the default, so `!dependabot` and `!go-dependabot` both opt out of `dependabot-actions`. A default file is not added when an explicitly selected file writes the same repo path.
+Files listed under `default_files` are applied to every non-archived, non-fork repo whose name does not contain "private" or end in "-dos", even when the repo has no `managed-files` property. The default is `dependabot-actions`, a GitHub Actions-only Dependabot config. Default files are adopt-only: a file is written only when the path is absent or every existing copy contains the file's adoption marker line (`# <adoption_marker>`), so an existing full managed config or other unmanaged file is left untouched. Each default file must declare a unique `adoption_marker`. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot-actions`. Opting out of any file that writes the same repo path also opts out of the default, so `!dependabot` and `!go-dependabot` both opt out of `dependabot-actions`. A default file is not added when an explicitly selected file writes the same repo path.
 
 ## Config Format
 
@@ -47,6 +47,7 @@ files:
 
   - name: dependabot-actions
     template_name: dependabot-actions.yml
+    adoption_marker: repo-content-updater:dependabot-actions
     repo_path: .github/dependabot.yml
     alternate_paths:
       - .github/dependabot.yaml
@@ -72,6 +73,7 @@ The dependency-cursor-review workflow ships formatter and review companion scrip
 * `template_name` is the name of the template to use from the supplied templates directory
 * `repo_path` is the path within the repo to place the file
 * `alternate_paths` is a list of alternate/equivalent paths this template might have been named before being managed. These files will be renamed and updated to the latest version of the template, if present
+* `adoption_marker` is required for every default file and must be unique. A default file is only updated when each existing copy contains the line `# <adoption_marker>`
 
 ## Bypass PR
 

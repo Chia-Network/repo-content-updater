@@ -11,7 +11,7 @@ import (
 )
 
 // TestDefaultFileTemplatesContainManagedMarker keeps default templates carrying
-// the generic managed marker, including in the first line that adoption matches.
+// the generic managed marker and their own adoption marker line.
 func TestDefaultFileTemplatesContainManagedMarker(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -40,8 +40,27 @@ func TestDefaultFileTemplatesContainManagedMarker(t *testing.T) {
 		if !strings.Contains(strings.ToLower(string(raw)), managedFileMarker) {
 			t.Errorf("%s (%s) does not contain %q", name, file.TemplateName, managedFileMarker)
 		}
-		if !strings.Contains(strings.ToLower(templateFirstLine(raw)), managedFileMarker) {
-			t.Errorf("%s (%s) first line does not contain %q", name, file.TemplateName, managedFileMarker)
+		rendered, err := ProcessTemplate(raw, cfg.Variables, nil)
+		if err != nil {
+			t.Fatalf("%s (%s) does not render: %v", name, file.TemplateName, err)
+		}
+		markerLine := "# " + file.AdoptionMarker
+		if !containsTrimmedLine(string(rendered), markerLine) {
+			t.Errorf("%s (%s) does not contain adoption marker line %q", name, file.TemplateName, markerLine)
+		}
+	}
+
+	for _, templateName := range []string{"dependabot.yml", "go-dependabot.yml"} {
+		raw, err := os.ReadFile(filepath.Join(root, "templates", templateName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range expanded {
+			file := cfg.GetFileInfo(name)
+			markerLine := "# " + file.AdoptionMarker
+			if containsTrimmedLine(string(raw), markerLine) {
+				t.Errorf("%s must not contain adoption marker line %q", templateName, markerLine)
+			}
 		}
 	}
 }

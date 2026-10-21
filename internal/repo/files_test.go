@@ -80,8 +80,9 @@ func TestShouldAdoptExistingFile(t *testing.T) {
 		TemplateName:   "dependabot-actions.yml",
 		RepoPath:       ".github/dependabot.yml",
 		AlternatePaths: []string{".github/dependabot.yaml"},
+		AdoptionMarker: "repo-content-updater:dependabot-actions",
 	}
-	actionsFirstLine := "# This file is managed by the repo-content-updater project (GitHub Actions-only default). Manual changes here will result in a PR to bring back"
+	markerLine := "# " + fileinfo.AdoptionMarker
 	fullManagedFirstLine := "# This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back"
 
 	t.Run("creates when absent", func(t *testing.T) {
@@ -116,25 +117,25 @@ func TestShouldAdoptExistingFile(t *testing.T) {
 		}
 	})
 
-	t.Run("updates a file with the actions-default first line", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-default"), fileinfo.RepoPath, actionsFirstLine+"\nversion: 2\n")
+	t.Run("updates a file carrying the adoption marker", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-default"), fileinfo.RepoPath, markerLine+"\nversion: 2\n")
 		adopt, err := content.shouldAdoptExistingFile("actions-default", fileinfo)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !adopt {
-			t.Fatal("actions-default file should be adopted")
+			t.Fatal("marked file should be adopted")
 		}
 	})
 
-	t.Run("updates a file with the actions-default first line at the alternate path", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-alternate"), fileinfo.AlternatePaths[0], actionsFirstLine+"\nversion: 2\n")
+	t.Run("updates a file carrying the adoption marker at the alternate path", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-alternate"), fileinfo.AlternatePaths[0], markerLine+"\nversion: 2\n")
 		adopt, err := content.shouldAdoptExistingFile("actions-alternate", fileinfo)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !adopt {
-			t.Fatal("actions-default alternate should be adopted")
+			t.Fatal("marked alternate should be adopted")
 		}
 	})
 
@@ -146,6 +147,31 @@ func TestShouldAdoptExistingFile(t *testing.T) {
 		}
 		if adopt {
 			t.Fatal("unmarked alternate should not be adopted")
+		}
+	})
+
+	t.Run("writes an absent file without an adoption marker", func(t *testing.T) {
+		unmarked := *fileinfo
+		unmarked.AdoptionMarker = ""
+		adopt, err := content.shouldAdoptExistingFile("unmarked-absent", &unmarked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !adopt {
+			t.Fatal("absent file without a marker should be adopted")
+		}
+	})
+
+	t.Run("skips an existing file without an adoption marker", func(t *testing.T) {
+		unmarked := *fileinfo
+		unmarked.AdoptionMarker = ""
+		writeDependabotTestFile(t, repoDir("unmarked-existing"), unmarked.RepoPath, markerLine+"\nversion: 2\n")
+		adopt, err := content.shouldAdoptExistingFile("unmarked-existing", &unmarked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if adopt {
+			t.Fatal("existing file without a marker should not be adopted")
 		}
 	})
 }
@@ -223,7 +249,7 @@ func TestPrepareManagedFileDefaultActionsAdoption(t *testing.T) {
 	if fileinfo == nil {
 		t.Fatal("dependabot-actions file missing from config")
 	}
-	actionsFirstLine := "# This file is managed by the repo-content-updater project (GitHub Actions-only default). Manual changes here will result in a PR to bring back"
+	markerLine := "# " + fileinfo.AdoptionMarker
 	fullManagedFirstLine := "# This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back"
 
 	t.Run("writes when absent", func(t *testing.T) {
@@ -239,25 +265,25 @@ func TestPrepareManagedFileDefaultActionsAdoption(t *testing.T) {
 		}
 	})
 
-	t.Run("writes a file carrying the actions-default first line", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-marked"), fileinfo.RepoPath, actionsFirstLine+"\nversion: 2\n")
+	t.Run("writes a file carrying the adoption marker", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-marked"), fileinfo.RepoPath, markerLine+"\nversion: 2\n")
 		_, skip, err := content.prepareManagedFile("actions-marked", fileinfo, config.OriginDefault, cfg, Config{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if skip {
-			t.Fatal("actions-default file should be written")
+			t.Fatal("marked file should be written")
 		}
 	})
 
-	t.Run("writes a file carrying the actions-default first line at the alternate path", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-alternate"), fileinfo.AlternatePaths[0], actionsFirstLine+"\nversion: 2\n")
+	t.Run("writes a file carrying the adoption marker at the alternate path", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-alternate"), fileinfo.AlternatePaths[0], markerLine+"\nversion: 2\n")
 		_, skip, err := content.prepareManagedFile("actions-alternate", fileinfo, config.OriginDefault, cfg, Config{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if skip {
-			t.Fatal("actions-default alternate should be written")
+			t.Fatal("marked alternate should be written")
 		}
 	})
 

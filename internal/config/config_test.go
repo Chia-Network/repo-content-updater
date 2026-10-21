@@ -149,6 +149,12 @@ func TestResolveManagedFileSelection(t *testing.T) {
 		assert.Empty(t, selection.Defaults)
 	})
 
+	t.Run("opt-out of dependabot-actions removes the default", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!dependabot-actions"})
+		assert.Empty(t, selection.Explicit)
+		assert.Empty(t, selection.Defaults)
+	})
+
 	t.Run("opt-out removes an explicitly selected file", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", []string{"group:base", "!dependabot"})
 		assert.NotContains(t, selection.Explicit, "dependabot")
@@ -205,9 +211,11 @@ files:
     repo_path: .github/workflows/workflow.yml
     companion_files:
       - script
+    adoption_marker: test:workflow
   - name: script
     template_name: script.sh
     repo_path: .github/scripts/script.sh
+    adoption_marker: test:script
 `)
 
 	t.Run("default includes companions", func(t *testing.T) {
@@ -290,6 +298,43 @@ files:
 
 	_, err = config.LoadConfig(path)
 	assert.ErrorContains(t, err, "same repo path")
+}
+
+func TestLoadConfigRejectsDefaultFileWithoutAdoptionMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+default_files:
+  - first
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "adoption_marker")
+	assert.ErrorContains(t, err, "first")
+}
+
+func TestLoadConfigRejectsDuplicateAdoptionMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+    adoption_marker: shared-marker
+  - name: second
+    template_name: second.yml
+    repo_path: .github/second.yml
+    adoption_marker: shared-marker
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "adoption_marker")
+	assert.ErrorContains(t, err, "shared-marker")
 }
 
 func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {

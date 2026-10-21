@@ -323,16 +323,6 @@ func (c *Content) checkSelectedFiles(repoName string, files []config.SelectedFil
 
 const managedFileMarker = "managed by the repo-content-updater"
 
-// templateFirstLine returns the first non-empty line of a template, trimmed.
-func templateFirstLine(content []byte) string {
-	for _, line := range strings.Split(string(content), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			return line
-		}
-	}
-	return ""
-}
-
 // containsTrimmedLine reports whether content contains want as a complete line,
 // ignoring surrounding whitespace.
 func containsTrimmedLine(content, want string) bool {
@@ -350,15 +340,11 @@ func containsTrimmedLine(content, want string) bool {
 
 // shouldAdoptExistingFile reports whether a default file may be written. A
 // default file is written when no file exists at repo_path or an alternate_path,
-// or when every existing file carries the default template's own first line.
-// Matching the template's line, rather than the generic managed marker, keeps
-// existing full managed configs from being overwritten by a default.
+// or when every existing file carries the file's adoption marker line. A file
+// without an adoption marker is only written when it is absent.
 func (c *Content) shouldAdoptExistingFile(repoName string, fileinfo *config.File) (bool, error) {
-	tmplContent, err := os.ReadFile(path.Join(c.templates, fileinfo.TemplateName))
-	if err != nil {
-		return false, err
-	}
-	firstLine := templateFirstLine(tmplContent)
+	marker := strings.TrimSpace(fileinfo.AdoptionMarker)
+	want := "# " + marker
 
 	paths := append([]string{fileinfo.RepoPath}, fileinfo.AlternatePaths...)
 	for _, repoPath := range paths {
@@ -369,7 +355,7 @@ func (c *Content) shouldAdoptExistingFile(repoName string, fileinfo *config.File
 		if err != nil {
 			return false, err
 		}
-		if !containsTrimmedLine(string(content), firstLine) {
+		if marker == "" || !containsTrimmedLine(string(content), want) {
 			return false, nil
 		}
 	}
@@ -385,7 +371,7 @@ func (c *Content) prepareManagedFile(repoName string, fileinfo *config.File, ori
 			return nil, false, err
 		}
 		if !adopt {
-			log.Printf("Skipping %s for %s: existing file does not carry the default template's first line\n", fileinfo.Name, repoName)
+			log.Printf("Skipping %s for %s: existing file does not carry the adoption marker\n", fileinfo.Name, repoName)
 			return nil, true, nil
 		}
 	}

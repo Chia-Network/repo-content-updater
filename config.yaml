@@ -4,7 +4,7 @@
 # alternate_paths: Any paths listed here will be treated as the same file and renamed to the main repo_path
 
 # Default files are applied to every non-archived, non-fork repo. They are
-# adopt-only: only a file carrying the default template's first line is updated.
+# adopt-only: only a file carrying its unique adoption marker line is updated.
 # Add `!<name>` to a repo's managed-files property to opt that repo out of a
 # default file; opting out of any file that writes the same repo path also opts
 # out of the default.
@@ -199,6 +199,7 @@ files:
 
   - name: dependabot-actions
     template_name: dependabot-actions.yml
+    adoption_marker: "repo-content-updater:dependabot-actions"
     repo_path: .github/dependabot.yml
     alternate_paths:
       - .github/dependabot.yaml

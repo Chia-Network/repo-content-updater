@@ -56,6 +56,7 @@ type File struct {
 	AlternatePaths []string `yaml:"alternate_paths"`
 	Aliases        []string `yaml:"aliases"`
 	CompanionFiles []string `yaml:"companion_files"`
+	AdoptionMarker string   `yaml:"adoption_marker"`
 }
 
 // LoadConfig loads config from the given path
@@ -73,6 +74,10 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	config.buildManagedFileLookup()
+
+	if err := config.validateAdoptionMarkers(); err != nil {
+		return nil, err
+	}
 
 	if err := config.resolveDefaultFiles(); err != nil {
 		return nil, err
@@ -120,7 +125,30 @@ func (c *Config) resolveDefaultFiles() error {
 		claimed[name] = true
 	}
 
+	for _, name := range expanded {
+		file := c.GetFileInfo(name)
+		if file == nil || strings.TrimSpace(file.AdoptionMarker) == "" {
+			return fmt.Errorf("default file %q must set a non-empty adoption_marker", name)
+		}
+	}
+
 	c.DefaultFiles = roots
+	return nil
+}
+
+func (c *Config) validateAdoptionMarkers() error {
+	seen := map[string]string{}
+	for i := range c.Files {
+		file := &c.Files[i]
+		marker := strings.TrimSpace(file.AdoptionMarker)
+		if marker == "" {
+			continue
+		}
+		if previous, ok := seen[marker]; ok && previous != file.Name {
+			return fmt.Errorf("adoption_marker %q is used by both %q and %q", marker, previous, file.Name)
+		}
+		seen[marker] = file.Name
+	}
 	return nil
 }
 
