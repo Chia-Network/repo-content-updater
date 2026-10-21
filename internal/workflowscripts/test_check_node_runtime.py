@@ -55,6 +55,7 @@ class CheckNodeRuntimeTest(unittest.TestCase):
         files: dict[str, str] | None = None,
         fixtures: dict[str, str] | None = None,
         find_fails: bool = False,
+        repository: str = "acme/project",
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -73,6 +74,7 @@ class CheckNodeRuntimeTest(unittest.TestCase):
                 fake_find.chmod(0o755)
             env = os.environ.copy()
             env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
+            env["GITHUB_REPOSITORY"] = repository
             env["FAKE_GH_FIXTURES"] = json.dumps(fixtures or {})
             return subprocess.run(
                 ["bash", str(_SCRIPT)],
@@ -114,6 +116,20 @@ class CheckNodeRuntimeTest(unittest.TestCase):
             "Action .github/actions/foo/action.yml uses unsupported Node runtime node16",
             proc.stdout,
         )
+
+    def test_chia_network_actions_repository_is_skipped(self) -> None:
+        files = {".github/workflows/x.yml": _workflow("acme/action@v1")}
+        fixtures = {"repos/acme/action/contents/action.yml": _manifest("node20")}
+        for repository in ("Chia-Network/actions", "chia-network/actions"):
+            with self.subTest(repository=repository):
+                proc = self._run(files=files, fixtures=fixtures, repository=repository)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertNotIn("::error", proc.stdout)
+                self.assertIn("::notice::Node runtime check skipped", proc.stdout)
+        proc = self._run(
+            files=files, fixtures=fixtures, repository="Chia-Network/actions-fork"
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
 
     def test_reusable_local_and_docker_refs_are_ignored(self) -> None:
         proc = self._run(

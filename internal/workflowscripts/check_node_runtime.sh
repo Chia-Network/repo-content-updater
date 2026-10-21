@@ -2,6 +2,14 @@
 # Fail when a workflow or local action uses an unsupported Node runtime.
 set -euo pipefail
 
+# Chia-Network/actions keeps its actions at the repository root (for example
+# ./setup-python), outside .github/actions, so this scan does not cover it.
+repository="${GITHUB_REPOSITORY:-}"
+if [[ "${repository,,}" == chia-network/actions ]]; then
+  echo "::notice::Node runtime check skipped for $repository"
+  exit 0
+fi
+
 unsupported_runtime() {
   case "$1" in node12 | node16 | node20) return 0 ;; esac
   return 1
