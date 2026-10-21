@@ -466,9 +466,6 @@ _TARBALL_RE = re.compile(
     r"^https://registry\.(?:npmjs\.org|yarnpkg\.com)/"
     r"(?:(?P<scope>@[^/]+)/)?(?P<name>[^/]+)/-/(?P<base>[^/]+)-(?P<version>" + _SEMVER + r")\.tgz$"
 )
-_YARN_VERSION_LINE = re.compile(r'^\s*version:?\s+"?([^"\s]+)"?')
-_YARN_RESOLVED_LINE = re.compile(r'^\s*"?resolved"?:?\s+"?([^"\s]+)')
-_YARN_HASH_LINE = re.compile(r"^\s*(?:integrity|checksum)\b", re.I)
 _FOLD_SPEC_RE = re.compile(rf"^(?:\^|=)?({_SEMVER})$")
 _LOCATOR_KEYS = frozenset({"version", "resolved", "integrity", "checksum"})
 _SPEC_SECTIONS = frozenset({"dependencies", "devDependencies", "optionalDependencies", "peerDependencies"})
@@ -546,29 +543,40 @@ def _without_locators(record: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in record.items() if key not in _LOCATOR_KEYS}
 
 
-def _yarn_locator(payload: str) -> tuple[str, str, str]:
-    """Package, version, and resolved URL. More than one resolved line is not a locator."""
-    names = _YARN_HEADER_RE.findall(payload.split("\n", 1)[0])
-    package = names[0] if len(names) == 1 else ""
-    version = ""
-    resolved: list[str] = []
-    for line in payload.splitlines():
-        found = _YARN_VERSION_LINE.match(line)
-        if found and not version:
-            version = found.group(1)
-        found = _YARN_RESOLVED_LINE.match(line)
-        if found:
-            resolved.append(found.group(1))
-    return package, version, resolved[0] if len(resolved) == 1 else ""
+def _plain_yarn_line(line: str) -> tuple[str, str] | None:
+    for key in ("version", "resolved"):
+        prefix = f'  {key} "'
+        body = line[len(prefix) : -1]
+        if line.startswith(prefix) and line.endswith('"') and '"' not in body:
+            return key, body
+    for key in ("integrity", "checksum"):
+        prefix = f"  {key} "
+        body = line[len(prefix) :]
+        if line.startswith(prefix) and body and " " not in body and "," not in body:
+            return key, body
+    return None
 
 
-def _yarn_without_locators(payload: str) -> str:
-    kept = [
-        line
-        for line in payload.splitlines()
-        if not (_YARN_VERSION_LINE.match(line) or _YARN_RESOLVED_LINE.match(line) or _YARN_HASH_LINE.match(line))
-    ]
-    return "\n".join(kept)
+def _yarn_rest(payload: str) -> str | None:
+    """Header left when the body is one version line, one resolved line, and hash lines."""
+    lines = payload.splitlines()
+    names = _YARN_HEADER_RE.findall(lines[0]) if lines else []
+    if len(names) != 1:
+        return None
+    version = resolved = ""
+    kept = [lines[0]]
+    for line in lines[1:]:
+        if not line:
+            kept.append(line)
+            continue
+        field = _plain_yarn_line(line)
+        if field is None or (field[0] == "version" and version) or (field[0] == "resolved" and resolved):
+            return None
+        if field[0] == "version":
+            version = field[1]
+        elif field[0] == "resolved":
+            resolved = field[1]
+    return "\n".join(kept) if _canonical_tarball(resolved, version, names[0]) else None
 
 
 def _payloads_match(old: str, new: str) -> bool:
@@ -582,16 +590,8 @@ def _payloads_match(old: str, new: str) -> bool:
         old_doc = json.loads(old)
         new_doc = json.loads(new)
     except json.JSONDecodeError:
-        old_package, old_version, old_resolved = _yarn_locator(old)
-        new_package, new_version, new_resolved = _yarn_locator(new)
-        if not (
-            old_resolved
-            and new_resolved
-            and _canonical_tarball(old_resolved, old_version, old_package)
-            and _canonical_tarball(new_resolved, new_version, new_package)
-        ):
-            return False
-        return _yarn_without_locators(old) == _yarn_without_locators(new)
+        old_rest, new_rest = _yarn_rest(old), _yarn_rest(new)
+        return old_rest is not None and old_rest == new_rest
     old_record, new_record = _lock_record(old_doc), _lock_record(new_doc)
     if old_record is None or new_record is None:
         return False

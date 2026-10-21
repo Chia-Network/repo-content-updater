@@ -70,3 +70,26 @@ class LockLocatorCanonicalTest(unittest.TestCase):
         updates = [_bump("1.2.3", "1.2.4")]
         self.assertFalse(manifest._entries_explain("yarn", stanza("1.2.3"), stanza("1.2.4"), updates))
         self.assertFalse(manifest._lock_covers_listed("yarn", stanza("1.2.3"), stanza("1.2.4"), updates, {"left-pad"}))
+
+    def test_yarn_other_spellings_are_not_canonical(self) -> None:
+        registry = "https://registry.npmjs.org/left-pad/-/left-pad-{}.tgz"
+        updates = [_bump("1.2.3", "1.2.4")]
+
+        def stanza(version: str, extra: str) -> str:
+            return (
+                "left-pad@^1.2.3:\n"
+                f'  version "{version}"\n'
+                f'  resolved "{registry.format(version)}"\n'
+                f"{extra}\n"
+            )
+
+        extras = (
+            '  resolved:"file:../pwned.tgz"',
+            '  "resolved":"file:../pwned.tgz"',
+            '  dummy, resolved "file:../pwned.tgz"',
+            '  integrity, resolved "file:../pwned.tgz"\n  integrity sha512-real',
+        )
+        for extra in extras:
+            old, new = stanza("1.2.3", extra), stanza("1.2.4", extra)
+            self.assertFalse(manifest._entries_explain("yarn", old, new, updates), extra)
+            self.assertFalse(manifest._lock_covers_listed("yarn", old, new, updates, {"left-pad"}), extra)
