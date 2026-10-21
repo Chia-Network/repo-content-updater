@@ -164,6 +164,33 @@ test('pip operators and npm ranges agree with the bare table', () => {
   );
 });
 
+test('bound operators and tilde-equal titles stay unresolved', () => {
+  const body = [
+    'Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21.',
+    '| Package | From | To |',
+    '| --- | --- | --- |',
+    '| [lodash](https://github.com/lodash/lodash) | `4.17.20` | `4.17.21` |',
+    'Updates `lodash` from 4.17.20 to 4.17.21',
+  ].join('\n');
+  for (const prefix of ['<', '>', '>=', '<=', '~=', '!=']) {
+    const parsed = parseDependencyUpdate(
+      `Update lodash requirement from ${prefix}4.17.20 to ${prefix}4.17.21`,
+      body,
+    );
+    assert.equal(parsed.updates[0].fromVersion, '', prefix);
+    assert.equal(parsed.updates[0].toVersion, '', prefix);
+  }
+  const tilde = parseDependencyUpdate('Update lodash requirement from ~4.17.20 to ~4.17.21', body);
+  assert.equal(tilde.updates[0].fromVersion, '4.17.20');
+  assert.equal(tilde.updates[0].toVersion, '4.17.21');
+  const exact = parseDependencyUpdate('Update lodash requirement from ===4.17.20 to ===4.17.21', body);
+  assert.equal(exact.updates[0].fromVersion, '4.17.20');
+  assert.equal(exact.updates[0].toVersion, '4.17.21');
+  const tagged = parseDependencyUpdate('Update lodash requirement from ==v4.17.20 to ^v4.17.21', body);
+  assert.equal(tagged.updates[0].fromVersion, '4.17.20');
+  assert.equal(tagged.updates[0].toVersion, '4.17.21');
+});
+
 test('a real version conflict stays unresolved after normalization', () => {
   const body = [
     'Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21.',

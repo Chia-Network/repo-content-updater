@@ -631,6 +631,111 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIn("go.sum", names, msg=sorted(names))
         self.assertIs(hostile["scan_conclusive"], False)
 
+    def test_go_sum_new_module_and_incompatible_suffix_stay_unresolved(self) -> None:
+        def digest(mark: str) -> str:
+            return mark * 43 + "="
+
+        def block(module: str, version: str, mark: str) -> str:
+            text = digest(mark)
+            return f"{module} {version} h1:{text}\n{module} {version}/go.mod h1:{text}\n"
+
+        base = block("golang.org/x/sys", "v0.48.0", "b") + block("github.com/stretchr/testify", "v1.2.3", "c")
+        bumped = block("golang.org/x/sys", "v0.49.0", "e") + block("github.com/stretchr/testify", "v1.2.3", "c")
+        new_module = bumped + block("example.com/new", "v1.0.0", "n")
+        incompatible = block("golang.org/x/sys", "v0.49.0", "e") + block(
+            "github.com/stretchr/testify", "v1.2.3+incompatible", "c"
+        )
+        updates = [
+            {
+                "packageName": "golang.org/x/sys",
+                "fromVersion": "v0.48.0",
+                "toVersion": "v0.49.0",
+                "upstreamRepo": "golang/sys",
+            }
+        ]
+
+        def run(head: str) -> dict:
+            with TemporaryDirectory() as tmp:
+                root = Path(tmp) / "repo"
+                _git_repo(root)
+                _commit(root, "go.sum", base, "base go.sum")
+                _git(root, "checkout", "-b", "pr")
+                _commit(root, "go.sum", head, "head go.sum")
+                (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
+                previous = os.getcwd()
+                saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT")}
+                os.chdir(root)
+                os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
+                os.environ.pop("GITHUB_BASE_REF", None)
+                os.environ["GITHUB_OUTPUT"] = str(root / "github_output.txt")
+
+                def fake_scan(update: dict, *_args: object, **_kwargs: object) -> dict:
+                    return _clean(str(update.get("packageName") or ""), str(update.get("upstreamRepo") or ""))
+
+                try:
+                    with patch.object(coverage, "_scan_one", fake_scan):
+                        coverage.main()
+                finally:
+                    os.chdir(previous)
+                    for key, value in saved.items():
+                        if value is None:
+                            os.environ.pop(key, None)
+                        else:
+                            os.environ[key] = value
+                return json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
+
+        added = run(new_module)
+        added_names = {item["package_name"] for item in added["dependencies"]}
+        self.assertIn("example.com/new", added_names, msg=sorted(added_names))
+        self.assertIs(added["scan_conclusive"], False)
+        rewritten = run(incompatible)
+        rewritten_names = {item["package_name"] for item in rewritten["dependencies"]}
+        self.assertIn("github.com/stretchr/testify", rewritten_names, msg=sorted(rewritten_names))
+        self.assertIs(rewritten["scan_conclusive"], False)
+
+    def test_bound_spec_does_not_match_a_bare_listed_version(self) -> None:
+        updates = [
+            {
+                "packageName": "lodash",
+                "fromVersion": "4.17.20",
+                "toVersion": "4.17.21",
+                "upstreamRepo": "lodash/lodash",
+            }
+        ]
+        base = json.dumps({"dependencies": {"lodash": "<4.17.20"}}) + "\n"
+        head = json.dumps({"dependencies": {"lodash": "<4.17.21"}}) + "\n"
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            _git_repo(root)
+            _commit(root, "package.json", base, "base package.json")
+            _git(root, "checkout", "-b", "pr")
+            _commit(root, "package.json", head, "head package.json")
+            (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
+            previous = os.getcwd()
+            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT")}
+            os.chdir(root)
+            os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
+            os.environ.pop("GITHUB_BASE_REF", None)
+            os.environ["GITHUB_OUTPUT"] = str(root / "github_output.txt")
+
+            def fake_scan(update: dict, *_args: object, **_kwargs: object) -> dict:
+                return _clean(str(update.get("packageName") or ""), str(update.get("upstreamRepo") or ""))
+
+            try:
+                with patch.object(coverage, "_scan_one", fake_scan):
+                    coverage.main()
+            finally:
+                os.chdir(previous)
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
+        names = {item["package_name"] for item in report["dependencies"]}
+        self.assertIn("package.json", names, msg=sorted(names))
+        self.assertIs(report["scan_conclusive"], False)
+
     def test_no_upstream_link_writes_a_report(self) -> None:
         updates = [
             {"packageName": "lodash", "fromVersion": "4.17.20", "toVersion": "4.17.21", "upstreamRepo": ""}

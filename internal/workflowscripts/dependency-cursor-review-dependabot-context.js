@@ -44,15 +44,13 @@ function extractDetailsSection(text, summaryLabel) {
     .trim();
 }
 
-// One comparison key. Operators, range marks, and a leading v are spelling.
-// `!=` is not a spelling of the bare version and stays unresolved.
+// One comparison key, applied once on the way in. ===, ==, ^, and ~ (not ~=),
+// then one leading v, are spelling. Bound operators and != stay unresolved.
 function canonicalVersion(version) {
-  let text = String(version || '').trim();
-  const prefix = /^(?:===|==|~=|>=|<=|\^|~|=|>|<|v)/i;
-  for (let i = 0; i < 4 && prefix.test(text); i += 1) {
-    text = text.replace(prefix, '');
-  }
-  return text;
+  return String(version || '')
+    .trim()
+    .replace(/^(?:===|==|\^|~(?!=))/, '')
+    .replace(/^v/i, '');
 }
 
 function githubRepoFromText(text) {
@@ -74,13 +72,11 @@ function packageCell(cell) {
 }
 
 function agree(record, key, incoming) {
-  const norm = key === 'fromVersion' || key === 'toVersion' ? canonicalVersion : (value) => value;
   if (record.disputed[key]) return '';
-  const next = norm(incoming);
-  if (!next) return norm(record[key]);
-  const current = norm(record[key]);
-  if (!current) return next;
-  if (current === next) return current;
+  const next = key === 'fromVersion' || key === 'toVersion' ? canonicalVersion(incoming) : incoming;
+  if (!next) return record[key];
+  if (!record[key]) return next;
+  if (record[key] === next) return record[key];
   record.disputed[key] = true;
   return '';
 }
@@ -88,24 +84,22 @@ function agree(record, key, incoming) {
 function rememberUpdate(byName, name, fromVersion, toVersion, repo) {
   const packageName = String(name || '').trim();
   if (!packageName || packageName.toLowerCase() === 'package') return;
-  const from = canonicalVersion(fromVersion);
-  const to = canonicalVersion(toVersion);
   const repoName = String(repo || '')
     .trim()
     .replace(/\.git$/i, '');
-  const existing = byName.get(packageName);
+  let existing = byName.get(packageName);
   if (!existing) {
-    byName.set(packageName, {
+    existing = {
       packageName,
-      fromVersion: from,
-      toVersion: to,
-      upstreamRepo: repoName,
+      fromVersion: '',
+      toVersion: '',
+      upstreamRepo: '',
       disputed: {},
-    });
-    return;
+    };
+    byName.set(packageName, existing);
   }
-  existing.fromVersion = agree(existing, 'fromVersion', from);
-  existing.toVersion = agree(existing, 'toVersion', to);
+  existing.fromVersion = agree(existing, 'fromVersion', fromVersion);
+  existing.toVersion = agree(existing, 'toVersion', toVersion);
   existing.upstreamRepo = agree(existing, 'upstreamRepo', repoName);
 }
 

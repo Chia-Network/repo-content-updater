@@ -21,7 +21,8 @@ _REQ_RE = re.compile(
 )
 _YARN_HEADER_RE = re.compile(r'"?(@?[^@"\s]+)@[^:]*:')
 _YARN_VERSION_RE = re.compile(r'^  version "([^"]+)"')
-_VERSION_PREFIX_RE = re.compile(r"^(>=|<=|v|\^|~|=|>|<)")
+# v, ^, and ~ are range spelling. Bound operators stay in the body.
+_VERSION_PREFIX_RE = re.compile(r"^(v|\^|~)")
 _GO_BLOCK_STARTS = frozenset({"require(", "replace(", "exclude(", "retract("})
 _OPAQUE_LOCKS = {
     "pnpm-lock.yaml",
@@ -376,68 +377,40 @@ def _version_named(versions: dict[str, str], listed: str) -> str | None:
     return found[0]
 
 
-def _sum_update_covers(old: dict[str, str], new: dict[str, str], frm: str, to: str) -> bool:
-    """True when `to` is in the new set and `from` was in the old set.
-
-    Removing `from` matches. Keeping those lines and adding `to` matches.
-    A checksum rewrite of any version that stays does not.
-    """
-    to_key = _version_named(new, to)
-    from_key = _version_named(old, frm)
-    if to_key is None or from_key is None or _version_body(from_key) == _version_body(to_key):
-        return False
-    removed = set(old) - set(new)
-    added = set(new) - set(old)
-    if removed - {from_key} or added - {to_key}:
-        return False
-    stayed = set(old) & set(new)
-    if any(old[key] != new[key] for key in stayed):
-        return False
-    return bool(removed or added)
-
-
-def _go_sum_explained(
-    name: str,
-    old_blocks: list[tuple[str, str]],
-    new_blocks: list[tuple[str, str]],
-    listed: dict[str, set[tuple[str, str]]],
-) -> bool:
-    old = _version_map(old_blocks)
-    new = _version_map(new_blocks)
-    if old is None or new is None:
-        return False
-    if old == new:
-        return True
-    return any(_sum_update_covers(old, new, frm, to) for frm, to in listed.get(name, ()))
-
-
-def _go_sum_lock_ok(
+def _go_sum_versions_ok(
     old_blocks: list[tuple[str, str]],
     new_blocks: list[tuple[str, str]],
     pairs: set[tuple[str, str]],
 ) -> bool:
-    """True when every checksum that stays is unchanged.
+    """True when checksums that stay match and the version set fits.
 
     A listed module may drop other versions and may add only `to`.
-    An unlisted module may add or drop versions. A same-version rewrite is not residue.
+    An unlisted module may drop versions, and may add a version when it already
+    had an entry and the new key is not an old key plus `+incompatible`.
+    A module with no old entries stays unresolved.
     """
     old = _version_map(old_blocks)
     new = _version_map(new_blocks)
     if old is None or new is None:
         return False
-    if any(old[key] != new[key] for key in set(old) & set(new)):
+    stayed = set(old) & set(new)
+    if any(old[key] != new[key] for key in stayed):
         return False
-    if not pairs or old == new:
+    if old == new:
         return True
     added = set(new) - set(old)
-    for frm, to in pairs:
-        to_key = _version_named(new, to)
-        from_key = _version_named(old, frm)
-        if to_key is None or from_key is None or _version_body(from_key) == _version_body(to_key):
-            continue
-        if not added - {to_key}:
-            return True
-    return False
+    if any(key == f"{base}+incompatible" for key in added for base in old):
+        return False
+    if pairs:
+        for frm, to in pairs:
+            to_key = _version_named(new, to)
+            from_key = _version_named(old, frm)
+            if to_key is None or from_key is None or _version_body(from_key) == _version_body(to_key):
+                continue
+            if not added - {to_key}:
+                return True
+        return False
+    return bool(old)
 
 
 def _blocks_explain(
@@ -476,7 +449,7 @@ def _name_explained(
     listed: dict[str, set[tuple[str, str]]],
 ) -> bool:
     if kind == "go.sum":
-        return _go_sum_explained(name, old_blocks, new_blocks, listed)
+        return _go_sum_versions_ok(old_blocks, new_blocks, listed.get(name, set()))
     return _blocks_explain(name, old_blocks, new_blocks, listed, keyed=kind == "yarn")
 
 
@@ -757,8 +730,9 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
     """True when a listed package moves to its listed version.
 
     A listed name must be explained. Every other name may change only its
-    version and registry locators. go.sum may also drop unlisted versions
-    when a checksum that stays is unchanged. Another resolved host, a
+    version and registry locators. go.sum uses that same version rule:
+    staying checksums match, an unlisted module may drop versions, and a
+    module with no old entries stays unresolved. Another resolved host, a
     same-version hash swap, leftover bytes, or a lock that never moves a
     listed package stays unresolved.
     """
@@ -784,7 +758,7 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
         new_blocks = _entry_blocks(new_entries.get(name))
         canonical = _canonical_package_name(kind, name)
         if kind == "go.sum":
-            if not _go_sum_lock_ok(old_blocks, new_blocks, listed.get(canonical, set())):
+            if not _go_sum_versions_ok(old_blocks, new_blocks, listed.get(canonical, set())):
                 return False
             continue
         if canonical in listed:
@@ -851,8 +825,9 @@ def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) ->
     an unlisted package, a replace line, a yarn key that appears or
     disappears, or any other residue is not.
 
-    go.sum keeps one block per version. The listed bump matches when `to`
-    is present and `from` was present before, including when `from` was removed.
+    go.sum keeps one block per version and uses the same version rule as
+    lock coverage. The listed bump matches when `to` is present and `from`
+    was present before, including when `from` was removed.
     """
     old_split = _split_entries(kind, before)
     new_split = _split_entries(kind, after)
