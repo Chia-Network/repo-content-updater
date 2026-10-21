@@ -54,10 +54,8 @@ var dependabotEcosystems = []dependabotEcosystem{
 			"Pipfile",
 			"*/*requirements*.txt",
 			"*/*requirements*.in",
-			"*/pyproject.toml",
-			"*/setup.py",
-			"*/setup.cfg",
-			"*/Pipfile",
+			"*requirements*/*.txt",
+			"*requirements*/*.in",
 		},
 	},
 	{

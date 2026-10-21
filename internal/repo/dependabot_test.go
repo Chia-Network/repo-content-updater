@@ -109,10 +109,6 @@ func TestDependabotPipManifestsOneLevelDown(t *testing.T) {
 	for _, manifest := range []string{
 		filepath.Join("sub", "requirements.txt"),
 		filepath.Join("sub", "requirements-dev.in"),
-		filepath.Join("sub", "pyproject.toml"),
-		filepath.Join("sub", "setup.py"),
-		filepath.Join("sub", "setup.cfg"),
-		filepath.Join("sub", "Pipfile"),
 	} {
 		t.Run(manifest, func(t *testing.T) {
 			repoDir := t.TempDir()
@@ -126,6 +122,38 @@ func TestDependabotPipManifestsOneLevelDown(t *testing.T) {
 			}
 		})
 	}
+	for _, manifest := range []string{
+		filepath.Join("sub", "pyproject.toml"),
+		filepath.Join("sub", "setup.py"),
+		filepath.Join("sub", "setup.cfg"),
+		filepath.Join("sub", "Pipfile"),
+	} {
+		t.Run(manifest+" alone does not enable pip", func(t *testing.T) {
+			repoDir := t.TempDir()
+			writeDependabotTestFile(t, repoDir, manifest, "")
+			vars, err := DependabotEcosystemVars(repoDir, nil)
+			if !errors.Is(err, errNoDependabotEcosystems) {
+				t.Fatalf("error = %v, want errNoDependabotEcosystems", err)
+			}
+			if vars["DEPENDABOT_PIP_ENABLED"] == "1" {
+				t.Fatalf("DEPENDABOT_PIP_ENABLED = %q, want pip off", vars["DEPENDABOT_PIP_ENABLED"])
+			}
+		})
+	}
+	t.Run("requirements directory file enables pip alongside npm", func(t *testing.T) {
+		repoDir := t.TempDir()
+		writeDependabotTestFile(t, repoDir, filepath.Join("requirements", "dev.txt"), "")
+		writeDependabotTestFile(t, repoDir, "package.json", "{}")
+		vars, err := DependabotEcosystemVars(repoDir, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"DEPENDABOT_PIP_ENABLED", "DEPENDABOT_NPM_ENABLED"} {
+			if vars[key] != "1" {
+				t.Errorf("%s = %q, want 1", key, vars[key])
+			}
+		}
+	})
 }
 
 func TestDependabotMixedRepoKeepsPipEnabled(t *testing.T) {

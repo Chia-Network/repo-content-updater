@@ -11,7 +11,7 @@ import (
 func TestTemplateInputsForFile(t *testing.T) {
 	t.Chdir(t.TempDir())
 	repoName := "wiring"
-	writeDependabotTestFile(t, repoDir(repoName), filepath.Join("pkg", "requirements.txt"), "")
+	writeDependabotTestFile(t, repoDir(repoName), filepath.Join("pkg", "nested", "requirements.txt"), "")
 	writeDependabotTestFile(t, repoDir(repoName), "package.json", "{}")
 
 	cfg := &config.Config{Variables: map[string]string{
@@ -19,7 +19,7 @@ func TestTemplateInputsForFile(t *testing.T) {
 		"DEPENDABOT_PIP_DIRECTORY": "/",
 	}}
 	repoConfig := Config{VarOverrides: map[string]string{
-		"DEPENDABOT_PIP_DIRECTORY": "pkg",
+		"DEPENDABOT_PIP_DIRECTORY": "pkg/nested",
 		"OVERRIDE_VAR":             "override",
 	}}
 
@@ -35,7 +35,7 @@ func TestTemplateInputsForFile(t *testing.T) {
 		for key, want := range map[string]string{
 			"BASE_VAR":                 "base",
 			"OVERRIDE_VAR":             "override",
-			"DEPENDABOT_PIP_DIRECTORY": "pkg",
+			"DEPENDABOT_PIP_DIRECTORY": "pkg/nested",
 			"DEPENDABOT_PIP_ENABLED":   "1",
 			"DEPENDABOT_NPM_ENABLED":   "1",
 		} {
