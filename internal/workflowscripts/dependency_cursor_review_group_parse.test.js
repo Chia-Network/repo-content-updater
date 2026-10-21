@@ -136,6 +136,50 @@ test('parseDependencyUpdate reads a grouped gomod list and leaves an unresolvabl
   assert.equal(parsed.packageName, '');
 });
 
+test('pip operators and npm ranges agree with the bare table', () => {
+  const pipBody = [
+    'Bumps [requests](https://github.com/psf/requests) from 2.31.0 to 2.32.0.',
+    '| Package | From | To |',
+    '| --- | --- | --- |',
+    '| [requests](https://github.com/psf/requests) | `2.31.0` | `2.32.0` |',
+    'Updates `requests` from 2.31.0 to 2.32.0',
+  ].join('\n');
+  const pip = parseDependencyUpdate('Update requests requirement from ==2.31.0 to ==2.32.0', pipBody);
+  assert.deepEqual(
+    pip.updates.map((item) => [item.packageName, item.fromVersion, item.toVersion, item.upstreamRepo]),
+    [['requests', '2.31.0', '2.32.0', 'psf/requests']],
+  );
+
+  const npmBody = [
+    'Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21.',
+    '| Package | From | To |',
+    '| --- | --- | --- |',
+    '| [lodash](https://github.com/lodash/lodash) | `4.17.20` | `4.17.21` |',
+    'Updates `lodash` from 4.17.20 to 4.17.21',
+  ].join('\n');
+  const npm = parseDependencyUpdate('Update lodash requirement from ^4.17.20 to ^4.17.21', npmBody);
+  assert.deepEqual(
+    npm.updates.map((item) => [item.packageName, item.fromVersion, item.toVersion, item.upstreamRepo]),
+    [['lodash', '4.17.20', '4.17.21', 'lodash/lodash']],
+  );
+});
+
+test('a real version conflict stays unresolved after normalization', () => {
+  const body = [
+    'Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21.',
+    '| Package | From | To |',
+    '| --- | --- | --- |',
+    '| [lodash](https://github.com/lodash/lodash) | `4.17.20` | `4.17.21` |',
+    'Updates `lodash` from 4.17.20 to 4.17.21',
+  ].join('\n');
+  const conflict = parseDependencyUpdate('Update lodash requirement from ^4.17.20 to ^9.9.9', body);
+  assert.equal(conflict.updates[0].fromVersion, '4.17.20');
+  assert.equal(conflict.updates[0].toVersion, '');
+  const excluded = parseDependencyUpdate('Update lodash requirement from !=4.17.20 to ==4.17.21', body);
+  assert.equal(excluded.updates[0].fromVersion, '');
+  assert.equal(excluded.updates[0].toVersion, '4.17.21');
+});
+
 test('a release-note table does not invent packages or clear the update', () => {
   const body = [
     'Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21.',

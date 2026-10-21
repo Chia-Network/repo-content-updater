@@ -369,7 +369,7 @@ def _base_commit() -> str | None:
 
 
 # Lockfiles whose extra names are transitive residue once a listed bump is explained.
-_TRANSITIVE_LOCKS = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock"})
+_TRANSITIVE_LOCKS = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "go.sum"})
 
 
 def manifest_gaps(updates: list[dict]) -> list[dict]:
@@ -382,7 +382,7 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
     with more than one unexplained entry is named as well.
 
     An opaque lockfile cannot name a package, so it is not a gap. Unlisted
-    names in a npm or Yarn lock are transitive residue when every listed
+    names in a npm, Yarn, or go.sum lock are transitive residue when a listed
     name in that lock moved to its listed version. Both stay inputs to the
     review instead of uncovered dependencies.
     """
@@ -412,8 +412,8 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
         explained = names is not None and _diff._entries_explain(kind, before, after, updates)
         file_unresolved = names is None or (before != after and not explained)
         if (
-            Path(path).name in _TRANSITIVE_LOCKS
-            and names
+            names is not None
+            and Path(path).name in _TRANSITIVE_LOCKS
             and _diff._lock_covers_listed(kind, before, after, updates, names)
         ):
             continue

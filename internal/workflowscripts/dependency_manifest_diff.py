@@ -411,6 +411,35 @@ def _go_sum_explained(
     return any(_sum_update_covers(old, new, frm, to) for frm, to in listed.get(name, ()))
 
 
+def _go_sum_lock_ok(
+    old_blocks: list[tuple[str, str]],
+    new_blocks: list[tuple[str, str]],
+    pairs: set[tuple[str, str]],
+) -> bool:
+    """True when every checksum that stays is unchanged.
+
+    A listed module may drop other versions and may add only `to`.
+    An unlisted module may add or drop versions. A same-version rewrite is not residue.
+    """
+    old = _version_map(old_blocks)
+    new = _version_map(new_blocks)
+    if old is None or new is None:
+        return False
+    if any(old[key] != new[key] for key in set(old) & set(new)):
+        return False
+    if not pairs or old == new:
+        return True
+    added = set(new) - set(old)
+    for frm, to in pairs:
+        to_key = _version_named(new, to)
+        from_key = _version_named(old, frm)
+        if to_key is None or from_key is None or _version_body(from_key) == _version_body(to_key):
+            continue
+        if not added - {to_key}:
+            return True
+    return False
+
+
 def _blocks_explain(
     name: str,
     old_blocks: list[tuple[str, str]],
@@ -728,9 +757,10 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
     """True when a listed package moves to its listed version.
 
     A listed name must be explained. Every other name may change only its
-    version and registry locators. Another resolved host, a same-version
-    hash swap, leftover bytes, or a lock that never moves a listed package
-    stays unresolved.
+    version and registry locators. go.sum may also drop unlisted versions
+    when a checksum that stays is unchanged. Another resolved host, a
+    same-version hash swap, leftover bytes, or a lock that never moves a
+    listed package stays unresolved.
     """
     listed = _listed_versions(updates, kind=kind)
     old_split = _split_entries(kind, before)
@@ -752,7 +782,12 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
     for name in set(old_entries) | set(new_entries):
         old_blocks = _entry_blocks(old_entries.get(name))
         new_blocks = _entry_blocks(new_entries.get(name))
-        if _canonical_package_name(kind, name) in listed:
+        canonical = _canonical_package_name(kind, name)
+        if kind == "go.sum":
+            if not _go_sum_lock_ok(old_blocks, new_blocks, listed.get(canonical, set())):
+                return False
+            continue
+        if canonical in listed:
             if not _name_explained(kind, name, old_blocks, new_blocks, listed):
                 return False
             continue

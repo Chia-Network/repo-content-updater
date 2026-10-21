@@ -44,10 +44,15 @@ function extractDetailsSection(text, summaryLabel) {
     .trim();
 }
 
-function stripLeadingV(version) {
-  return String(version || '')
-    .trim()
-    .replace(/^v/i, '');
+// One comparison key. Operators, range marks, and a leading v are spelling.
+// `!=` is not a spelling of the bare version and stays unresolved.
+function canonicalVersion(version) {
+  let text = String(version || '').trim();
+  const prefix = /^(?:===|==|~=|>=|<=|\^|~|=|>|<|v)/i;
+  for (let i = 0; i < 4 && prefix.test(text); i += 1) {
+    text = text.replace(prefix, '');
+  }
+  return text;
 }
 
 function githubRepoFromText(text) {
@@ -69,10 +74,13 @@ function packageCell(cell) {
 }
 
 function agree(record, key, incoming) {
+  const norm = key === 'fromVersion' || key === 'toVersion' ? canonicalVersion : (value) => value;
   if (record.disputed[key]) return '';
-  if (!incoming) return record[key];
-  if (!record[key]) return incoming;
-  if (record[key] === incoming) return record[key];
+  const next = norm(incoming);
+  if (!next) return norm(record[key]);
+  const current = norm(record[key]);
+  if (!current) return next;
+  if (current === next) return current;
   record.disputed[key] = true;
   return '';
 }
@@ -80,8 +88,8 @@ function agree(record, key, incoming) {
 function rememberUpdate(byName, name, fromVersion, toVersion, repo) {
   const packageName = String(name || '').trim();
   if (!packageName || packageName.toLowerCase() === 'package') return;
-  const from = stripLeadingV(fromVersion);
-  const to = stripLeadingV(toVersion);
+  const from = canonicalVersion(fromVersion);
+  const to = canonicalVersion(toVersion);
   const repoName = String(repo || '')
     .trim()
     .replace(/\.git$/i, '');
