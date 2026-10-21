@@ -564,7 +564,7 @@ def _yarn_keys(line: str) -> set[str]:
         part = part.strip()
         if not part:
             continue
-        head = re.split(r"[\s:]", part, maxsplit=1)[0].strip().strip('"').strip()
+        head = re.split(r"[\s:]", part, maxsplit=1)[0].strip(' :"')
         if head:
             keys.add(head)
     return keys

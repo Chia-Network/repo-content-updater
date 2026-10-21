@@ -236,7 +236,7 @@ def _enforce_published_check() -> None:
     published = formatter.compose_published_review(
         report,
         _optional_analysis("DCR_MALWARE_JSON"),
-        _optional_analysis("DCR_COMPAT_JSON"),
+        _optional_final_message("DCR_COMPAT_JSON") or _optional_analysis("DCR_COMPAT_JSON"),
         agent_final_text=_optional_final_message("DCR_MALWARE_JSON"),
     )
     if published.get("check") != "pass":
