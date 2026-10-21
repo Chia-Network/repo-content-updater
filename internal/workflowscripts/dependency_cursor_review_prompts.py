@@ -165,8 +165,9 @@ Review the dependency update for signs of compromise. Use this checklist and exp
 
 ### Invisible Unicode / GlassWorm technique
 This class of attack can appear blank in rendered code review. Flag:
-- Unicode Private Use Area characters (U+FE00\u2013U+FE0F, U+E0100\u2013U+E01EF)
-- Zero-width characters (U+200B, U+200C, U+200D, U+FEFF)
+- Unicode Private Use Area characters (U+E0100\u2013U+E01EF)
+- Zero-width characters (U+200B, U+200C)
+- A byte-order mark (U+FEFF) embedded inside a token rather than after whitespace
 - Hangul filler characters (U+3164, U+115F, U+1160)
 - Bidi control characters (U+202A\u2013U+202E, U+2066\u2013U+2069, Trojan Source)
 - Homoglyph substitutions in operators/identifiers (e.g. \uff0f, \u2217, \u01c3)
@@ -174,6 +175,10 @@ This class of attack can appear blank in rendered code review. Flag:
 - eval()/Function() receiving visually blank strings
 - Decoder patterns using codePointAt()/fromCodePoint()/charCodeAt() for hidden payload assembly
 - Commit metadata consistency anomalies suggesting force-push/rewrite concealment
+
+Variation selectors (U+FE00\u2013U+FE0F) and the zero-width joiner (U+200D) are normal emoji
+rendering. They are not evidence on their own. Binary and media blobs (images, archives,
+wheels) are not text; a codepoint match there is byte coincidence, not a hidden glyph.
 
 ### Dependency integrity
 - Unexpected new transitive dependencies vs prior dependency graph
@@ -188,12 +193,19 @@ pnpm-lock.yaml, Gemfile.lock, go.sum, Cargo.toml, Cargo.lock, .cargo/config.toml
 poetry.lock, Pipfile.lock, requirements.txt, requirements-dev.txt, requirements/*.txt, etc.)
 - Flag new transitive dependencies introduced alongside the direct update
 - Flag new preinstall/postinstall scripts that were not present previously
-- Treat .github/workflows/ modifications as highly suspicious in a pure dependency update PR
+- Treat .github/workflows/ modifications in the PR under review as highly suspicious in a pure dependency update PR. \
+Upstream release workflow files are not executed by this repository; a path-touch finding there is context unless the \
+workflow content itself adds a payload.
 
-IOC matches and Unicode or confusable-character findings are blocking. Do not clear them.
-You may only agree with them or escalate them.
+IOC matches, and Unicode or confusable-character findings in files changed by this update, are blocking. \
+Do not clear them.
+Pre-existing Unicode or confusable findings in unchanged release files are context for this update, \
+not a reason to block.
+Codepoint matches in binary or media blobs are not text findings and are context for this update.
+A changed media path is still a steganography signal.
+You may only agree with blocking findings or escalate them.
 Generic exec, spawn, child_process, base64, and eval hits are context, including inside compiled
-bundles. Other heuristic hits stay blocking in every path, including dist/ and lib/.
+bundles. Other heuristic hits stay blocking unless the scan report is warn_only.
 status clean with scan_conclusive true means release blobs were read and no findings were produced.
 status warn or fail means findings were produced from blobs that were read. Incorporate them.
 If scan_conclusive is false, coverage was incomplete, so do not treat the absence of further findings as a clean result.
