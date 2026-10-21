@@ -198,7 +198,12 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 		if err != nil {
 			return err
 		}
-		content, err := ProcessTemplate(tmplContent, cfg.Variables, repoConfig.VarOverrides)
+
+		templateVars, templateOverrides, err := templateInputsForFile(fileinfo, repoName, cfg, repoConfig)
+		if err != nil {
+			log.Printf("Error inspecting Dependabot manifests for %s; keeping full configuration: %v\n", repoName, err)
+		}
+		content, err := ProcessTemplate(tmplContent, templateVars, templateOverrides)
 		if err != nil {
 			return err
 		}
@@ -263,4 +268,15 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 	}
 
 	return nil
+}
+
+// templateInputsForFile keeps template-specific variable derivation out of the
+// managed-file loop. Dependabot flags are detected from the cloned repo, so
+// its overrides are already merged into the returned variables.
+func templateInputsForFile(fileinfo *config.File, repoName string, cfg *config.Config, repoConfig Config) (map[string]string, map[string]string, error) {
+	if fileinfo.TemplateName != dependabotTemplateName {
+		return cfg.Variables, repoConfig.VarOverrides, nil
+	}
+	vars, err := DependabotVarsForRepo(repoDir(repoName), cfg.Variables, repoConfig.VarOverrides)
+	return vars, nil, err
 }

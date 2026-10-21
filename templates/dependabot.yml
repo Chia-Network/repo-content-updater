@@ -10,6 +10,7 @@ registries:
     type: python-index
     url: https://download.chia.net/simple/
 updates:
+  # {{- if ne .DEPENDABOT_GOMOD_ENABLED "0" }}
   - package-ecosystem: "gomod"
     directory: "{{ .DEPENDABOT_GOMOD_DIRECTORY }}"
     schedule:
@@ -30,6 +31,9 @@ updates:
         patterns:
           - "*"
     # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_PIP_ENABLED "0" }}
 
   - package-ecosystem: "pip"
     registries:
@@ -55,6 +59,9 @@ updates:
         patterns:
           - "*"
     # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_ACTIONS_ENABLED "0" }}
 
   - package-ecosystem: "github-actions"
     directories: "{{ .DEPENDABOT_ACTIONS_DIRECTORIES }}"
@@ -76,6 +83,9 @@ updates:
         patterns:
           - "*"
     # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_NPM_ENABLED "0" }}
 
   - package-ecosystem: "npm"
     directory: "{{ .DEPENDABOT_NPM_DIRECTORY }}"
@@ -97,6 +107,9 @@ updates:
         patterns:
           - "*"
     # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_CARGO_ENABLED "0" }}
 
   - package-ecosystem: cargo
     directory: "{{ .DEPENDABOT_CARGO_DIRECTORY }}"
@@ -117,6 +130,9 @@ updates:
         patterns:
           - "*"
     # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_SWIFT_ENABLED "0" }}
 
   - package-ecosystem: swift
     directory: "{{ .DEPENDABOT_SWIFT_DIRECTORY }}"
@@ -132,4 +148,5 @@ updates:
       global:
         patterns:
           - "*"
+    # {{- end }}
     # {{- end }}

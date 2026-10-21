@@ -19,18 +19,27 @@ import (
 //	key: "{{ .Name }}"     the entire value is one quoted field
 //	# {{- if ... }}        the entire line is a comment-wrapped action
 func ProcessTemplate(templateContent []byte, defaultVars map[string]string, overrides map[string]string) ([]byte, error) {
-	// Compute the SHA256 hash of the template content
-	hash := sha256.Sum256(templateContent)
-	hexHash := hex.EncodeToString(hash[:])
+	return processTemplate(templateContent, mergeTemplateVars(defaultVars, overrides))
+}
 
-	notOverridable := map[string]bool{"CURRENT_YEAR": true}
+// CURRENT_YEAR is fixed in every merge, and Dependabot flags are computed
+// rather than configured, so neither may be replaced by an override.
+var notOverridableTemplateVars = func() map[string]bool {
+	vars := map[string]bool{"CURRENT_YEAR": true}
+	for _, ecosystem := range dependabotEcosystems {
+		vars[ecosystem.enabledVar] = true
+	}
+	return vars
+}()
+
+func mergeTemplateVars(defaultVars map[string]string, overrides map[string]string) map[string]string {
 	data := map[string]string{
 		"CURRENT_YEAR": strconv.Itoa(time.Now().Year()),
 	}
 
 	// Merge `defaultVars` into `data`
 	for key, value := range defaultVars {
-		if notOverridable[key] {
+		if key == "CURRENT_YEAR" {
 			continue
 		}
 		data[key] = value
@@ -38,11 +47,19 @@ func ProcessTemplate(templateContent []byte, defaultVars map[string]string, over
 
 	// Merge `overrides` into `data`, with `overrides` taking precedence
 	for key, value := range overrides {
-		if notOverridable[key] {
+		if notOverridableTemplateVars[key] {
 			continue
 		}
 		data[key] = value
 	}
+
+	return data
+}
+
+func processTemplate(templateContent []byte, data map[string]string) ([]byte, error) {
+	// Compute the SHA256 hash of the template content
+	hash := sha256.Sum256(templateContent)
+	hexHash := hex.EncodeToString(hash[:])
 
 	tmpl, err := template.New(hexHash).Parse(expandYAMLSafeActions(string(templateContent)))
 	if err != nil {
