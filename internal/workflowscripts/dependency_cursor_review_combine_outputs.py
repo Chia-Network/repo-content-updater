@@ -56,6 +56,16 @@ def _host_namespace() -> dict[str, object]:
     return runpy.run_path(str(_COLD_START_PATH))
 
 
+def _load_formatter():
+    """The trusted malware verdict formatter module."""
+    ns = _host_namespace()
+    loader, script_dir = ns["resolve_loader_bundle"](_SCRIPT_CANDIDATES)
+    return loader.import_module_from_trusted_script(
+        script_dir / "malware_verdict_formatter.py",
+        "trusted_malware_verdict_formatter",
+    )
+
+
 def _load_any(path: str) -> dict:
     try:
         raw = Path(path).read_text(encoding="utf-8")
@@ -170,13 +180,7 @@ def main() -> None:
     combined_path = _env_path("DCR_COMBINED_JSON")
     malware_payload = _load_any(malware_path)
     compatibility_payload = _load_any(compatibility_path)
-    ns = _host_namespace()
-    resolve_loader_bundle = ns["resolve_loader_bundle"]
-    loader, script_dir = resolve_loader_bundle(_SCRIPT_CANDIDATES)
-    formatter = loader.import_module_from_trusted_script(
-        script_dir / "malware_verdict_formatter.py",
-        "trusted_malware_verdict_formatter",
-    )
+    formatter = _load_formatter()
     agent_text = _extract_text(malware_payload)
     compatibility_text = _final_message(compatibility_payload) or _extract_text(compatibility_payload)
     published = formatter.compose_published_review(
@@ -226,13 +230,7 @@ def _enforce_published_check() -> None:
     """Recompute the check from the sealed report. A stored check string is ignored."""
     _drop_pr_head_scripts_from_sys_path()
     report = _sealed_report()
-    ns = _host_namespace()
-    resolve_loader_bundle = ns["resolve_loader_bundle"]
-    loader, script_dir = resolve_loader_bundle(_SCRIPT_CANDIDATES)
-    formatter = loader.import_module_from_trusted_script(
-        script_dir / "malware_verdict_formatter.py",
-        "trusted_malware_verdict_formatter",
-    )
+    formatter = _load_formatter()
     published = formatter.compose_published_review(
         report,
         _optional_analysis("DCR_MALWARE_JSON"),

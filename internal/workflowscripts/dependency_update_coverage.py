@@ -448,6 +448,11 @@ def _has_upstream_link(updates: list[dict]) -> bool:
     return any(_REPO_RE.fullmatch(str(item.get("upstreamRepo") or "")) for item in updates)
 
 
+def _write_report(report: dict, summary: str) -> None:
+    Path("malware_scan_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    Path("malware_scan_summary.md").write_text(summary, encoding="utf-8")
+
+
 def _clone(repo: str, dest: Path) -> bool:
     dest.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://github.com/{repo}.git"
@@ -566,8 +571,7 @@ def main() -> None:
     if updates and not _has_upstream_link(updates):
         report = uncovered({}, "no_upstream_link")
         summary = render_summary(report, [])
-        Path("malware_scan_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        Path("malware_scan_summary.md").write_text(summary, encoding="utf-8")
+        _write_report(report, summary)
         _emit(report, summary)
         return
     gaps = manifest_gaps(updates)
@@ -590,8 +594,7 @@ def main() -> None:
                 child_summary = summary_path.read_text(encoding="utf-8")
         report = aggregate(records)
         summary = child_summary if len(records) == 1 and child_summary else render_summary(report, records)
-        Path("malware_scan_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        Path("malware_scan_summary.md").write_text(summary, encoding="utf-8")
+        _write_report(report, summary)
         _keep_checkout(records, scans)
     finally:
         shutil.rmtree(work, ignore_errors=True)
