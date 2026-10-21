@@ -84,8 +84,11 @@ func TestDependabotPipManifests(t *testing.T) {
 	for _, manifest := range []string{
 		"requirements.txt",
 		"requirements-dev.txt",
+		"dev-requirements.txt",
+		"requirements.in",
 		"pyproject.toml",
 		"setup.py",
+		"setup.cfg",
 		"Pipfile",
 	} {
 		t.Run(manifest, func(t *testing.T) {
@@ -99,6 +102,58 @@ func TestDependabotPipManifests(t *testing.T) {
 				t.Fatalf("DEPENDABOT_PIP_ENABLED = %q, want 1", vars["DEPENDABOT_PIP_ENABLED"])
 			}
 		})
+	}
+}
+
+func TestDependabotPipManifestsOneLevelDown(t *testing.T) {
+	for _, manifest := range []string{
+		filepath.Join("sub", "requirements.txt"),
+		filepath.Join("sub", "requirements-dev.in"),
+		filepath.Join("sub", "pyproject.toml"),
+		filepath.Join("sub", "setup.py"),
+		filepath.Join("sub", "setup.cfg"),
+		filepath.Join("sub", "Pipfile"),
+	} {
+		t.Run(manifest, func(t *testing.T) {
+			repoDir := t.TempDir()
+			writeDependabotTestFile(t, repoDir, manifest, "")
+			vars, err := DependabotEcosystemVars(repoDir, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if vars["DEPENDABOT_PIP_ENABLED"] != "1" {
+				t.Fatalf("DEPENDABOT_PIP_ENABLED = %q, want 1", vars["DEPENDABOT_PIP_ENABLED"])
+			}
+		})
+	}
+}
+
+func TestDependabotMixedRepoKeepsPipEnabled(t *testing.T) {
+	repoDir := t.TempDir()
+	writeDependabotTestFile(t, repoDir, "package.json", "{}")
+	writeDependabotTestFile(t, repoDir, "setup.cfg", "")
+
+	vars, err := DependabotEcosystemVars(repoDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"DEPENDABOT_NPM_ENABLED", "DEPENDABOT_PIP_ENABLED"} {
+		if vars[key] != "1" {
+			t.Errorf("%s = %q, want 1", key, vars[key])
+		}
+	}
+}
+
+func TestDependabotIgnoresUnrelatedTextFiles(t *testing.T) {
+	repoDir := t.TempDir()
+	writeDependabotTestFile(t, repoDir, "notes.txt", "")
+
+	vars, err := DependabotEcosystemVars(repoDir, nil)
+	if !errors.Is(err, errNoDependabotEcosystems) {
+		t.Fatalf("error = %v, want errNoDependabotEcosystems", err)
+	}
+	if vars["DEPENDABOT_PIP_ENABLED"] == "1" {
+		t.Fatal("notes.txt must not count as a pip manifest")
 	}
 }
 
@@ -166,11 +221,18 @@ func TestDependabotRejectsEscapingDirectories(t *testing.T) {
 			if err := os.MkdirAll(outsideDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			writeDependabotTestFile(t, outsideDir, "go.mod", "")
 			if testCase.symlink {
 				if err := os.Symlink(outsideDir, filepath.Join(repoDir, "link")); err != nil {
 					t.Fatal(err)
 				}
+			}
+
+			repoRoot, err := filepath.EvalSymlinks(repoDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dirs, err := expandDependabotDirectory(repoRoot, testCase.relative); err == nil {
+				t.Fatalf("expandDependabotDirectory(%q) = %q, want error", testCase.relative, dirs)
 			}
 
 			vars, err := DependabotEcosystemVars(repoDir, map[string]string{
@@ -231,6 +293,24 @@ func TestDependabotActionsDetection(t *testing.T) {
 			files:       []string{filepath.Join(".github", "actions", "build", "action.yaml")},
 			directories: `["/", ".github/actions/build"]`,
 			want:        "1",
+		},
+		{
+			name:        "any yml in non-root explicit directory",
+			files:       []string{filepath.Join(".github", "actions", "build", "ci.yml")},
+			directories: `[".github/actions/build"]`,
+			want:        "1",
+		},
+		{
+			name:        "any yaml in non-root globbed directory",
+			files:       []string{filepath.Join(".github", "actions", "build", "ci.yaml")},
+			directories: `[".github/actions/*"]`,
+			want:        "1",
+		},
+		{
+			name:        "root arbitrary yml is not an action",
+			files:       []string{"docker-compose.yml"},
+			directories: `["/"]`,
+			want:        "0",
 		},
 		{
 			name:        "no workflow or action manifests",

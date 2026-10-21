@@ -200,7 +200,9 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 		}
 
 		templateVars, templateOverrides, err := templateInputsForFile(fileinfo, repoName, cfg, repoConfig)
-		if err != nil {
+		if errors.Is(err, errNoDependabotEcosystems) {
+			log.Printf("No Dependabot ecosystems detected for %s; keeping full configuration\n", repoName)
+		} else if err != nil {
 			log.Printf("Error inspecting Dependabot manifests for %s; keeping full configuration: %v\n", repoName, err)
 		}
 		content, err := ProcessTemplate(tmplContent, templateVars, templateOverrides)

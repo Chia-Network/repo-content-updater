@@ -21,14 +21,16 @@ const dependabotTemplateName = "dependabot.yml"
 // directoriesVar holds either a single repository-relative directory or, for
 // github-actions, a JSON list of directories that may contain globs. Manifest
 // patterns are matched relative to each configured directory.
-// rootExtraManifests, when set, are added to manifests for a directory that
-// resolves to the repository root (github-actions additionally checks
-// workflows under .github/workflows).
+// nonRootManifests, when set, replaces manifests for directories below the
+// repository root. rootExtraManifests, when set, are added to manifests for a
+// directory that resolves to the repository root (github-actions additionally
+// checks workflows under .github/workflows).
 type dependabotEcosystem struct {
 	name               string
 	enabledVar         string
 	directoriesVar     string
 	manifests          []string
+	nonRootManifests   []string
 	rootExtraManifests []string
 }
 
@@ -43,13 +45,27 @@ var dependabotEcosystems = []dependabotEcosystem{
 		name:           "pip",
 		enabledVar:     "DEPENDABOT_PIP_ENABLED",
 		directoriesVar: "DEPENDABOT_PIP_DIRECTORY",
-		manifests:      []string{"requirements*.txt", "pyproject.toml", "setup.py", "Pipfile"},
+		manifests: []string{
+			"*requirements*.txt",
+			"*requirements*.in",
+			"pyproject.toml",
+			"setup.py",
+			"setup.cfg",
+			"Pipfile",
+			"*/*requirements*.txt",
+			"*/*requirements*.in",
+			"*/pyproject.toml",
+			"*/setup.py",
+			"*/setup.cfg",
+			"*/Pipfile",
+		},
 	},
 	{
 		name:               "github-actions",
 		enabledVar:         "DEPENDABOT_ACTIONS_ENABLED",
 		directoriesVar:     "DEPENDABOT_ACTIONS_DIRECTORIES",
 		manifests:          []string{"action.yml", "action.yaml"},
+		nonRootManifests:   []string{"*.yml", "*.yaml"},
 		rootExtraManifests: []string{".github/workflows/*.yml", ".github/workflows/*.yaml"},
 	},
 	{
@@ -99,6 +115,10 @@ func DependabotVarsForRepo(repoDir string, defaultVars map[string]string, overri
 // keep the full historical template output.
 func DependabotEcosystemVars(repoDir string, vars map[string]string) (map[string]string, error) {
 	repoRoot, err := filepath.EvalSymlinks(repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repository %s: %w", repoDir, err)
+	}
+	repoRoot, err = filepath.Abs(repoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve repository %s: %w", repoDir, err)
 	}
@@ -162,8 +182,12 @@ func dependabotEcosystemPresent(repoRoot string, ecosystem dependabotEcosystem, 
 		}
 		for _, dir := range resolvedDirs {
 			manifests := ecosystem.manifests
-			if len(ecosystem.rootExtraManifests) > 0 && filepath.Clean(dir) == filepath.Clean(repoRoot) {
-				manifests = slices.Concat(manifests, ecosystem.rootExtraManifests)
+			if filepath.Clean(dir) == filepath.Clean(repoRoot) {
+				if len(ecosystem.rootExtraManifests) > 0 {
+					manifests = slices.Concat(manifests, ecosystem.rootExtraManifests)
+				}
+			} else if len(ecosystem.nonRootManifests) > 0 {
+				manifests = ecosystem.nonRootManifests
 			}
 			present, err := dependabotManifestsPresent(repoRoot, dir, manifests)
 			if err != nil {
@@ -283,40 +307,67 @@ func dependabotManifestsPresent(repoRoot, baseDir string, manifests []string) (b
 
 func dependabotManifestPresent(repoRoot, baseDir, manifest string) (bool, error) {
 	manifest = filepath.FromSlash(manifest)
-	dirPath := filepath.Join(baseDir, filepath.Dir(manifest))
+	dirPattern := filepath.Dir(manifest)
 	namePattern := filepath.Base(manifest)
 
-	resolvedDir, err := resolveRepositoryPath(repoRoot, dirPath)
+	dirs, err := manifestDirectories(repoRoot, baseDir, dirPattern)
 	if err != nil {
 		return false, fmt.Errorf("manifest %q: %w", manifest, err)
 	}
-	if resolvedDir == "" {
-		return false, nil
-	}
-
-	entries, err := os.ReadDir(resolvedDir)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-			return false, nil
-		}
-		return false, err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		// Manifest patterns are constants, so Match cannot fail here.
-		matched, _ := filepath.Match(namePattern, entry.Name())
-		if !matched {
-			continue
-		}
-		resolved, err := resolveRepositoryPath(repoRoot, filepath.Join(resolvedDir, entry.Name()))
+	for _, resolvedDir := range dirs {
+		entries, err := os.ReadDir(resolvedDir)
 		if err != nil {
-			return false, fmt.Errorf("manifest %q: %w", filepath.Join(manifest, entry.Name()), err)
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+				continue
+			}
+			return false, err
 		}
-		if resolved != "" {
-			return true, nil
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			// Manifest patterns are constants, so Match cannot fail here.
+			matched, _ := filepath.Match(namePattern, entry.Name())
+			if !matched {
+				continue
+			}
+			resolved, err := resolveRepositoryPath(repoRoot, filepath.Join(resolvedDir, entry.Name()))
+			if err != nil {
+				return false, fmt.Errorf("manifest %q: %w", filepath.Join(manifest, entry.Name()), err)
+			}
+			if resolved != "" {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
+}
+
+func manifestDirectories(repoRoot, baseDir, dirPattern string) ([]string, error) {
+	if !strings.ContainsAny(dirPattern, "*?[") {
+		resolved, err := resolveRepositoryPath(repoRoot, filepath.Join(baseDir, dirPattern))
+		if err != nil {
+			return nil, err
+		}
+		if resolved == "" {
+			return nil, nil
+		}
+		return []string{resolved}, nil
+	}
+
+	matches, err := fs.Glob(os.DirFS(baseDir), filepath.ToSlash(dirPattern))
+	if err != nil {
+		return nil, err
+	}
+	dirs := make([]string, 0, len(matches))
+	for _, match := range matches {
+		resolved, err := resolveRepositoryPath(repoRoot, filepath.Join(baseDir, filepath.FromSlash(match)))
+		if err != nil {
+			return nil, err
+		}
+		if resolved != "" {
+			dirs = append(dirs, resolved)
+		}
+	}
+	return dirs, nil
 }
