@@ -348,8 +348,8 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n",
             "COMPATIBILITY_RECOMMENDATION: Merge\n\nFine.\n",
         )
-        self.assertEqual(published["verdict"], "suspicious")
-        self.assertIn("`payload.bin:1`", published["malware_text"])
+        self.assertEqual(published["verdict"], "inconclusive")
+        self.assertIn("`payload.bin`", published["malware_text"])
         self.assertIn("nul blob", published["malware_text"])
         self.assertNotIn("**Verdict: benign**", published["malware_text"])
         self.assertIs(published["may_complete"], False)
@@ -467,6 +467,130 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 self.assertEqual(coverage._verify_commit("missing"), "")
             finally:
                 os.chdir(previous)
+
+
+    def test_missing_scan_report_fails_the_check(self) -> None:
+        update = {
+            "packageName": "left-pad",
+            "fromVersion": "1.2.3",
+            "toVersion": "1.2.4",
+            "upstreamRepo": "left-pad/left-pad",
+        }
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scan.sh"
+            script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+            dest = root / "child"
+            dest.mkdir()
+            with patch.object(coverage, "_clone", lambda *_args, **_kwargs: True):
+                record = coverage._scan_one(update, dest, script)
+        self.assertEqual(record["not_scanned_reason"], "not_scanned")
+        benign = "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n"
+        merge = "COMPATIBILITY_RECOMMENDATION: Merge\n\nFine.\n"
+        published = formatter.compose_published_review(record, benign, merge)
+        self.assertEqual(published["check"], "fail")
+        self.assertIs(published["may_complete"], False)
+        record["not_scanned_reason"] = "not_conclusive"
+        concluded = formatter.compose_published_review(record, benign, merge)
+        self.assertEqual(concluded["check"], "fail")
+        self.assertIs(concluded["may_complete"], False)
+
+    def test_nonzero_exit_after_report_is_a_scanner_error(self) -> None:
+        update = {
+            "packageName": "left-pad",
+            "fromVersion": "1.2.3",
+            "toVersion": "1.2.4",
+            "upstreamRepo": "left-pad/left-pad",
+        }
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scan.sh"
+            script.write_text(
+                "#!/bin/bash\n"
+                "cat > malware_scan_report.json <<'EOF'\n"
+                '{"status":"clean","scan_conclusive":true,"from_tag":"v1.2.3","to_tag":"v1.2.4",'
+                '"resolved_from":"a","resolved_to":"b",'
+                '"findings":{"unicode":[],"confusable":[],"ioc":[],"heuristic":[]}}\n'
+                "EOF\n"
+                "echo 'boom after report' >&2\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            dest = root / "child"
+            dest.mkdir()
+            with patch.object(coverage, "_clone", lambda *_args, **_kwargs: True):
+                record = coverage._scan_one(update, dest, script)
+        self.assertEqual(record["not_scanned_reason"], "scanner_error")
+        self.assertIs(record["scan_conclusive"], False)
+        self.assertIn("boom after report", record["errors"])
+        published = formatter.compose_published_review(
+            record, "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n", "COMPATIBILITY_RECOMMENDATION: Merge\n"
+        )
+        self.assertEqual(published["check"], "fail")
+        self.assertIs(published["may_complete"], False)
+
+    def test_scan_one_passes_an_absolute_github_output(self) -> None:
+        update = {
+            "packageName": "left-pad",
+            "fromVersion": "1.2.3",
+            "toVersion": "1.2.4",
+            "upstreamRepo": "left-pad/left-pad",
+        }
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scan.sh"
+            script.write_text(
+                "#!/bin/bash\n"
+                'printf "%s" "$GITHUB_OUTPUT" > github_output_path.txt\n'
+                "cat > malware_scan_report.json <<'EOF'\n"
+                '{"status":"clean","scan_conclusive":true,"from_tag":"v1.2.3","to_tag":"v1.2.4",'
+                '"resolved_from":"a","resolved_to":"b",'
+                '"findings":{"unicode":[],"confusable":[],"ioc":[],"heuristic":[]}}\n'
+                "EOF\n",
+                encoding="utf-8",
+            )
+            previous = os.getcwd()
+            os.chdir(root)
+            try:
+                dest = Path("child")
+                dest.mkdir()
+                with patch.object(coverage, "_clone", lambda *_args, **_kwargs: True):
+                    coverage._scan_one(update, dest, script)
+                child_output = (dest / "github_output_path.txt").read_text(encoding="utf-8")
+            finally:
+                os.chdir(previous)
+        self.assertTrue(os.path.isabs(child_output), child_output)
+        self.assertIn(str(Path(tmp).resolve() / "child"), child_output)
+
+    def test_no_upstream_link_writes_a_report(self) -> None:
+        updates = [
+            {"packageName": "lodash", "fromVersion": "4.17.20", "toVersion": "4.17.21", "upstreamRepo": ""}
+        ]
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
+            output = root / "github_output.txt"
+            previous = os.getcwd()
+            saved = os.environ.get("GITHUB_OUTPUT")
+            os.chdir(root)
+            os.environ["GITHUB_OUTPUT"] = str(output)
+            try:
+                coverage.main()
+            finally:
+                os.chdir(previous)
+                if saved is None:
+                    os.environ.pop("GITHUB_OUTPUT", None)
+                else:
+                    os.environ["GITHUB_OUTPUT"] = saved
+            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
+            summary = (root / "malware_scan_summary.md").read_text(encoding="utf-8")
+        self.assertEqual(report["not_scanned_reason"], "no_upstream_link")
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertIn("no_upstream_link", summary)
+        published = formatter.compose_published_review(
+            report, "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n", "COMPATIBILITY_RECOMMENDATION: Merge\n"
+        )
+        self.assertEqual(published["check"], "fail")
 
 
 if __name__ == "__main__":
