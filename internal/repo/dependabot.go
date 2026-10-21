@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 )
@@ -19,15 +20,16 @@ const dependabotTemplateName = "dependabot.yml"
 //
 // directoriesVar holds either a single repository-relative directory or, for
 // github-actions, a JSON list of directories that may contain globs. Manifest
-// patterns are matched relative to each configured directory. rootManifests,
-// when set, replaces manifests for a directory that resolves to the repository
-// root (github-actions keeps workflows under .github/workflows).
+// patterns are matched relative to each configured directory.
+// rootExtraManifests, when set, are added to manifests for a directory that
+// resolves to the repository root (github-actions additionally checks
+// workflows under .github/workflows).
 type dependabotEcosystem struct {
-	name           string
-	enabledVar     string
-	directoriesVar string
-	manifests      []string
-	rootManifests  []string
+	name               string
+	enabledVar         string
+	directoriesVar     string
+	manifests          []string
+	rootExtraManifests []string
 }
 
 var dependabotEcosystems = []dependabotEcosystem{
@@ -44,11 +46,11 @@ var dependabotEcosystems = []dependabotEcosystem{
 		manifests:      []string{"requirements*.txt", "pyproject.toml", "setup.py", "Pipfile"},
 	},
 	{
-		name:           "github-actions",
-		enabledVar:     "DEPENDABOT_ACTIONS_ENABLED",
-		directoriesVar: "DEPENDABOT_ACTIONS_DIRECTORIES",
-		manifests:      []string{"action.yml", "action.yaml"},
-		rootManifests:  []string{".github/workflows/*.yml", ".github/workflows/*.yaml"},
+		name:               "github-actions",
+		enabledVar:         "DEPENDABOT_ACTIONS_ENABLED",
+		directoriesVar:     "DEPENDABOT_ACTIONS_DIRECTORIES",
+		manifests:          []string{"action.yml", "action.yaml"},
+		rootExtraManifests: []string{".github/workflows/*.yml", ".github/workflows/*.yaml"},
 	},
 	{
 		name:           "npm",
@@ -160,8 +162,8 @@ func dependabotEcosystemPresent(repoRoot string, ecosystem dependabotEcosystem, 
 		}
 		for _, dir := range resolvedDirs {
 			manifests := ecosystem.manifests
-			if len(ecosystem.rootManifests) > 0 && filepath.Clean(dir) == filepath.Clean(repoRoot) {
-				manifests = ecosystem.rootManifests
+			if len(ecosystem.rootExtraManifests) > 0 && filepath.Clean(dir) == filepath.Clean(repoRoot) {
+				manifests = slices.Concat(manifests, ecosystem.rootExtraManifests)
 			}
 			present, err := dependabotManifestsPresent(repoRoot, dir, manifests)
 			if err != nil {

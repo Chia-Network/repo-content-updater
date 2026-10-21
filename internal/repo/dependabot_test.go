@@ -209,6 +209,18 @@ func TestDependabotActionsDetection(t *testing.T) {
 			want:        "1",
 		},
 		{
+			name:        "action yml at repository root without workflows",
+			files:       []string{"action.yml"},
+			directories: `["/"]`,
+			want:        "1",
+		},
+		{
+			name:        "action yaml at repository root without workflows",
+			files:       []string{"action.yaml"},
+			directories: `["/"]`,
+			want:        "1",
+		},
+		{
 			name:        "action yml matched by glob",
 			files:       []string{filepath.Join(".github", "actions", "build", "action.yml")},
 			directories: `["/", ".github/actions/*"]`,
