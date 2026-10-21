@@ -54,7 +54,7 @@ class CheckNodeRuntimeTest(unittest.TestCase):
         self,
         files: dict[str, str] | None = None,
         fixtures: dict[str, str] | None = None,
-        unreadable: tuple[str, ...] = (),
+        find_fails: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -67,25 +67,21 @@ class CheckNodeRuntimeTest(unittest.TestCase):
             fake_gh = bindir / "gh"
             fake_gh.write_text(_FAKE_GH, encoding="utf-8")
             fake_gh.chmod(0o755)
-            for rel in unreadable:
-                (root / rel).chmod(0o000)
+            if find_fails:
+                fake_find = bindir / "find"
+                fake_find.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+                fake_find.chmod(0o755)
             env = os.environ.copy()
             env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
             env["FAKE_GH_FIXTURES"] = json.dumps(fixtures or {})
-            try:
-                return subprocess.run(
-                    ["bash", str(_SCRIPT)],
-                    cwd=root,
-                    env=env,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-            finally:
-                for rel in unreadable:
-                    path = root / rel
-                    if path.exists():
-                        path.chmod(0o700)
+            return subprocess.run(
+                ["bash", str(_SCRIPT)],
+                cwd=root,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
 
     def test_node20_remote_action_fails(self) -> None:
         proc = self._run(
@@ -156,16 +152,52 @@ class CheckNodeRuntimeTest(unittest.TestCase):
         self.assertNotIn("::error", proc.stdout)
         self.assertNotIn("::warning", proc.stdout)
 
-    @unittest.skipIf(os.geteuid() == 0, "root can read chmod 000 directories")
     def test_find_failure_fails_the_job(self) -> None:
         proc = self._run(
-            files={
-                ".github/actions/foo/action.yml": _manifest("node24"),
-                ".github/actions/sub/keep.txt": "fixture\n",
-            },
-            unreadable=(".github/actions/sub",),
+            files={".github/actions/foo/action.yml": _manifest("node24")},
+            find_fails=True,
         )
         self.assertNotEqual(proc.returncode, 0)
+
+    def test_workflow_path_with_space_reports_full_path(self) -> None:
+        proc = self._run(
+            files={".github/workflows/my flow.yml": _workflow("acme/action@v1")},
+            fixtures={"repos/acme/action/contents/action.yml": _manifest("node20")},
+        )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertIn(
+            "::error file=.github/workflows/my flow.yml::"
+            "Action acme/action@v1 uses unsupported Node runtime node20",
+            proc.stdout,
+        )
+
+    def test_non_step_uses_keys_are_ignored(self) -> None:
+        workflow = (
+            "name: fixture\n"
+            "on: push\n"
+            "jobs:\n"
+            "  test:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    env:\n"
+            "      uses: acme/env@v1\n"
+            "    steps:\n"
+            "      - run: echo ok\n"
+            "        env:\n"
+            "          uses: acme/stepenv@v1\n"
+            "        with:\n"
+            "          uses: acme/with@v1\n"
+        )
+        proc = self._run(
+            files={".github/workflows/x.yml": workflow},
+            fixtures={
+                "repos/acme/env/contents/action.yml": _manifest("node20"),
+                "repos/acme/stepenv/contents/action.yml": _manifest("node20"),
+                "repos/acme/with/contents/action.yml": _manifest("node20"),
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("::warning", proc.stdout)
+        self.assertNotIn("::error", proc.stdout)
 
 
 if __name__ == "__main__":

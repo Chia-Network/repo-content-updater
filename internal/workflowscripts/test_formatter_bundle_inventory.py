@@ -8,9 +8,10 @@ from pathlib import Path
 import formatter_runtime_bundle
 import trusted_formatter_loader_cold_start as cold_start
 from formatter_bundle_inventory import (
+    _SYNC_EMIT_ONLY_TEMPLATES,
     AUTHORING_ONLY_SYNC_CANONICAL_TO_TEMPLATE,
-    EXTRA_CONSUMER_SYNC_CANONICAL_TO_TEMPLATE,
     consumer_sync_canonical_to_template,
+    managed_file_index,
     managed_formatter_sync_pairs,
     parse_dcr_expanded_managed_names,
     parse_dcr_group_templates,
@@ -90,11 +91,25 @@ class FormatterBundleInventoryTest(unittest.TestCase):
             len(manifest_lines),
             msg="trusted manifest must not list any repo_path more than once",
         )
+
+    def test_sync_covers_every_consumer_script_entry(self) -> None:
+        config = _CONFIG.read_text(encoding="utf-8")
+        expected_templates = [
+            template
+            for template, repo_path in managed_file_index(config).values()
+            if repo_path.startswith(".github/scripts/")
+            and template not in _SYNC_EMIT_ONLY_TEMPLATES
+        ]
+        consumer = consumer_sync_canonical_to_template(config)
+        self.assertEqual([template for _canonical, template in consumer], expected_templates)
+        self.assertEqual(len(consumer), len(set(consumer)))
         self.assertEqual(
-            len(sync_canonical_to_template(config)),
-            len(managed_formatter_sync_pairs(config))
-            + len(EXTRA_CONSUMER_SYNC_CANONICAL_TO_TEMPLATE)
-            + len(AUTHORING_ONLY_SYNC_CANONICAL_TO_TEMPLATE),
+            AUTHORING_ONLY_SYNC_CANONICAL_TO_TEMPLATE,
+            (("formatter_bundle_inventory.py", "formatter-bundle-inventory.py"),),
+        )
+        self.assertEqual(
+            sync_canonical_to_template(config),
+            (*consumer, *AUTHORING_ONLY_SYNC_CANONICAL_TO_TEMPLATE),
         )
 
     def test_trusted_dcr_script_repo_paths_has_no_duplicates(self) -> None:

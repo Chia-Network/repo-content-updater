@@ -2,7 +2,20 @@
 # Fail when a workflow or local action uses an unsupported Node runtime.
 set -euo pipefail
 
-unsupported_runtime() { case "$1" in node12|node16|node20) return 0;; esac; return 1; }
+unsupported_runtime() {
+  case "$1" in node12 | node16 | node20) return 0 ;; esac
+  return 1
+}
+
+join_files() {
+  local joined="" file
+  while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    joined+="${joined:+, }$file"
+  done <<<"$1"
+  printf '%s' "$joined"
+}
+
 hit=0
 declare -A files_for=()
 
@@ -17,13 +30,20 @@ files="$(
 
 while IFS= read -r file; do
   [[ -f "$file" ]] || continue
-  uses=$(yq -r '.. | select(tag == "!!map") | .uses | select(. != null)' "$file")
+  if [[ "$file" == .github/actions/* ]]; then
+    uses=$(yq -r '[(.runs.steps // [])[] | .uses | select(. != null)] | .[]' "$file")
+  else
+    uses=$(yq -r '[
+      ((.jobs // [])[] | .uses | select(. != null)),
+      ((.jobs // [])[] | (.steps // [])[] | .uses | select(. != null))
+    ] | .[]' "$file")
+  fi
   while IFS= read -r action; do
     action="${action%$'\r'}"
     [[ -z "$action" || "$action" == ./* || "$action" == docker://* || "$action" != *@* ]] && continue
     [[ "${action%@*}" == */.github/workflows/* ]] && continue
-    files_for["$action"]+="${file#./} "
-  done <<< "$uses"
+    files_for["$action"]+="$file"$'\n'
+  done <<<"$uses"
   if [[ "$file" == .github/actions/* ]]; then
     using=$(yq -r '.runs.using // ""' "$file")
     if unsupported_runtime "$using"; then
@@ -31,7 +51,7 @@ while IFS= read -r file; do
       hit=1
     fi
   fi
-done <<< "$files"
+done <<<"$files"
 
 for action in "${!files_for[@]}"; do
   slug="${action%@*}"
@@ -39,7 +59,7 @@ for action in "${!files_for[@]}"; do
   owner="${slug%%/*}"
   rest="${slug#*/}"
   if [[ "$owner" == "$slug" || -z "$owner" || -z "$rest" ]]; then
-    echo "::warning::Unable to parse $action used in ${files_for[$action]% }"
+    echo "::warning::Unable to parse $action used in $(join_files "${files_for[$action]}")"
     continue
   fi
   repo="${rest%%/*}"
@@ -53,14 +73,15 @@ for action in "${!files_for[@]}"; do
     manifest=""
   done
   if [[ -z "$manifest" ]]; then
-    echo "::warning::Unable to resolve $action used in ${files_for[$action]% }"
+    echo "::warning::Unable to resolve $action used in $(join_files "${files_for[$action]}")"
     continue
   fi
   using=$(printf '%s\n' "$manifest" | yq -r '.runs.using // ""')
   if unsupported_runtime "$using"; then
-    for file in ${files_for[$action]}; do
+    while IFS= read -r file; do
+      [[ -z "$file" ]] && continue
       echo "::error file=$file::Action $action uses unsupported Node runtime $using"
-    done
+    done <<<"${files_for[$action]}"
     hit=1
   fi
 done
