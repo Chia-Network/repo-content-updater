@@ -1,0 +1,18 @@
+# This file is managed by the repo-content-updater project (GitHub Actions-only default). Manual changes here will result in a PR to bring back
+# inline with the upstream template, unless you add !dependabot-actions to the repo's managed-files property
+# repo-content-updater:dependabot-actions
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    labels:
+      - dependencies
+      - "Changed"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

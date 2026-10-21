@@ -323,9 +323,29 @@ func (c *Content) checkSelectedFiles(repoName string, files []config.SelectedFil
 
 const managedFileMarker = "managed by the repo-content-updater"
 
-// shouldAdoptExistingFile reports whether a default file may be written. An
-// existing file at repo_path or an alternate_path must carry the managed marker.
-func shouldAdoptExistingFile(repoName string, fileinfo *config.File) (bool, error) {
+// containsTrimmedLine reports whether content contains want as a complete line,
+// ignoring surrounding whitespace.
+func containsTrimmedLine(content, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return false
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldAdoptExistingFile reports whether a default file may be written. A
+// default file is written when no file exists at repo_path or an alternate_path,
+// or when every existing file carries the file's adoption marker line. A file
+// without an adoption marker is only written when it is absent.
+func (c *Content) shouldAdoptExistingFile(repoName string, fileinfo *config.File) (bool, error) {
+	marker := strings.TrimSpace(fileinfo.AdoptionMarker)
+	want := "# " + marker
+
 	paths := append([]string{fileinfo.RepoPath}, fileinfo.AlternatePaths...)
 	for _, repoPath := range paths {
 		content, err := os.ReadFile(filepath.Join(repoDir(repoName), filepath.FromSlash(repoPath)))
@@ -335,23 +355,78 @@ func shouldAdoptExistingFile(repoName string, fileinfo *config.File) (bool, erro
 		if err != nil {
 			return false, err
 		}
-		if !strings.Contains(strings.ToLower(string(content)), managedFileMarker) {
+		if marker == "" || !containsTrimmedLine(string(content), want) {
 			return false, nil
 		}
 	}
 	return true, nil
 }
 
+// requiredPathExists reports whether repoRelPath exists under root. A directory
+// only satisfies the requirement when it directly contains a .yml or .yaml file.
+func requiredPathExists(root, repoRelPath string) (bool, error) {
+	fullPath := filepath.Join(root, filepath.FromSlash(repoRelPath))
+	info, err := os.Stat(fullPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() {
+		return true, nil
+	}
+
+	entries, err := os.ReadDir(fullPath)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(entry.Name())) {
+		case ".yml", ".yaml":
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// firstMissingRequiredPath returns the first requires_paths entry that is not
+// satisfied under root, or "" when every entry is satisfied.
+func firstMissingRequiredPath(root string, requiredPaths []string) (string, error) {
+	for _, requiredPath := range requiredPaths {
+		exists, err := requiredPathExists(root, requiredPath)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return requiredPath, nil
+		}
+	}
+	return "", nil
+}
+
 // prepareManagedFile applies per-file selection and template policy, returning
 // skip=true when the file should be left untouched.
 func (c *Content) prepareManagedFile(repoName string, fileinfo *config.File, origin config.FileOrigin, cfg *config.Config, repoConfig Config) ([]byte, bool, error) {
 	if origin == config.OriginDefault {
-		adopt, err := shouldAdoptExistingFile(repoName, fileinfo)
+		missing, err := firstMissingRequiredPath(repoDir(repoName), fileinfo.RequiresPaths)
+		if err != nil {
+			return nil, false, err
+		}
+		if missing != "" {
+			log.Printf("Skipping default %s for %s: required path %s missing\n", fileinfo.Name, repoName, missing)
+			return nil, true, nil
+		}
+
+		adopt, err := c.shouldAdoptExistingFile(repoName, fileinfo)
 		if err != nil {
 			return nil, false, err
 		}
 		if !adopt {
-			log.Printf("Skipping %s for %s: existing file is not managed by this tool\n", fileinfo.Name, repoName)
+			log.Printf("Skipping %s for %s: existing file does not carry the adoption marker\n", fileinfo.Name, repoName)
 			return nil, true, nil
 		}
 	}

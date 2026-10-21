@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -56,6 +58,10 @@ type File struct {
 	AlternatePaths []string `yaml:"alternate_paths"`
 	Aliases        []string `yaml:"aliases"`
 	CompanionFiles []string `yaml:"companion_files"`
+	AdoptionMarker string   `yaml:"adoption_marker"`
+	// RequiresPaths lists repo-relative paths that must exist in the cloned repo
+	// for this file to be applied as a default. It is ignored for explicit selections.
+	RequiresPaths []string `yaml:"requires_paths"`
 }
 
 // LoadConfig loads config from the given path
@@ -73,6 +79,14 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	config.buildManagedFileLookup()
+
+	if err := config.validateRequiresPaths(); err != nil {
+		return nil, err
+	}
+
+	if err := config.validateAdoptionMarkers(); err != nil {
+		return nil, err
+	}
 
 	if err := config.resolveDefaultFiles(); err != nil {
 		return nil, err
@@ -120,7 +134,51 @@ func (c *Config) resolveDefaultFiles() error {
 		claimed[name] = true
 	}
 
+	for _, name := range expanded {
+		file := c.GetFileInfo(name)
+		if file == nil || strings.TrimSpace(file.AdoptionMarker) == "" {
+			return fmt.Errorf("default file %q must set a non-empty adoption_marker", name)
+		}
+	}
+
 	c.DefaultFiles = roots
+	return nil
+}
+
+func (c *Config) validateRequiresPaths() error {
+	for i := range c.Files {
+		file := &c.Files[i]
+		for _, required := range file.RequiresPaths {
+			if strings.TrimSpace(required) == "" {
+				return fmt.Errorf("file %q requires_paths contains an empty entry", file.Name)
+			}
+			normalized := strings.ReplaceAll(required, "\\", "/")
+			if path.IsAbs(normalized) || filepath.VolumeName(required) != "" {
+				return fmt.Errorf("file %q requires_paths entry %q must be relative", file.Name, required)
+			}
+			for _, part := range strings.Split(normalized, "/") {
+				if part == ".." {
+					return fmt.Errorf("file %q requires_paths entry %q must not contain '..'", file.Name, required)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateAdoptionMarkers() error {
+	seen := map[string]string{}
+	for i := range c.Files {
+		file := &c.Files[i]
+		marker := strings.TrimSpace(file.AdoptionMarker)
+		if marker == "" {
+			continue
+		}
+		if previous, ok := seen[marker]; ok && previous != file.Name {
+			return fmt.Errorf("adoption_marker %q is used by both %q and %q", marker, previous, file.Name)
+		}
+		seen[marker] = file.Name
+	}
 	return nil
 }
 
@@ -190,7 +248,7 @@ func (c *Config) sharesRepoPathWith(fileName string, names map[string]bool) bool
 	}
 	for _, key := range c.repoPathKeys(file) {
 		for owner := range c.managedPathOwners[key] {
-			if names[owner] {
+			if owner != fileName && names[owner] {
 				return true
 			}
 		}
@@ -249,7 +307,7 @@ func (c *Config) ResolveManagedFileSelection(repoName string, entries []string) 
 
 	selectedDefaults := make([]string, 0, len(defaults))
 	for _, name := range defaults {
-		if explicitSet[name] || c.sharesRepoPathWith(name, explicitSet) {
+		if explicitSet[name] || c.sharesRepoPathWith(name, explicitSet) || c.sharesRepoPathWith(name, optOuts) {
 			continue
 		}
 		selectedDefaults = append(selectedDefaults, name)

@@ -4,10 +4,12 @@
 # alternate_paths: Any paths listed here will be treated as the same file and renamed to the main repo_path
 
 # Default files are applied to every non-archived, non-fork repo. They are
-# adopt-only: an existing unmanaged file is left untouched. Add `!<name>` to a
-# repo's managed-files property to opt that repo out of a default file.
+# adopt-only: only a file carrying its unique adoption marker line is updated.
+# Add `!<name>` to a repo's managed-files property to opt that repo out of a
+# default file; opting out of any file that writes the same repo path also opts
+# out of the default.
 default_files:
-  - dependabot
+  - dependabot-actions
 
 # Groups allow inheriting a potentially evolving set of templates for a particular project type without needing to
 # constantly update the list of files in the repo settings
@@ -194,6 +196,15 @@ files:
     repo_path: .github/dependabot.yml
     alternate_paths:
       - .github/dependabot.yaml
+
+  - name: dependabot-actions
+    template_name: dependabot-actions.yml
+    adoption_marker: "repo-content-updater:dependabot-actions"
+    repo_path: .github/dependabot.yml
+    alternate_paths:
+      - .github/dependabot.yaml
+    requires_paths:
+      - .github/workflows
 
   - name: go-makefile
     template_name: go-makefile

@@ -124,11 +124,34 @@ func TestResolveManagedFileSelection(t *testing.T) {
 	t.Run("defaults are added to every repo", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", nil)
 		assert.Empty(t, selection.Explicit)
-		assert.Equal(t, []string{"dependabot"}, selection.Defaults)
+		assert.Equal(t, []string{"dependabot-actions"}, selection.Defaults)
 	})
 
-	t.Run("opt-out removes a default", func(t *testing.T) {
+	t.Run("default resolves to the github-actions template", func(t *testing.T) {
+		assert.Equal(t, []string{"dependabot-actions"}, cfg.DefaultFiles)
+		file := cfg.GetFileInfo("dependabot-actions")
+		if assert.NotNil(t, file) {
+			assert.Equal(t, "dependabot-actions.yml", file.TemplateName)
+			assert.Equal(t, ".github/dependabot.yml", file.RepoPath)
+			assert.Equal(t, []string{".github/dependabot.yaml"}, file.AlternatePaths)
+			assert.Equal(t, []string{".github/workflows"}, file.RequiresPaths)
+		}
+	})
+
+	t.Run("opt-out of dependabot removes the default via its shared repo path", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", []string{"!dependabot"})
+		assert.Empty(t, selection.Explicit)
+		assert.Empty(t, selection.Defaults)
+	})
+
+	t.Run("opt-out of go-dependabot removes the default via its shared repo path", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!go-dependabot"})
+		assert.Empty(t, selection.Explicit)
+		assert.Empty(t, selection.Defaults)
+	})
+
+	t.Run("opt-out of dependabot-actions removes the default", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!dependabot-actions"})
 		assert.Empty(t, selection.Explicit)
 		assert.Empty(t, selection.Defaults)
 	})
@@ -158,7 +181,7 @@ func TestResolveManagedFileSelection(t *testing.T) {
 		assert.Empty(t, selection.Defaults)
 	})
 
-	t.Run("explicit dependabot keeps explicit behavior", func(t *testing.T) {
+	t.Run("explicit dependabot suppresses the default via its shared repo path", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependabot"})
 		assert.Equal(t, []string{"dependabot"}, selection.Explicit)
 		assert.Empty(t, selection.Defaults)
@@ -189,9 +212,11 @@ files:
     repo_path: .github/workflows/workflow.yml
     companion_files:
       - script
+    adoption_marker: test:workflow
   - name: script
     template_name: script.sh
     repo_path: .github/scripts/script.sh
+    adoption_marker: test:script
 `)
 
 	t.Run("default includes companions", func(t *testing.T) {
@@ -276,6 +301,73 @@ files:
 	assert.ErrorContains(t, err, "same repo path")
 }
 
+func TestLoadConfigRejectsDefaultFileWithoutAdoptionMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+default_files:
+  - first
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "adoption_marker")
+	assert.ErrorContains(t, err, "first")
+}
+
+func TestLoadConfigRejectsInvalidRequiresPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		required string
+		wantErr  string
+	}{
+		{name: "parent traversal", required: "../outside", wantErr: "must not contain '..'"},
+		{name: "nested parent traversal", required: ".github/../outside", wantErr: "must not contain '..'"},
+		{name: "absolute", required: "/etc/passwd", wantErr: "must be relative"},
+		{name: "empty", required: `""`, wantErr: "empty entry"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			err := os.WriteFile(path, []byte(`
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+    requires_paths:
+      - `+tt.required+`
+`), 0o644)
+			assert.Nil(t, err)
+
+			_, err = config.LoadConfig(path)
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestLoadConfigRejectsDuplicateAdoptionMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+    adoption_marker: shared-marker
+  - name: second
+    template_name: second.yml
+    repo_path: .github/second.yml
+    adoption_marker: shared-marker
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "adoption_marker")
+	assert.ErrorContains(t, err, "shared-marker")
+}
+
 func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
@@ -285,7 +377,7 @@ func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
 		".github/dependabot.yaml",
 	} {
 		canonical, ok := cfg.ResolveManagedFileName(sharedPath)
-		assert.False(t, ok, "path %q must not resolve when shared by dependabot and go-dependabot", sharedPath)
+		assert.False(t, ok, "path %q must not resolve when shared by dependabot, go-dependabot, and dependabot-actions", sharedPath)
 		assert.Empty(t, canonical)
 	}
 
@@ -296,6 +388,10 @@ func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
 	goCanonical, ok := cfg.ResolveManagedFileName("go-dependabot")
 	assert.True(t, ok)
 	assert.Equal(t, "go-dependabot", goCanonical)
+
+	actionsCanonical, ok := cfg.ResolveManagedFileName("dependabot-actions")
+	assert.True(t, ok)
+	assert.Equal(t, "dependabot-actions", actionsCanonical)
 
 	expanded, err := cfg.ExpandManagedFileEntries([]string{".github/dependabot.yml"})
 	assert.Nil(t, err)
