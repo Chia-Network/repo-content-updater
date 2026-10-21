@@ -199,8 +199,10 @@ workflow content itself adds a payload.
 
 IOC matches, and Unicode or confusable-character findings in files changed by this update, are blocking. \
 Do not clear them.
-Pre-existing findings in unchanged release files are context for this update, not a reason to block.
-Findings in binary or media blobs are not text findings and are context for this update.
+Pre-existing Unicode or confusable findings in unchanged release files are context for this update, \
+not a reason to block.
+Codepoint matches in binary or media blobs are not text findings and are context for this update.
+A changed media path is still a steganography signal.
 You may only agree with blocking findings or escalate them.
 Generic exec, spawn, child_process, base64, and eval hits are context, including inside compiled
 bundles. Other heuristic hits stay blocking unless the scan report is warn_only.
