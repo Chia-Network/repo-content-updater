@@ -1,7 +1,10 @@
 package config_test
 
 import (
+	"bytes"
+	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -112,6 +115,151 @@ func TestEnsureCompanionFilesPairsWorkflowWithFormatter(t *testing.T) {
 	legacyFinalized, err := cfg.EnsureCompanionFiles([]string{"dependabot-cursor-review"})
 	assert.Nil(t, err)
 	assert.Equal(t, expected, legacyFinalized)
+}
+
+func TestResolveManagedFileSelection(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	t.Run("defaults are added to every repo", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", nil)
+		assert.Empty(t, selection.Explicit)
+		assert.Equal(t, []string{"dependabot"}, selection.Defaults)
+	})
+
+	t.Run("opt-out removes a default", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!dependabot"})
+		assert.Empty(t, selection.Explicit)
+		assert.Empty(t, selection.Defaults)
+	})
+
+	t.Run("opt-out removes an explicitly selected file", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"group:base", "!dependabot"})
+		assert.NotContains(t, selection.Explicit, "dependabot")
+		assert.Contains(t, selection.Explicit, "dep-review")
+		assert.Empty(t, selection.Defaults)
+	})
+
+	t.Run("opt-out removes an explicit file and its companions", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-cursor-review", "!dependency-cursor-review", "!dependabot"})
+		assert.Empty(t, selection.Explicit)
+		assert.Empty(t, selection.Defaults)
+	})
+
+	t.Run("opt-out of a required companion is rejected", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-cursor-review", "!malware-verdict-formatter"})
+		assert.Contains(t, selection.Explicit, "dependency-cursor-review")
+		assert.Contains(t, selection.Explicit, "malware-verdict-formatter")
+	})
+
+	t.Run("go-dependabot suppresses the default via its shared repo path", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"go-dependabot"})
+		assert.Equal(t, []string{"go-dependabot"}, selection.Explicit)
+		assert.Empty(t, selection.Defaults)
+	})
+
+	t.Run("explicit dependabot keeps explicit behavior", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependabot"})
+		assert.Equal(t, []string{"dependabot"}, selection.Explicit)
+		assert.Empty(t, selection.Defaults)
+	})
+}
+
+func TestResolveManagedFileSelectionDefaultCompanions(t *testing.T) {
+	cfg := loadSelectionTestConfig(t, `
+default_files:
+  - workflow
+files:
+  - name: workflow
+    template_name: workflow.yml
+    repo_path: .github/workflows/workflow.yml
+    companion_files:
+      - script
+  - name: script
+    template_name: script.sh
+    repo_path: .github/scripts/script.sh
+`)
+
+	t.Run("default includes companions", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", nil)
+		assert.Equal(t, []string{"workflow", "script"}, selection.Defaults)
+	})
+
+	t.Run("opt-out of a required default companion is rejected", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!script"})
+		assert.Equal(t, []string{"workflow", "script"}, selection.Defaults)
+	})
+
+	t.Run("opt-out of a default root removes its companions", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!workflow"})
+		assert.Empty(t, selection.Defaults)
+	})
+}
+
+func loadSelectionTestConfig(t *testing.T, contents string) *config.Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(contents), 0o644)
+	assert.Nil(t, err)
+	cfg, err := config.LoadConfig(path)
+	assert.Nil(t, err)
+	return cfg
+}
+
+func TestUnknownManagedFileLogIncludesRepo(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	}()
+
+	selection := cfg.ResolveManagedFileSelection("example-repo", []string{"does-not-exist"})
+	assert.Empty(t, selection.Explicit)
+	assert.Contains(t, logs.String(), "does-not-exist")
+	assert.Contains(t, logs.String(), "example-repo")
+}
+
+func TestLoadConfigRejectsUnknownDefaultFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+default_files:
+  - does-not-exist
+files:
+  - name: dependabot
+    template_name: dependabot.yml
+    repo_path: .github/dependabot.yml
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "does-not-exist")
+}
+
+func TestLoadConfigRejectsDefaultPathCollision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+default_files:
+  - first
+  - second
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/dependabot.yml
+  - name: second
+    template_name: second.yml
+    repo_path: .github/dependabot.yml
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "same repo path")
 }
 
 func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {

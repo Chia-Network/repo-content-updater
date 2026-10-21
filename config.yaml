@@ -3,6 +3,12 @@
 # repo_path: The path in the repo to write the file to
 # alternate_paths: Any paths listed here will be treated as the same file and renamed to the main repo_path
 
+# Default files are applied to every non-archived, non-fork repo. They are
+# adopt-only: an existing unmanaged file is left untouched. Add `!<name>` to a
+# repo's managed-files property to opt that repo out of a default file.
+default_files:
+  - dependabot
+
 # Groups allow inheriting a potentially evolving set of templates for a particular project type without needing to
 # constantly update the list of files in the repo settings
 # Just set `group:<groupname>` in the repo settings instead
