@@ -29,7 +29,6 @@ from pathlib import Path
 from formatter_bundle_inventory import (
     consumer_sync_canonical_to_template,
     managed_file_index,
-    parse_dcr_companion_files,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -63,17 +62,12 @@ def _shellcheck_binaries() -> list[str]:
 def _consumer_script_payloads() -> list[tuple[str, bytes]]:
     """Repo-relative `.github/scripts` paths and the canonical bytes synced there."""
     config_text = _CONFIG.read_text(encoding="utf-8")
-    index = managed_file_index(config_text)
     canonical_by_template = {
         template: canonical
         for canonical, template in consumer_sync_canonical_to_template(config_text)
     }
     payloads: list[tuple[str, bytes]] = []
-    for name in parse_dcr_companion_files(config_text):
-        entry = index.get(name)
-        if entry is None:
-            continue
-        template_name, repo_path = entry
+    for _name, (template_name, repo_path) in managed_file_index(config_text).items():
         if not repo_path.startswith(".github/scripts/"):
             continue
         canonical = canonical_by_template.get(template_name)
@@ -191,6 +185,7 @@ class ConsumerLintTest(unittest.TestCase):
             self.assertEqual(
                 {path.name for path in sh_files},
                 {
+                    "check_node_runtime.sh",
                     "upstream_malware_scan.sh",
                     "upstream_malware_scan_lib.sh",
                     "upstream_malware_scan_findings.sh",
