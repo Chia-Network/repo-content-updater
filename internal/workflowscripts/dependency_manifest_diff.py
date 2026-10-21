@@ -557,8 +557,26 @@ def _plain_yarn_line(line: str) -> tuple[str, str] | None:
     return None
 
 
+def _yarn_keys(line: str) -> set[str]:
+    """Key tokens of a body line. A comma joins keys; a colon follows a section key."""
+    keys: set[str] = set()
+    for part in line.strip().split(","):
+        part = part.strip()
+        if not part:
+            continue
+        head = re.split(r"[\s:]", part, maxsplit=1)[0].strip().strip('"').strip()
+        if head:
+            keys.add(head)
+    return keys
+
+
 def _yarn_rest(payload: str) -> str | None:
-    """Header left when the body is one version line, one resolved line, and hash lines."""
+    """Header and dependency sub-blocks left; plain locator lines dropped.
+
+    A line keyed on version, resolved, integrity or checksum must be in the
+    plain allowlisted form, or the stanza is not canonical. Any other line,
+    including a `dependencies:` or `optionalDependencies:` block, stays.
+    """
     lines = payload.splitlines()
     names = _YARN_HEADER_RE.findall(lines[0]) if lines else []
     if len(names) != 1:
@@ -567,6 +585,9 @@ def _yarn_rest(payload: str) -> str | None:
     kept = [lines[0]]
     for line in lines[1:]:
         if not line:
+            kept.append(line)
+            continue
+        if not (_yarn_keys(line) & _LOCATOR_KEYS):
             kept.append(line)
             continue
         field = _plain_yarn_line(line)

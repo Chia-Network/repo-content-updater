@@ -93,3 +93,25 @@ class LockLocatorCanonicalTest(unittest.TestCase):
             old, new = stanza("1.2.3", extra), stanza("1.2.4", extra)
             self.assertFalse(manifest._entries_explain("yarn", old, new, updates), extra)
             self.assertFalse(manifest._lock_covers_listed("yarn", old, new, updates, {"left-pad"}), extra)
+
+    def test_yarn_dependency_block_stays_compared(self) -> None:
+        registry = "https://registry.npmjs.org/left-pad/-/left-pad-{}.tgz"
+        updates = [_bump("1.2.3", "1.2.4")]
+
+        def stanza(version: str, dep_version: str) -> str:
+            return (
+                "left-pad@^1.2.3:\n"
+                f'  version "{version}"\n'
+                f'  resolved "{registry.format(version)}"\n'
+                f'  integrity "sha512-{version}"\n'
+                "  dependencies:\n"
+                f'    minimist "{dep_version}"\n'
+                "  optionalDependencies:\n"
+                '    lodash "^4.17.20"\n'
+            )
+
+        old = stanza("1.2.3", "1.2.8")
+        self.assertTrue(manifest._entries_explain("yarn", old, stanza("1.2.4", "1.2.8"), updates))
+        self.assertTrue(manifest._lock_covers_listed("yarn", old, stanza("1.2.4", "1.2.8"), updates, {"left-pad"}))
+        self.assertFalse(manifest._entries_explain("yarn", old, stanza("1.2.4", "1.2.9"), updates))
+        self.assertFalse(manifest._lock_covers_listed("yarn", old, stanza("1.2.4", "1.2.9"), updates, {"left-pad"}))

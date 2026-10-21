@@ -444,6 +444,10 @@ def _load_updates(path: Path) -> list[dict]:
     return [item for item in payload if isinstance(item, dict)]
 
 
+def _has_upstream_link(updates: list[dict]) -> bool:
+    return any(_REPO_RE.fullmatch(str(item.get("upstreamRepo") or "")) for item in updates)
+
+
 def _clone(repo: str, dest: Path) -> bool:
     dest.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://github.com/{repo}.git"
@@ -459,6 +463,7 @@ def _clone(repo: str, dest: Path) -> bool:
 def _scan_one(update: dict, dest: Path, scan_script: Path) -> dict:
     if not scannable(update):
         return uncovered(update, "unresolved")
+    dest = dest.resolve()
     checkout = dest / ".upstream-dependency"
     if not _clone(str(update["upstreamRepo"]), checkout):
         return uncovered(update, "unresolved")
@@ -472,6 +477,8 @@ def _scan_one(update: dict, dest: Path, scan_script: Path) -> dict:
         cwd=dest,
         env=env,
         check=False,
+        capture_output=True,
+        text=True,
     )
     report_path = dest / "malware_scan_report.json"
     if not report_path.is_file():
@@ -485,7 +492,12 @@ def _scan_one(update: dict, dest: Path, scan_script: Path) -> dict:
     tagged = _tag(update, report)
     if proc.returncode != 0 and tagged.get("status") != "fail":
         tagged["scan_conclusive"] = False
-        tagged["not_scanned_reason"] = tagged.get("not_scanned_reason") or "not_scanned"
+        tagged["not_scanned_reason"] = "scanner_error"
+        stderr_tail = "\n".join(proc.stderr.strip().splitlines()[-5:]) if proc.stderr and proc.stderr.strip() else ""
+        errors = list(tagged.get("errors") or [])
+        if stderr_tail:
+            errors.append(stderr_tail)
+        tagged["errors"] = errors
     return tagged
 
 
@@ -551,8 +563,15 @@ def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
 def main() -> None:
     scan_script = Path(__file__).resolve().parent / "upstream_malware_scan.sh"
     updates = _load_updates(Path("dependency_updates.json"))
+    if updates and not _has_upstream_link(updates):
+        report = uncovered({}, "no_upstream_link")
+        summary = render_summary(report, [])
+        Path("malware_scan_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        Path("malware_scan_summary.md").write_text(summary, encoding="utf-8")
+        _emit(report, summary)
+        return
     gaps = manifest_gaps(updates)
-    work = Path(".dcr-dependency-scans")
+    work = Path(".dcr-dependency-scans").resolve()
     if work.exists():
         shutil.rmtree(work)
     work.mkdir()

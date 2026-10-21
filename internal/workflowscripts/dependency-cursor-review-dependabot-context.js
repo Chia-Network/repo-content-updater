@@ -319,8 +319,7 @@ async function runDependabotContext({ core }) {
   fs.writeFileSync('dependency_updates.json', JSON.stringify(parsed.updates, null, 2));
 
   if (!parsed.updates.some((item) => item.upstreamRepo)) {
-    core.setFailed('PR body is missing an upstream GitHub repository link.');
-    return;
+    core.warning('PR body is missing an upstream GitHub repository link; the scan will record no_upstream_link.');
   }
 
   const normalizedReleaseNotes = parsed.releaseNotes || 'PR body did not include a Release notes details section.';

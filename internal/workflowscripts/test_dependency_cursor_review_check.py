@@ -66,7 +66,7 @@ class PublishedCheckTest(unittest.TestCase):
                         "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
                     },
                 )
-                self.assertIn("**Verdict: suspicious**", written["result"])
+                self.assertIn("**Verdict: inconclusive**", written["result"])
                 self.assertEqual(written["check"], "fail")
                 self.assertIs(written["complete"], False)
         shaped = self._run(

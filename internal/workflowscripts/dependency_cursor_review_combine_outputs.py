@@ -108,6 +108,15 @@ def _extract_text(payload) -> str:
         return str(payload)
 
 
+def _final_message(payload) -> str:
+    """The final assistant message, written separately from the concatenated result."""
+    if isinstance(payload, dict):
+        value = payload.get("final_message")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 _REPORT_SHA256_ENV = "MALWARE_SCAN_REPORT_SHA256"
 
 
@@ -169,10 +178,12 @@ def main() -> None:
         "trusted_malware_verdict_formatter",
     )
     agent_text = _extract_text(malware_payload)
+    compatibility_text = _final_message(compatibility_payload) or _extract_text(compatibility_payload)
     published = formatter.compose_published_review(
         report,
         agent_text,
-        _extract_text(compatibility_payload),
+        compatibility_text,
+        agent_final_text=_final_message(malware_payload) or agent_text,
     )
     malware_text = published["malware_text"]
     compatibility_text = published["compatibility_text"]
@@ -204,6 +215,13 @@ def _optional_analysis(name: str) -> str:
     return _extract_text(_load_any(value))
 
 
+def _optional_final_message(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value or not Path(value).is_file():
+        return ""
+    return _final_message(_load_any(value))
+
+
 def _enforce_published_check() -> None:
     """Recompute the check from the sealed report. A stored check string is ignored."""
     _drop_pr_head_scripts_from_sys_path()
@@ -219,6 +237,7 @@ def _enforce_published_check() -> None:
         report,
         _optional_analysis("DCR_MALWARE_JSON"),
         _optional_analysis("DCR_COMPAT_JSON"),
+        agent_final_text=_optional_final_message("DCR_MALWARE_JSON"),
     )
     if published.get("check") != "pass":
         _fail_closed("Dependency review did not pass.")
