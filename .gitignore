@@ -20,4 +20,5 @@ templates/dependency-cursor-review-*.py
 templates/dependency-cursor-review-*.js
 templates/upstream-malware-scan*.sh
 templates/upstream-release-checkout.sh
+templates/check-node-runtime.sh
 templates/github-scripts-init.py

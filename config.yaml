@@ -59,8 +59,14 @@ files:
   - name: node-runtime-check
     template_name: check-node-runtime.yml
     repo_path: .github/workflows/check-node-runtime.yml
+    companion_files:
+      - node-runtime-check-script
     alternate_paths:
       - .github/workflows/check-node-runtime.yaml
+
+  - name: node-runtime-check-script
+    template_name: check-node-runtime.sh
+    repo_path: .github/scripts/check_node_runtime.sh
 
   - name: dependency-cursor-review
     template_name: dependency-cursor-review.yml

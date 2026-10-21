@@ -13,12 +13,22 @@ _MANAGED_FILE_ENTRY = re.compile(
     re.MULTILINE,
 )
 _DCR_COMPANION_BLOCK = re.compile(
-    rf"- name: {_DCR_WORKFLOW}\n(?:.*\n)*?    companion_files:\n((?:      - .+\n)+)",
+    rf"- name: {_DCR_WORKFLOW}\n"
+    r"    template_name: [^\n]+\n"
+    r"    repo_path: [^\n]+\n"
+    r"(?:    [^\n]*\n)*?"
+    r"    companion_files:\n"
+    r"((?:      - .+\n)+)",
     re.MULTILINE,
 )
 _DCR_GROUP_TEMPLATES = re.compile(
     rf"- name: {_DCR_WORKFLOW}\n(?:.*\n)*?    templates:\n((?:      - .+\n)+)",
     re.MULTILINE,
+)
+
+# Extra consumer mirrors that are not dependency-cursor-review companions.
+EXTRA_CONSUMER_SYNC_CANONICAL_TO_TEMPLATE: tuple[tuple[str, str], ...] = (
+    ("check_node_runtime.sh", "check-node-runtime.sh"),
 )
 
 # Repo-content-updater authoring mirror only (not consumer trusted checkout).
@@ -102,6 +112,7 @@ def consumer_sync_canonical_to_template(
 def sync_canonical_to_template(config_text: str) -> tuple[tuple[str, str], ...]:
     return (
         *consumer_sync_canonical_to_template(config_text),
+        *EXTRA_CONSUMER_SYNC_CANONICAL_TO_TEMPLATE,
         *AUTHORING_ONLY_SYNC_CANONICAL_TO_TEMPLATE,
     )
 

@@ -8,6 +8,8 @@ from pathlib import Path
 import formatter_runtime_bundle
 import trusted_formatter_loader_cold_start as cold_start
 from formatter_bundle_inventory import (
+    AUTHORING_ONLY_SYNC_CANONICAL_TO_TEMPLATE,
+    EXTRA_CONSUMER_SYNC_CANONICAL_TO_TEMPLATE,
     consumer_sync_canonical_to_template,
     managed_formatter_sync_pairs,
     parse_dcr_expanded_managed_names,
@@ -88,7 +90,12 @@ class FormatterBundleInventoryTest(unittest.TestCase):
             len(manifest_lines),
             msg="trusted manifest must not list any repo_path more than once",
         )
-        self.assertEqual(len(sync_canonical_to_template(config)), len(managed_formatter_sync_pairs(config)) + 1)
+        self.assertEqual(
+            len(sync_canonical_to_template(config)),
+            len(managed_formatter_sync_pairs(config))
+            + len(EXTRA_CONSUMER_SYNC_CANONICAL_TO_TEMPLATE)
+            + len(AUTHORING_ONLY_SYNC_CANONICAL_TO_TEMPLATE),
+        )
 
     def test_trusted_dcr_script_repo_paths_has_no_duplicates(self) -> None:
         config = _CONFIG.read_text(encoding="utf-8")
