@@ -362,10 +362,65 @@ func (c *Content) shouldAdoptExistingFile(repoName string, fileinfo *config.File
 	return true, nil
 }
 
+// requiredPathExists reports whether repoRelPath exists under root. A directory
+// only satisfies the requirement when it directly contains a .yml or .yaml file.
+func requiredPathExists(root, repoRelPath string) (bool, error) {
+	fullPath := filepath.Join(root, filepath.FromSlash(repoRelPath))
+	info, err := os.Stat(fullPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() {
+		return true, nil
+	}
+
+	entries, err := os.ReadDir(fullPath)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(entry.Name())) {
+		case ".yml", ".yaml":
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// firstMissingRequiredPath returns the first requires_paths entry that is not
+// satisfied under root, or "" when every entry is satisfied.
+func firstMissingRequiredPath(root string, requiredPaths []string) (string, error) {
+	for _, requiredPath := range requiredPaths {
+		exists, err := requiredPathExists(root, requiredPath)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return requiredPath, nil
+		}
+	}
+	return "", nil
+}
+
 // prepareManagedFile applies per-file selection and template policy, returning
 // skip=true when the file should be left untouched.
 func (c *Content) prepareManagedFile(repoName string, fileinfo *config.File, origin config.FileOrigin, cfg *config.Config, repoConfig Config) ([]byte, bool, error) {
 	if origin == config.OriginDefault {
+		missing, err := firstMissingRequiredPath(repoDir(repoName), fileinfo.RequiresPaths)
+		if err != nil {
+			return nil, false, err
+		}
+		if missing != "" {
+			log.Printf("Skipping default %s for %s: required path %s missing\n", fileinfo.Name, repoName, missing)
+			return nil, true, nil
+		}
+
 		adopt, err := c.shouldAdoptExistingFile(repoName, fileinfo)
 		if err != nil {
 			return nil, false, err

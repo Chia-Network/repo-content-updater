@@ -134,6 +134,7 @@ func TestResolveManagedFileSelection(t *testing.T) {
 			assert.Equal(t, "dependabot-actions.yml", file.TemplateName)
 			assert.Equal(t, ".github/dependabot.yml", file.RepoPath)
 			assert.Equal(t, []string{".github/dependabot.yaml"}, file.AlternatePaths)
+			assert.Equal(t, []string{".github/workflows"}, file.RequiresPaths)
 		}
 	})
 
@@ -315,6 +316,36 @@ files:
 	_, err = config.LoadConfig(path)
 	assert.ErrorContains(t, err, "adoption_marker")
 	assert.ErrorContains(t, err, "first")
+}
+
+func TestLoadConfigRejectsInvalidRequiresPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		required string
+		wantErr  string
+	}{
+		{name: "parent traversal", required: "../outside", wantErr: "must not contain '..'"},
+		{name: "nested parent traversal", required: ".github/../outside", wantErr: "must not contain '..'"},
+		{name: "absolute", required: "/etc/passwd", wantErr: "must be relative"},
+		{name: "empty", required: `""`, wantErr: "empty entry"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			err := os.WriteFile(path, []byte(`
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+    requires_paths:
+      - `+tt.required+`
+`), 0o644)
+			assert.Nil(t, err)
+
+			_, err = config.LoadConfig(path)
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
 }
 
 func TestLoadConfigRejectsDuplicateAdoptionMarker(t *testing.T) {

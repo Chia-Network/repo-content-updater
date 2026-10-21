@@ -16,7 +16,7 @@ Looks for the `managed-files` custom property on a repo, and parses out a comma 
 
 For example, the value could be: `group:base,go-test`. This would pull in the base group of files and the go-test file.
 
-Files listed under `default_files` are applied to every non-archived, non-fork repo whose name does not contain "private" or end in "-dos", even when the repo has no `managed-files` property. The default is `dependabot-actions`, a GitHub Actions-only Dependabot config. Default files are adopt-only: a file is written only when the path is absent or every existing copy contains the file's adoption marker line (`# <adoption_marker>`), so an existing full managed config or other unmanaged file is left untouched. Each default file must declare a unique `adoption_marker`. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot-actions`. Opting out of any file that writes the same repo path also opts out of the default, so `!dependabot` and `!go-dependabot` both opt out of `dependabot-actions`. A default file is not added when an explicitly selected file writes the same repo path.
+Files listed under `default_files` are applied to every non-archived, non-fork repo whose name does not contain "private" or end in "-dos", even when the repo has no `managed-files` property. The default is `dependabot-actions`, a GitHub Actions-only Dependabot config. A default file may set `requires_paths`; when any required path is absent from the cloned repo, the default is skipped. The `dependabot-actions` default requires `.github/workflows` containing at least one `.yml`/`.yaml` file, so it only applies to repos that actually use GitHub Actions. Default files are adopt-only: a file is written only when the path is absent or every existing copy contains the file's adoption marker line (`# <adoption_marker>`), so an existing full managed config or other unmanaged file is left untouched. Each default file must declare a unique `adoption_marker`. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot-actions`. Opting out of any file that writes the same repo path also opts out of the default, so `!dependabot` and `!go-dependabot` both opt out of `dependabot-actions`. A default file is not added when an explicitly selected file writes the same repo path.
 
 ## Config Format
 
@@ -51,6 +51,8 @@ files:
     repo_path: .github/dependabot.yml
     alternate_paths:
       - .github/dependabot.yaml
+    requires_paths:
+      - .github/workflows
 
   - name: dep-review
     template_name: dependency-review.yml
@@ -63,7 +65,7 @@ files:
 
 `files` is where every supported template must be listed.
 
-`default_files` lists files that are managed on every eligible repo unless the repo opts out with `!<name>` in its `managed-files` property. The default `dependabot-actions` only targets the `github-actions` ecosystem with a monthly schedule and groups all updates into one PR. Opting out of `dependabot` or `go-dependabot` also opts out of the default because they share a repo path. Default files are only added to non-archived, non-fork repos whose names do not contain "private" or end in "-dos".
+`default_files` lists files that are managed on every eligible repo unless the repo opts out with `!<name>` in its `managed-files` property. The default `dependabot-actions` only targets the `github-actions` ecosystem with a monthly schedule and groups all updates into one PR; it is only applied to repos whose `.github/workflows` directory contains at least one workflow file. Opting out of `dependabot` or `go-dependabot` also opts out of the default because they share a repo path. Default files are only added to non-archived, non-fork repos whose names do not contain "private" or end in "-dos".
 
 ### Malware verdict formatter (canonical vs templates)
 
@@ -74,6 +76,7 @@ The dependency-cursor-review workflow ships formatter and review companion scrip
 * `repo_path` is the path within the repo to place the file
 * `alternate_paths` is a list of alternate/equivalent paths this template might have been named before being managed. These files will be renamed and updated to the latest version of the template, if present
 * `adoption_marker` is required for every default file and must be unique. A default file is only updated when each existing copy contains the line `# <adoption_marker>`
+* `requires_paths` is an optional list of repo-relative paths that must exist for this file to be applied as a default. A required directory must directly contain at least one `.yml` or `.yaml` file. Entries must be non-empty, relative, and must not contain `..`. This field is ignored for explicit selections.
 
 ## Bypass PR
 

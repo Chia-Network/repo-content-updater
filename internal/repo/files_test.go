@@ -252,7 +252,44 @@ func TestPrepareManagedFileDefaultActionsAdoption(t *testing.T) {
 	markerLine := "# " + fileinfo.AdoptionMarker
 	fullManagedFirstLine := "# This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back"
 
-	t.Run("writes when absent", func(t *testing.T) {
+	t.Run("skips when .github/workflows is absent", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-no-workflows"), "notes.txt", "")
+		_, skip, err := content.prepareManagedFile("actions-no-workflows", fileinfo, config.OriginDefault, cfg, Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !skip {
+			t.Fatal("default should be skipped when .github/workflows is absent")
+		}
+	})
+
+	t.Run("skips when .github/workflows has no workflow files", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-empty-workflows"), filepath.Join(".github", "workflows", "notes.txt"), "")
+		_, skip, err := content.prepareManagedFile("actions-empty-workflows", fileinfo, config.OriginDefault, cfg, Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !skip {
+			t.Fatal("default should be skipped when .github/workflows has no workflow files")
+		}
+	})
+
+	t.Run("writes when a workflow .yml exists", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-workflow"), filepath.Join(".github", "workflows", "ci.yml"), "")
+		rendered, skip, err := content.prepareManagedFile("actions-workflow", fileinfo, config.OriginDefault, cfg, Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if skip {
+			t.Fatal("default should be written when a workflow .yml exists")
+		}
+		if len(rendered) == 0 {
+			t.Fatal("rendered content is empty")
+		}
+	})
+
+	t.Run("writes when absent with a workflow present", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-absent"), filepath.Join(".github", "workflows", "ci.yml"), "")
 		rendered, skip, err := content.prepareManagedFile("actions-absent", fileinfo, config.OriginDefault, cfg, Config{})
 		if err != nil {
 			t.Fatal(err)
@@ -265,7 +302,22 @@ func TestPrepareManagedFileDefaultActionsAdoption(t *testing.T) {
 		}
 	})
 
+	t.Run("explicit selection ignores requires_paths", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-explicit"), "notes.txt", "")
+		rendered, skip, err := content.prepareManagedFile("actions-explicit", fileinfo, config.OriginExplicit, cfg, Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if skip {
+			t.Fatal("explicit selection should not be skipped by requires_paths")
+		}
+		if len(rendered) == 0 {
+			t.Fatal("rendered content is empty")
+		}
+	})
+
 	t.Run("writes a file carrying the adoption marker", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-marked"), filepath.Join(".github", "workflows", "ci.yml"), "")
 		writeDependabotTestFile(t, repoDir("actions-marked"), fileinfo.RepoPath, markerLine+"\nversion: 2\n")
 		_, skip, err := content.prepareManagedFile("actions-marked", fileinfo, config.OriginDefault, cfg, Config{})
 		if err != nil {
@@ -277,6 +329,7 @@ func TestPrepareManagedFileDefaultActionsAdoption(t *testing.T) {
 	})
 
 	t.Run("writes a file carrying the adoption marker at the alternate path", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-alternate"), filepath.Join(".github", "workflows", "ci.yml"), "")
 		writeDependabotTestFile(t, repoDir("actions-alternate"), fileinfo.AlternatePaths[0], markerLine+"\nversion: 2\n")
 		_, skip, err := content.prepareManagedFile("actions-alternate", fileinfo, config.OriginDefault, cfg, Config{})
 		if err != nil {
@@ -288,6 +341,7 @@ func TestPrepareManagedFileDefaultActionsAdoption(t *testing.T) {
 	})
 
 	t.Run("skips a full managed config carrying the generic marker", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-full"), filepath.Join(".github", "workflows", "ci.yml"), "")
 		writeDependabotTestFile(t, repoDir("actions-full"), fileinfo.RepoPath, fullManagedFirstLine+"\nversion: 2\n")
 		_, skip, err := content.prepareManagedFile("actions-full", fileinfo, config.OriginDefault, cfg, Config{})
 		if err != nil {
@@ -299,6 +353,7 @@ func TestPrepareManagedFileDefaultActionsAdoption(t *testing.T) {
 	})
 
 	t.Run("skips an unmarked file", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-unmarked"), filepath.Join(".github", "workflows", "ci.yml"), "")
 		writeDependabotTestFile(t, repoDir("actions-unmarked"), fileinfo.RepoPath, "version: 2\n")
 		_, skip, err := content.prepareManagedFile("actions-unmarked", fileinfo, config.OriginDefault, cfg, Config{})
 		if err != nil {

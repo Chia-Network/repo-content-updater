@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -57,6 +59,9 @@ type File struct {
 	Aliases        []string `yaml:"aliases"`
 	CompanionFiles []string `yaml:"companion_files"`
 	AdoptionMarker string   `yaml:"adoption_marker"`
+	// RequiresPaths lists repo-relative paths that must exist in the cloned repo
+	// for this file to be applied as a default. It is ignored for explicit selections.
+	RequiresPaths []string `yaml:"requires_paths"`
 }
 
 // LoadConfig loads config from the given path
@@ -74,6 +79,10 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	config.buildManagedFileLookup()
+
+	if err := config.validateRequiresPaths(); err != nil {
+		return nil, err
+	}
 
 	if err := config.validateAdoptionMarkers(); err != nil {
 		return nil, err
@@ -133,6 +142,27 @@ func (c *Config) resolveDefaultFiles() error {
 	}
 
 	c.DefaultFiles = roots
+	return nil
+}
+
+func (c *Config) validateRequiresPaths() error {
+	for i := range c.Files {
+		file := &c.Files[i]
+		for _, required := range file.RequiresPaths {
+			if strings.TrimSpace(required) == "" {
+				return fmt.Errorf("file %q requires_paths contains an empty entry", file.Name)
+			}
+			normalized := strings.ReplaceAll(required, "\\", "/")
+			if path.IsAbs(normalized) || filepath.VolumeName(required) != "" {
+				return fmt.Errorf("file %q requires_paths entry %q must be relative", file.Name, required)
+			}
+			for _, part := range strings.Split(normalized, "/") {
+				if part == ".." {
+					return fmt.Errorf("file %q requires_paths entry %q must not contain '..'", file.Name, required)
+				}
+			}
+		}
+	}
 	return nil
 }
 

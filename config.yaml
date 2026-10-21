@@ -203,6 +203,8 @@ files:
     repo_path: .github/dependabot.yml
     alternate_paths:
       - .github/dependabot.yaml
+    requires_paths:
+      - .github/workflows
 
   - name: go-makefile
     template_name: go-makefile
