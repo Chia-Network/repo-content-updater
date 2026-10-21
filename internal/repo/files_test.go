@@ -229,6 +229,27 @@ func TestFilesForRepo(t *testing.T) {
 		}
 	})
 
+	t.Run("name rules decide default eligibility", func(t *testing.T) {
+		tests := []struct {
+			repoName string
+			want     []config.SelectedFile
+		}{
+			{repoName: "chiavdf-private", want: wantExplicit},
+			{repoName: "private-chiapos", want: wantExplicit},
+			{repoName: "chiavdf-dos", want: wantExplicit},
+			{repoName: "Chia-DOS", want: wantExplicit},
+			{repoName: "dosbox", want: wantBoth},
+		}
+		for _, tt := range tests {
+			t.Run(tt.repoName, func(t *testing.T) {
+				got := filesForRepo(selection, &github.Repository{Name: github.String(tt.repoName)})
+				if !slices.Equal(got, tt.want) {
+					t.Fatalf("files = %#v, want %#v", got, tt.want)
+				}
+			})
+		}
+	})
+
 	t.Run("defaults apply regardless of repo size", func(t *testing.T) {
 		got := filesForRepo(selection, &github.Repository{Size: github.Int(0)})
 		if !slices.Equal(got, wantBoth) {

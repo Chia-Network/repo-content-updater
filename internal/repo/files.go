@@ -155,14 +155,25 @@ func (c *Content) listOrgRepositories() ([]*github.Repository, error) {
 	return repos, nil
 }
 
+// defaultFilesEligible reports whether a repo may receive default files. Nil
+// metadata, archived repos, forks, names containing "private", and names
+// ending in "-dos" are ineligible.
+func defaultFilesEligible(repo *github.Repository) bool {
+	if repo == nil || repo.GetArchived() || repo.GetFork() {
+		return false
+	}
+	name := strings.ToLower(repo.GetName())
+	return !strings.Contains(name, "private") && !strings.HasSuffix(name, "-dos")
+}
+
 // filesForRepo applies default-file eligibility to a repo. Explicit selections
-// are always kept; defaults are only added to non-archived, non-fork repos.
+// are always kept; defaults are only added when defaultFilesEligible is true.
 func filesForRepo(selection config.ManagedFileSelection, repo *github.Repository) []config.SelectedFile {
 	files := make([]config.SelectedFile, 0, len(selection.Explicit)+len(selection.Defaults))
 	for _, name := range selection.Explicit {
 		files = append(files, config.SelectedFile{Name: name, Origin: config.OriginExplicit})
 	}
-	if repo != nil && !repo.GetArchived() && !repo.GetFork() {
+	if defaultFilesEligible(repo) {
 		for _, name := range selection.Defaults {
 			files = append(files, config.SelectedFile{Name: name, Origin: config.OriginDefault})
 		}

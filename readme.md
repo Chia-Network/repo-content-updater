@@ -16,7 +16,7 @@ Looks for the `managed-files` custom property on a repo, and parses out a comma 
 
 For example, the value could be: `group:base,go-test`. This would pull in the base group of files and the go-test file.
 
-Files listed under `default_files` are applied to every non-archived, non-fork repo, even when the repo has no `managed-files` property. Default files are adopt-only: if the target repo already has an unmarked file at that path, it is left untouched. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot`. A default file is not added when an explicitly selected file writes the same repo path.
+Files listed under `default_files` are applied to every non-archived, non-fork repo whose name does not contain "private" or end in "-dos", even when the repo has no `managed-files` property. Default files are adopt-only: if the target repo already has an unmarked file at that path, it is left untouched. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot`. A default file is not added when an explicitly selected file writes the same repo path.
 
 ## Config Format
 
@@ -56,7 +56,7 @@ files:
 
 `files` is where every supported template must be listed.
 
-`default_files` lists files that are managed on every eligible repo unless the repo opts out with `!<name>` in its `managed-files` property. Default files are only added to non-archived, non-fork repos.
+`default_files` lists files that are managed on every eligible repo unless the repo opts out with `!<name>` in its `managed-files` property. Default files are only added to non-archived, non-fork repos whose names do not contain "private" or end in "-dos".
 
 ### Malware verdict formatter (canonical vs templates)
 
