@@ -10,9 +10,8 @@ import (
 	"github.com/chia-network/repo-content-updater/internal/config"
 )
 
-// TestDefaultFileTemplatesContainManagedMarker keeps default files adopt-only:
-// an existing copy is recognized by the marker that every rendered default must
-// carry.
+// TestDefaultFileTemplatesContainManagedMarker keeps default templates carrying
+// the generic managed marker, including in the first line that adoption matches.
 func TestDefaultFileTemplatesContainManagedMarker(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -40,6 +39,9 @@ func TestDefaultFileTemplatesContainManagedMarker(t *testing.T) {
 		}
 		if !strings.Contains(strings.ToLower(string(raw)), managedFileMarker) {
 			t.Errorf("%s (%s) does not contain %q", name, file.TemplateName, managedFileMarker)
+		}
+		if !strings.Contains(strings.ToLower(templateFirstLine(raw)), managedFileMarker) {
+			t.Errorf("%s (%s) first line does not contain %q", name, file.TemplateName, managedFileMarker)
 		}
 	}
 }

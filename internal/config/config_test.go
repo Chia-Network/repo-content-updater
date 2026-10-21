@@ -124,11 +124,27 @@ func TestResolveManagedFileSelection(t *testing.T) {
 	t.Run("defaults are added to every repo", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", nil)
 		assert.Empty(t, selection.Explicit)
-		assert.Equal(t, []string{"dependabot"}, selection.Defaults)
+		assert.Equal(t, []string{"dependabot-actions"}, selection.Defaults)
 	})
 
-	t.Run("opt-out removes a default", func(t *testing.T) {
+	t.Run("default resolves to the github-actions template", func(t *testing.T) {
+		assert.Equal(t, []string{"dependabot-actions"}, cfg.DefaultFiles)
+		file := cfg.GetFileInfo("dependabot-actions")
+		if assert.NotNil(t, file) {
+			assert.Equal(t, "dependabot-actions.yml", file.TemplateName)
+			assert.Equal(t, ".github/dependabot.yml", file.RepoPath)
+			assert.Equal(t, []string{".github/dependabot.yaml"}, file.AlternatePaths)
+		}
+	})
+
+	t.Run("opt-out of dependabot removes the default via its shared repo path", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", []string{"!dependabot"})
+		assert.Empty(t, selection.Explicit)
+		assert.Empty(t, selection.Defaults)
+	})
+
+	t.Run("opt-out of go-dependabot removes the default via its shared repo path", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!go-dependabot"})
 		assert.Empty(t, selection.Explicit)
 		assert.Empty(t, selection.Defaults)
 	})
@@ -158,7 +174,7 @@ func TestResolveManagedFileSelection(t *testing.T) {
 		assert.Empty(t, selection.Defaults)
 	})
 
-	t.Run("explicit dependabot keeps explicit behavior", func(t *testing.T) {
+	t.Run("explicit dependabot suppresses the default via its shared repo path", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependabot"})
 		assert.Equal(t, []string{"dependabot"}, selection.Explicit)
 		assert.Empty(t, selection.Defaults)
@@ -285,7 +301,7 @@ func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
 		".github/dependabot.yaml",
 	} {
 		canonical, ok := cfg.ResolveManagedFileName(sharedPath)
-		assert.False(t, ok, "path %q must not resolve when shared by dependabot and go-dependabot", sharedPath)
+		assert.False(t, ok, "path %q must not resolve when shared by dependabot, go-dependabot, and dependabot-actions", sharedPath)
 		assert.Empty(t, canonical)
 	}
 
@@ -296,6 +312,10 @@ func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
 	goCanonical, ok := cfg.ResolveManagedFileName("go-dependabot")
 	assert.True(t, ok)
 	assert.Equal(t, "go-dependabot", goCanonical)
+
+	actionsCanonical, ok := cfg.ResolveManagedFileName("dependabot-actions")
+	assert.True(t, ok)
+	assert.Equal(t, "dependabot-actions", actionsCanonical)
 
 	expanded, err := cfg.ExpandManagedFileEntries([]string{".github/dependabot.yml"})
 	assert.Nil(t, err)

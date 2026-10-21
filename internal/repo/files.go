@@ -323,9 +323,43 @@ func (c *Content) checkSelectedFiles(repoName string, files []config.SelectedFil
 
 const managedFileMarker = "managed by the repo-content-updater"
 
-// shouldAdoptExistingFile reports whether a default file may be written. An
-// existing file at repo_path or an alternate_path must carry the managed marker.
-func shouldAdoptExistingFile(repoName string, fileinfo *config.File) (bool, error) {
+// templateFirstLine returns the first non-empty line of a template, trimmed.
+func templateFirstLine(content []byte) string {
+	for _, line := range strings.Split(string(content), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// containsTrimmedLine reports whether content contains want as a complete line,
+// ignoring surrounding whitespace.
+func containsTrimmedLine(content, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return false
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldAdoptExistingFile reports whether a default file may be written. A
+// default file is written when no file exists at repo_path or an alternate_path,
+// or when every existing file carries the default template's own first line.
+// Matching the template's line, rather than the generic managed marker, keeps
+// existing full managed configs from being overwritten by a default.
+func (c *Content) shouldAdoptExistingFile(repoName string, fileinfo *config.File) (bool, error) {
+	tmplContent, err := os.ReadFile(path.Join(c.templates, fileinfo.TemplateName))
+	if err != nil {
+		return false, err
+	}
+	firstLine := templateFirstLine(tmplContent)
+
 	paths := append([]string{fileinfo.RepoPath}, fileinfo.AlternatePaths...)
 	for _, repoPath := range paths {
 		content, err := os.ReadFile(filepath.Join(repoDir(repoName), filepath.FromSlash(repoPath)))
@@ -335,7 +369,7 @@ func shouldAdoptExistingFile(repoName string, fileinfo *config.File) (bool, erro
 		if err != nil {
 			return false, err
 		}
-		if !strings.Contains(strings.ToLower(string(content)), managedFileMarker) {
+		if !containsTrimmedLine(string(content), firstLine) {
 			return false, nil
 		}
 	}
@@ -346,12 +380,12 @@ func shouldAdoptExistingFile(repoName string, fileinfo *config.File) (bool, erro
 // skip=true when the file should be left untouched.
 func (c *Content) prepareManagedFile(repoName string, fileinfo *config.File, origin config.FileOrigin, cfg *config.Config, repoConfig Config) ([]byte, bool, error) {
 	if origin == config.OriginDefault {
-		adopt, err := shouldAdoptExistingFile(repoName, fileinfo)
+		adopt, err := c.shouldAdoptExistingFile(repoName, fileinfo)
 		if err != nil {
 			return nil, false, err
 		}
 		if !adopt {
-			log.Printf("Skipping %s for %s: existing file is not managed by this tool\n", fileinfo.Name, repoName)
+			log.Printf("Skipping %s for %s: existing file does not carry the default template's first line\n", fileinfo.Name, repoName)
 			return nil, true, nil
 		}
 	}

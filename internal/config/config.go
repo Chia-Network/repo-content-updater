@@ -190,7 +190,7 @@ func (c *Config) sharesRepoPathWith(fileName string, names map[string]bool) bool
 	}
 	for _, key := range c.repoPathKeys(file) {
 		for owner := range c.managedPathOwners[key] {
-			if names[owner] {
+			if owner != fileName && names[owner] {
 				return true
 			}
 		}
@@ -249,7 +249,7 @@ func (c *Config) ResolveManagedFileSelection(repoName string, entries []string) 
 
 	selectedDefaults := make([]string, 0, len(defaults))
 	for _, name := range defaults {
-		if explicitSet[name] || c.sharesRepoPathWith(name, explicitSet) {
+		if explicitSet[name] || c.sharesRepoPathWith(name, explicitSet) || c.sharesRepoPathWith(name, optOuts) {
 			continue
 		}
 		selectedDefaults = append(selectedDefaults, name)

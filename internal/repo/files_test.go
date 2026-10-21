@@ -69,15 +69,23 @@ func TestTemplateInputsForFile(t *testing.T) {
 }
 
 func TestShouldAdoptExistingFile(t *testing.T) {
+	templates, err := filepath.Abs(filepath.Join("..", "..", "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Chdir(t.TempDir())
+	content := &Content{templates: templates}
 	fileinfo := &config.File{
-		Name:           "dependabot",
+		Name:           "dependabot-actions",
+		TemplateName:   "dependabot-actions.yml",
 		RepoPath:       ".github/dependabot.yml",
 		AlternatePaths: []string{".github/dependabot.yaml"},
 	}
+	actionsFirstLine := "# This file is managed by the repo-content-updater project (GitHub Actions-only default). Manual changes here will result in a PR to bring back"
+	fullManagedFirstLine := "# This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back"
 
 	t.Run("creates when absent", func(t *testing.T) {
-		adopt, err := shouldAdoptExistingFile("absent", fileinfo)
+		adopt, err := content.shouldAdoptExistingFile("absent", fileinfo)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,7 +96,7 @@ func TestShouldAdoptExistingFile(t *testing.T) {
 
 	t.Run("skips an unmarked existing file", func(t *testing.T) {
 		writeDependabotTestFile(t, repoDir("unmarked"), fileinfo.RepoPath, "version: 2\n")
-		adopt, err := shouldAdoptExistingFile("unmarked", fileinfo)
+		adopt, err := content.shouldAdoptExistingFile("unmarked", fileinfo)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,20 +105,42 @@ func TestShouldAdoptExistingFile(t *testing.T) {
 		}
 	})
 
-	t.Run("updates a marked existing file", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("marked"), fileinfo.RepoPath, "// Managed by the repo-content-updater\nversion: 2\n")
-		adopt, err := shouldAdoptExistingFile("marked", fileinfo)
+	t.Run("skips a full managed config carrying the generic marker", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("full-managed"), fileinfo.RepoPath, fullManagedFirstLine+"\n# inline with the upstream template, unless you add !dependabot to the repo's managed-files property\nversion: 2\n")
+		adopt, err := content.shouldAdoptExistingFile("full-managed", fileinfo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if adopt {
+			t.Fatal("full managed config should not be adopted")
+		}
+	})
+
+	t.Run("updates a file with the actions-default first line", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-default"), fileinfo.RepoPath, actionsFirstLine+"\nversion: 2\n")
+		adopt, err := content.shouldAdoptExistingFile("actions-default", fileinfo)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !adopt {
-			t.Fatal("marked file should be adopted")
+			t.Fatal("actions-default file should be adopted")
+		}
+	})
+
+	t.Run("updates a file with the actions-default first line at the alternate path", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-alternate"), fileinfo.AlternatePaths[0], actionsFirstLine+"\nversion: 2\n")
+		adopt, err := content.shouldAdoptExistingFile("actions-alternate", fileinfo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !adopt {
+			t.Fatal("actions-default alternate should be adopted")
 		}
 	})
 
 	t.Run("skips an unmarked alternate path", func(t *testing.T) {
 		writeDependabotTestFile(t, repoDir("alternate"), fileinfo.AlternatePaths[0], "version: 2\n")
-		adopt, err := shouldAdoptExistingFile("alternate", fileinfo)
+		adopt, err := content.shouldAdoptExistingFile("alternate", fileinfo)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -181,14 +211,87 @@ func TestPrepareManagedFileOrigin(t *testing.T) {
 	})
 }
 
+func TestPrepareManagedFileDefaultActionsAdoption(t *testing.T) {
+	cfg := loadDependabotTestConfig(t)
+	templates, err := filepath.Abs(filepath.Join("..", "..", "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	content := &Content{templates: templates}
+	fileinfo := cfg.GetFileInfo("dependabot-actions")
+	if fileinfo == nil {
+		t.Fatal("dependabot-actions file missing from config")
+	}
+	actionsFirstLine := "# This file is managed by the repo-content-updater project (GitHub Actions-only default). Manual changes here will result in a PR to bring back"
+	fullManagedFirstLine := "# This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back"
+
+	t.Run("writes when absent", func(t *testing.T) {
+		rendered, skip, err := content.prepareManagedFile("actions-absent", fileinfo, config.OriginDefault, cfg, Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if skip {
+			t.Fatal("absent default should be written")
+		}
+		if len(rendered) == 0 {
+			t.Fatal("rendered content is empty")
+		}
+	})
+
+	t.Run("writes a file carrying the actions-default first line", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-marked"), fileinfo.RepoPath, actionsFirstLine+"\nversion: 2\n")
+		_, skip, err := content.prepareManagedFile("actions-marked", fileinfo, config.OriginDefault, cfg, Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if skip {
+			t.Fatal("actions-default file should be written")
+		}
+	})
+
+	t.Run("writes a file carrying the actions-default first line at the alternate path", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-alternate"), fileinfo.AlternatePaths[0], actionsFirstLine+"\nversion: 2\n")
+		_, skip, err := content.prepareManagedFile("actions-alternate", fileinfo, config.OriginDefault, cfg, Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if skip {
+			t.Fatal("actions-default alternate should be written")
+		}
+	})
+
+	t.Run("skips a full managed config carrying the generic marker", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-full"), fileinfo.RepoPath, fullManagedFirstLine+"\nversion: 2\n")
+		_, skip, err := content.prepareManagedFile("actions-full", fileinfo, config.OriginDefault, cfg, Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !skip {
+			t.Fatal("full managed config should not be overwritten")
+		}
+	})
+
+	t.Run("skips an unmarked file", func(t *testing.T) {
+		writeDependabotTestFile(t, repoDir("actions-unmarked"), fileinfo.RepoPath, "version: 2\n")
+		_, skip, err := content.prepareManagedFile("actions-unmarked", fileinfo, config.OriginDefault, cfg, Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !skip {
+			t.Fatal("unmarked file should not be adopted")
+		}
+	})
+}
+
 func TestFilesForRepo(t *testing.T) {
 	selection := config.ManagedFileSelection{
 		Explicit: []string{"dep-review"},
-		Defaults: []string{"dependabot"},
+		Defaults: []string{"dependabot-actions"},
 	}
 	wantBoth := []config.SelectedFile{
 		{Name: "dep-review", Origin: config.OriginExplicit},
-		{Name: "dependabot", Origin: config.OriginDefault},
+		{Name: "dependabot-actions", Origin: config.OriginDefault},
 	}
 	wantExplicit := []config.SelectedFile{
 		{Name: "dep-review", Origin: config.OriginExplicit},
@@ -209,7 +312,7 @@ func TestFilesForRepo(t *testing.T) {
 	})
 
 	t.Run("archived repos without explicit files get nothing", func(t *testing.T) {
-		got := filesForRepo(config.ManagedFileSelection{Defaults: []string{"dependabot"}}, &github.Repository{Archived: github.Bool(true)})
+		got := filesForRepo(config.ManagedFileSelection{Defaults: []string{"dependabot-actions"}}, &github.Repository{Archived: github.Bool(true)})
 		if len(got) != 0 {
 			t.Fatalf("files = %#v, want none", got)
 		}
@@ -223,7 +326,7 @@ func TestFilesForRepo(t *testing.T) {
 	})
 
 	t.Run("forks without explicit files get nothing", func(t *testing.T) {
-		got := filesForRepo(config.ManagedFileSelection{Defaults: []string{"dependabot"}}, &github.Repository{Fork: github.Bool(true)})
+		got := filesForRepo(config.ManagedFileSelection{Defaults: []string{"dependabot-actions"}}, &github.Repository{Fork: github.Bool(true)})
 		if len(got) != 0 {
 			t.Fatalf("files = %#v, want none", got)
 		}
