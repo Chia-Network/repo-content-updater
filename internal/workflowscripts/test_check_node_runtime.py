@@ -106,6 +106,13 @@ class CheckNodeRuntimeTest(unittest.TestCase):
         self.assertNotIn("::error", proc.stdout)
         self.assertNotIn("::warning", proc.stdout)
 
+    def test_unparseable_remote_manifest_fails(self) -> None:
+        proc = self._run(
+            files={".github/workflows/x.yml": _workflow("acme/action@v1")},
+            fixtures={"repos/acme/action/contents/action.yml": "runs: [unclosed\n"},
+        )
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+
     def test_node16_local_action_fails(self) -> None:
         proc = self._run(
             files={".github/actions/foo/action.yml": _manifest("node16")},
@@ -126,10 +133,10 @@ class CheckNodeRuntimeTest(unittest.TestCase):
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertNotIn("::error", proc.stdout)
                 self.assertIn("::notice::Node runtime check skipped", proc.stdout)
-        proc = self._run(
-            files=files, fixtures=fixtures, repository="Chia-Network/actions-fork"
-        )
-        self.assertEqual(proc.returncode, 1, proc.stderr)
+        for repository in ("Chia-Network/actions-fork", "octocat/actions"):
+            with self.subTest(repository=repository):
+                proc = self._run(files=files, fixtures=fixtures, repository=repository)
+                self.assertEqual(proc.returncode, 1, proc.stderr)
 
     def test_reusable_local_and_docker_refs_are_ignored(self) -> None:
         proc = self._run(
