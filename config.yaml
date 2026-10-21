@@ -11,6 +11,7 @@ groups:
     templates:
       - dep-review
       - commit-signing
+      - node-runtime-check
       - dependabot
 
   - name: go
@@ -54,6 +55,12 @@ files:
     repo_path: .github/workflows/check-commit-signing.yml
     alternate_paths:
       - .github/workflows/check-commit-signing.yaml
+
+  - name: node-runtime-check
+    template_name: check-node-runtime.yml
+    repo_path: .github/workflows/check-node-runtime.yml
+    alternate_paths:
+      - .github/workflows/check-node-runtime.yaml
 
   - name: dependency-cursor-review
     template_name: dependency-cursor-review.yml

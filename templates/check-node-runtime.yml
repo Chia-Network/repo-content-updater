@@ -1,0 +1,80 @@
+name: 🚨 Check action Node runtime
+
+on:
+  push:
+    branches:
+      - long_lived/**
+      - main
+      - release/**
+  pull_request:
+    branches:
+      - "**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{`{{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow_ref, github.event.pull_request.number) || github.run_id }}`}}
+  cancel-in-progress: true
+
+jobs:
+  check-node-runtime:
+    name: Check action Node runtime
+    runs-on: [ubuntu-latest]
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Check action Node runtime
+        shell: bash
+        env:
+          GH_TOKEN: ${{`{{ github.token }}`}}
+        run: |
+          set -euo pipefail
+          hit=0
+          declare -A files_for=()
+          while IFS= read -r file; do
+            [[ -f "$file" ]] || continue
+            while IFS= read -r action; do
+              action="${action%$'\r'}"
+              [[ -z "$action" || "$action" == ./* || "$action" == docker://* || "$action" != *@* ]] && continue
+              files_for["$action"]+="${file#./} "
+            done < <(yq -r '.. | select(tag == "!!map") | .uses | select(. != null)' "$file")
+          done < <(find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) 2>/dev/null; find .github/actions -type f \( -name action.yml -o -name action.yaml \) 2>/dev/null)
+
+          for action in "${!files_for[@]}"; do
+            slug="${action%@*}"
+            ref="${action##*@}"
+            owner="${slug%%/*}"
+            rest="${slug#*/}"
+            if [[ "$owner" == "$slug" || -z "$owner" || -z "$rest" ]]; then
+              echo "::warning::Unable to parse $action used in ${files_for[$action]% }"
+              continue
+            fi
+            repo="${rest%%/*}"
+            path=""
+            [[ "$rest" == */* ]] && path="${rest#*/}"
+            manifest=""
+            for name in action.yml action.yaml; do
+              if manifest=$(gh api "repos/$owner/$repo/contents/${path:+$path/}$name?ref=$ref" -H 'Accept: application/vnd.github.raw' 2>/dev/null); then
+                break
+              fi
+              manifest=""
+            done
+            if [[ -z "$manifest" ]]; then
+              echo "::warning::Unable to resolve $action used in ${files_for[$action]% }"
+              continue
+            fi
+            using=$(printf '%s\n' "$manifest" | yq -r '.runs.using // ""' 2>/dev/null || true)
+            case "$using" in
+              node12|node16|node20)
+                for file in ${files_for[$action]}; do
+                  echo "::error file=$file::Action $action uses unsupported Node runtime $using"
+                done
+                hit=1
+                ;;
+            esac
+          done
+          exit "$hit"
