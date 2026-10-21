@@ -693,6 +693,70 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIn("github.com/stretchr/testify", rewritten_names, msg=sorted(rewritten_names))
         self.assertIs(rewritten["scan_conclusive"], False)
 
+    def test_go_sum_without_the_listed_bump_stays_a_gap(self) -> None:
+        def digest(mark: str) -> str:
+            return mark * 43 + "="
+
+        def block(module: str, version: str, mark: str) -> str:
+            text = digest(mark)
+            return f"{module} {version} h1:{text}\n{module} {version}/go.mod h1:{text}\n"
+
+        base = "".join(
+            (
+                block("golang.org/x/sys", "v0.47.0", "a"),
+                block("golang.org/x/sys", "v0.48.0", "b"),
+                block("github.com/stretchr/testify", "v1.11.0", "c"),
+                block("github.com/stretchr/testify", "v1.12.0", "d"),
+            )
+        )
+        head = "".join(
+            (
+                block("golang.org/x/sys", "v0.47.0", "a"),
+                block("golang.org/x/sys", "v0.48.0", "b"),
+                block("github.com/stretchr/testify", "v1.11.0", "c"),
+                block("github.com/stretchr/testify", "v1.13.0", "e"),
+            )
+        )
+        updates = [
+            {
+                "packageName": "golang.org/x/sys",
+                "fromVersion": "v0.48.0",
+                "toVersion": "v0.49.0",
+                "upstreamRepo": "golang/sys",
+            }
+        ]
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            _git_repo(root)
+            _commit(root, "go.sum", base, "base go.sum")
+            _git(root, "checkout", "-b", "pr")
+            _commit(root, "go.sum", head, "head go.sum")
+            (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
+            previous = os.getcwd()
+            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT")}
+            os.chdir(root)
+            os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
+            os.environ.pop("GITHUB_BASE_REF", None)
+            os.environ["GITHUB_OUTPUT"] = str(root / "github_output.txt")
+
+            def fake_scan(update: dict, *_args: object, **_kwargs: object) -> dict:
+                return _clean(str(update.get("packageName") or ""), str(update.get("upstreamRepo") or ""))
+
+            try:
+                with patch.object(coverage, "_scan_one", fake_scan):
+                    coverage.main()
+            finally:
+                os.chdir(previous)
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
+        names = {item["package_name"] for item in report["dependencies"]}
+        self.assertIn("github.com/stretchr/testify", names, msg=sorted(names))
+        self.assertIs(report["scan_conclusive"], False)
+
     def test_bound_spec_does_not_match_a_bare_listed_version(self) -> None:
         updates = [
             {

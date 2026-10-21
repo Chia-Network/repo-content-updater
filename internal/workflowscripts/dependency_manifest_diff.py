@@ -413,6 +413,66 @@ def _go_sum_versions_ok(
     return bool(old)
 
 
+def _go_sum_move_present(old: dict[str, str], new: dict[str, str], frm: str, to: str) -> bool:
+    """True when `from` was present, `to` is present, and no other version was added."""
+    to_key = _version_named(new, to)
+    from_key = _version_named(old, frm)
+    if to_key is None or from_key is None or _version_body(from_key) == _version_body(to_key):
+        return False
+    return not (set(new) - set(old)) - {to_key}
+
+
+def _go_sum_listed_moves_present(
+    old_entries: dict[str, object],
+    new_entries: dict[str, object],
+    listed: dict[str, set[tuple[str, str]]],
+) -> bool:
+    """True when every listed module in this file records its from-to move."""
+    saw = False
+    for name, pairs in listed.items():
+        if name not in old_entries and name not in new_entries:
+            continue
+        saw = True
+        old = _version_map(_entry_blocks(old_entries.get(name)))
+        new = _version_map(_entry_blocks(new_entries.get(name)))
+        if old is None or new is None or not pairs:
+            return False
+        stayed = set(old) & set(new)
+        if any(old[key] != new[key] for key in stayed):
+            return False
+        if not all(_go_sum_move_present(old, new, frm, to) for frm, to in pairs):
+            return False
+    return saw
+
+
+def _go_sum_entries_ok(
+    old_entries: dict[str, object],
+    new_entries: dict[str, object],
+    listed: dict[str, set[tuple[str, str]]],
+) -> bool:
+    """True when every module fits the version rule.
+
+    Unlisted drops and adds are allowed only after every listed module in
+    the file records its from-to move. A change with that move absent stays
+    unresolved.
+    """
+    names = set(old_entries) | set(new_entries)
+
+    def unchanged(name: str) -> bool:
+        return _entry_blocks(old_entries.get(name)) == _entry_blocks(new_entries.get(name))
+
+    if not _go_sum_listed_moves_present(old_entries, new_entries, listed):
+        return all(unchanged(name) for name in names)
+    return all(
+        _go_sum_versions_ok(
+            _entry_blocks(old_entries.get(name)),
+            _entry_blocks(new_entries.get(name)),
+            listed.get(name, set()),
+        )
+        for name in names
+    )
+
+
 def _blocks_explain(
     name: str,
     old_blocks: list[tuple[str, str]],
@@ -730,9 +790,9 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
     """True when a listed package moves to its listed version.
 
     A listed name must be explained. Every other name may change only its
-    version and registry locators. go.sum uses that same version rule:
-    staying checksums match, an unlisted module may drop versions, and a
-    module with no old entries stays unresolved. Another resolved host, a
+    version and registry locators. go.sum allows an unlisted drop or add
+    only after every listed module in the file records its from-to move.
+    A module with no old entries stays unresolved. Another resolved host, a
     same-version hash swap, leftover bytes, or a lock that never moves a
     listed package stays unresolved.
     """
@@ -753,14 +813,12 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
         return False
     if not _residues_match(kind, old_residue, new_residue):
         return False
+    if kind == "go.sum":
+        return _go_sum_entries_ok(old_entries, new_entries, listed)
     for name in set(old_entries) | set(new_entries):
         old_blocks = _entry_blocks(old_entries.get(name))
         new_blocks = _entry_blocks(new_entries.get(name))
         canonical = _canonical_package_name(kind, name)
-        if kind == "go.sum":
-            if not _go_sum_versions_ok(old_blocks, new_blocks, listed.get(canonical, set())):
-                return False
-            continue
         if canonical in listed:
             if not _name_explained(kind, name, old_blocks, new_blocks, listed):
                 return False
@@ -771,10 +829,12 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
 
 
 def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
-    """Names whose one parsed version changed.
+    """Names whose parsed versions changed.
 
     Versions come from the same entries `_entries_explain` reads.
-    A name with more than one entry is reported by `_multi_entry_names`.
+    go.sum includes a module with several versions when that set changes.
+    Other files report a name with more than one entry through
+    `_multi_entry_names`.
     """
     old_split = _split_entries(kind, before)
     new_split = _split_entries(kind, after)
@@ -784,6 +844,12 @@ def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
     new_entries = new_split[0]
     changed: set[str] = set()
     for name in set(old_entries) | set(new_entries):
+        old_blocks = _entry_blocks(old_entries.get(name))
+        new_blocks = _entry_blocks(new_entries.get(name))
+        if kind == "go.sum" and (len(old_blocks) > 1 or len(new_blocks) > 1):
+            if old_blocks != new_blocks:
+                changed.add(name)
+            continue
         old_version = _single_version(old_entries.get(name))
         new_version = _single_version(new_entries.get(name))
         if old_version is None or new_version is None or old_version == new_version:
@@ -825,9 +891,8 @@ def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) ->
     an unlisted package, a replace line, a yarn key that appears or
     disappears, or any other residue is not.
 
-    go.sum keeps one block per version and uses the same version rule as
-    lock coverage. The listed bump matches when `to` is present and `from`
-    was present before, including when `from` was removed.
+    go.sum keeps one block per version. Unlisted drops and adds match only
+    after every listed module in the file records its from-to move.
     """
     old_split = _split_entries(kind, before)
     new_split = _split_entries(kind, after)
@@ -838,6 +903,8 @@ def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) ->
     if not _residues_match(kind, old_residue, new_residue):
         return False
     listed = _listed_versions(updates, kind=kind)
+    if kind == "go.sum":
+        return _go_sum_entries_ok(old_entries, new_entries, listed)
     names = set(old_entries) | set(new_entries)
     return all(
         _name_explained(
