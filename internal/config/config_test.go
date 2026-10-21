@@ -165,6 +165,20 @@ func TestResolveManagedFileSelection(t *testing.T) {
 	})
 }
 
+func TestResolveManagedFileSelectionDropsSelectionWithUnknownCompanion(t *testing.T) {
+	cfg := loadSelectionTestConfig(t, `
+files:
+  - name: workflow
+    template_name: workflow.yml
+    repo_path: .github/workflows/workflow.yml
+    companion_files:
+      - does-not-exist
+`)
+
+	selection := cfg.ResolveManagedFileSelection("repo", []string{"workflow"})
+	assert.Empty(t, selection.Explicit)
+}
+
 func TestResolveManagedFileSelectionDefaultCompanions(t *testing.T) {
 	cfg := loadSelectionTestConfig(t, `
 default_files:

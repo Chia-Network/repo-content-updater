@@ -263,7 +263,7 @@ func (c *Config) resolveSelectedFiles(repoName string, roots []string, optOuts m
 	files, err := c.EnsureCompanionFiles(filtered)
 	if err != nil {
 		log.Printf("Error ensuring companion files for %s: %s\n", repoName, err)
-		files = filtered
+		return nil
 	}
 	logRequiredCompanionOptOuts(repoName, files, optOuts)
 	return files
