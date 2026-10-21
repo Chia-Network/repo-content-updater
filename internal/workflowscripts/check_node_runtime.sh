@@ -5,7 +5,7 @@ set -euo pipefail
 # Chia-Network/actions keeps its actions at the repository root (for example
 # ./setup-python), outside .github/actions, so this scan does not cover it.
 repository="${GITHUB_REPOSITORY:-}"
-if [[ "${repository,,}" == chia-network/actions ]]; then
+if [[ "${repository,,}" == "chia-network/actions" ]]; then
   echo "::notice::Node runtime check skipped for $repository"
   exit 0
 fi
