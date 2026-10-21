@@ -788,12 +788,20 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertEqual(scan_failed["check"], "fail")
 
         blocked = json.loads(json.dumps(residue))
+        blocked["warn_only"] = False
         blocked["findings"]["unicode"] = [{"kind": "unicode", "file": "pkg/index.js", "line": 1, "match": "bidi"}]
         blocked_finding = formatter.compose_published_review(
             blocked, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n"
         )
         self.assertEqual(blocked_finding["check"], "fail")
         self.assertIs(blocked_finding["may_complete"], False)
+        advisory = json.loads(json.dumps(blocked))
+        advisory["warn_only"] = True
+        advisory_finding = formatter.compose_published_review(
+            advisory, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n"
+        )
+        self.assertEqual(advisory_finding["check"], "pass")
+        self.assertIs(advisory_finding["may_complete"], True)
 
     def test_unlisted_resolved_change_stays_unresolved(self) -> None:
         def lock(lodash: str, minimist: str, resolved: str, integrity: str) -> str:
