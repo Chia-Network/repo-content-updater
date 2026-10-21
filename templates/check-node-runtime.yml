@@ -37,11 +37,12 @@ jobs:
           declare -A files_for=()
           while IFS= read -r file; do
             [[ -f "$file" ]] || continue
+            uses=$(yq -r '.. | select(tag == "!!map") | .uses | select(. != null)' "$file")
             while IFS= read -r action; do
               action="${action%$'\r'}"
               [[ -z "$action" || "$action" == ./* || "$action" == docker://* || "$action" != *@* ]] && continue
               files_for["$action"]+="${file#./} "
-            done < <(yq -r '.. | select(tag == "!!map") | .uses | select(. != null)' "$file")
+            done <<< "$uses"
           done < <(find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) 2>/dev/null; find .github/actions -type f \( -name action.yml -o -name action.yaml \) 2>/dev/null)
 
           for action in "${!files_for[@]}"; do
@@ -67,7 +68,7 @@ jobs:
               echo "::warning::Unable to resolve $action used in ${files_for[$action]% }"
               continue
             fi
-            using=$(printf '%s\n' "$manifest" | yq -r '.runs.using // ""' 2>/dev/null || true)
+            using=$(printf '%s\n' "$manifest" | yq -r '.runs.using // ""')
             case "$using" in
               node12|node16|node20)
                 for file in ${files_for[$action]}; do
