@@ -196,6 +196,7 @@ poetry.lock, Pipfile.lock, requirements.txt, requirements-dev.txt, requirements/
 - Treat .github/workflows/ modifications in the PR under review as highly suspicious in a pure dependency update PR. \
 Upstream release workflow files are not executed by this repository; a path-touch finding there is context unless the \
 workflow content itself adds a payload.
+- Submodule pointers are recorded in the report but their contents are not scanned.
 
 IOC matches, and Unicode or confusable-character findings in files changed by this update, are blocking. \
 Do not clear them.
