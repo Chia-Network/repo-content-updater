@@ -671,12 +671,15 @@ def _residues_match(kind: str, old: str, new: str) -> bool:
     return _fold_residue(old_doc) == _fold_residue(new_doc)
 
 
-def _string_spec(payload: str) -> bool:
+def _payload_kind(payload: str) -> str:
+    """'spec' for a manifest string spec, 'json' for a lock record, 'text' otherwise."""
     try:
         doc = json.loads(payload)
     except json.JSONDecodeError:
-        return False
-    return isinstance(doc, dict) and set(doc) == {"spec"} and isinstance(doc.get("spec"), str)
+        return "text"
+    if isinstance(doc, dict) and set(doc) == {"spec"} and isinstance(doc.get("spec"), str):
+        return "spec"
+    return "json"
 
 
 def _lock_text(payloads: list[str]) -> bool:
@@ -687,15 +690,13 @@ def _lock_text(payloads: list[str]) -> bool:
 
 
 def _payload_ok(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
-    """A manifest string spec is the version label. A lock record is compared as a pair."""
+    """True when a string spec or version line moved, or lock locators are canonical."""
     payloads = [payload for _version, payload in (*old_blocks, *new_blocks)]
-    if payloads and all(_string_spec(payload) for payload in payloads):
+    kinds = {_payload_kind(payload) for payload in payloads}
+    if kinds <= {"spec"}:
         return True
-    for payload in payloads:
-        try:
-            json.loads(payload)
-        except json.JSONDecodeError:
-            return _version_bump(old_blocks, new_blocks) if _lock_text(payloads) else True
+    if "text" in kinds:
+        return _version_bump(old_blocks, new_blocks) if _lock_text(payloads) else True
     return _version_bump(old_blocks, new_blocks)
 
 
