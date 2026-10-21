@@ -20,7 +20,7 @@ _REQ_RE = re.compile(
     re.M,
 )
 _YARN_HEADER_RE = re.compile(r'"?(@?[^@"\s]+)@[^:]*:')
-_YARN_VERSION_RE = re.compile(r'^\s+version\s+"([^"]+)"')
+_YARN_VERSION_RE = re.compile(r'^  version "([^"]+)"')
 _VERSION_PREFIX_RE = re.compile(r"^(>=|<=|v|\^|~|=|>|<)")
 _GO_BLOCK_STARTS = frozenset({"require(", "replace(", "exclude(", "retract("})
 _OPAQUE_LOCKS = {
@@ -561,10 +561,10 @@ def _yarn_keys(line: str) -> set[str]:
     """Key tokens of a body line. A comma joins keys; a colon follows a section key."""
     keys: set[str] = set()
     for part in line.strip().split(","):
-        part = part.strip()
-        if not part:
+        stripped = part.strip()
+        if not stripped:
             continue
-        head = re.split(r"[\s:]", part, maxsplit=1)[0].strip(' :"')
+        head = re.split(r"[\s:]", stripped, maxsplit=1)[0].strip(' :"')
         if head:
             keys.add(head)
     return keys
@@ -573,9 +573,10 @@ def _yarn_keys(line: str) -> set[str]:
 def _yarn_rest(payload: str) -> str | None:
     """Header and dependency sub-blocks left; plain locator lines dropped.
 
-    A line keyed on version, resolved, integrity or checksum must be in the
-    plain allowlisted form, or the stanza is not canonical. Any other line,
-    including a `dependencies:` or `optionalDependencies:` block, stays.
+    A stanza-body line keyed on version, resolved, integrity or checksum must be
+    in the plain allowlisted form, or the stanza is not canonical. A line
+    indented past the stanza body is a dependency entry and stays, even when a
+    package is named like a locator.
     """
     lines = payload.splitlines()
     names = _YARN_HEADER_RE.findall(lines[0]) if lines else []
@@ -585,6 +586,9 @@ def _yarn_rest(payload: str) -> str | None:
     kept = [lines[0]]
     for line in lines[1:]:
         if not line:
+            kept.append(line)
+            continue
+        if line.startswith("   "):
             kept.append(line)
             continue
         if not (_yarn_keys(line) & _LOCATOR_KEYS):
