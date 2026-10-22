@@ -157,7 +157,7 @@ updates:
   # {{- if ne .DEPENDABOT_DOCKER_ENABLED "0" }}
 
   - package-ecosystem: docker
-    directory: "{{ .DEPENDABOT_DOCKER_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_DOCKER_DIRECTORIES }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -180,7 +180,7 @@ updates:
   # {{- if ne .DEPENDABOT_TERRAFORM_ENABLED "0" }}
 
   - package-ecosystem: terraform
-    directory: "{{ .DEPENDABOT_TERRAFORM_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_TERRAFORM_DIRECTORIES }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -203,7 +203,7 @@ updates:
   # {{- if ne .DEPENDABOT_NUGET_ENABLED "0" }}
 
   - package-ecosystem: nuget
-    directory: "{{ .DEPENDABOT_NUGET_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_NUGET_DIRECTORIES }}"
     schedule:
       interval: "weekly"
       day: "tuesday"

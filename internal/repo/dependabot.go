@@ -25,6 +25,12 @@ const dependabotTemplateName = "dependabot.yml"
 // repository root. rootExtraManifests, when set, are added to manifests for a
 // directory that resolves to the repository root (github-actions additionally
 // checks workflows under .github/workflows).
+//
+// discover marks ecosystems whose manifests Dependabot does not look for
+// below the configured directory. Unless the repo pins directoriesVar, their
+// directories are discovered from the whole tree and written back to
+// directoriesVar as a JSON list. A directory matching rootCovers at the root
+// stands for the whole tree (a NuGet solution lists its projects).
 type dependabotEcosystem struct {
 	name               string
 	enabledVar         string
@@ -32,6 +38,8 @@ type dependabotEcosystem struct {
 	manifests          []string
 	nonRootManifests   []string
 	rootExtraManifests []string
+	discover           bool
+	rootCovers         []string
 }
 
 var dependabotEcosystems = []dependabotEcosystem{
@@ -87,19 +95,21 @@ var dependabotEcosystems = []dependabotEcosystem{
 	{
 		name:           "docker",
 		enabledVar:     "DEPENDABOT_DOCKER_ENABLED",
-		directoriesVar: "DEPENDABOT_DOCKER_DIRECTORY",
-		manifests:      []string{"Dockerfile", "Dockerfile.*", "*.Dockerfile", "*.dockerfile", "Containerfile"},
+		directoriesVar: "DEPENDABOT_DOCKER_DIRECTORIES",
+		manifests:      []string{"Dockerfile", "Dockerfile.*", "*.dockerfile"},
+		discover:       true,
 	},
 	{
 		name:           "terraform",
 		enabledVar:     "DEPENDABOT_TERRAFORM_ENABLED",
-		directoriesVar: "DEPENDABOT_TERRAFORM_DIRECTORY",
+		directoriesVar: "DEPENDABOT_TERRAFORM_DIRECTORIES",
 		manifests:      []string{"*.tf", "*.tf.json", ".terraform.lock.hcl"},
+		discover:       true,
 	},
 	{
 		name:           "nuget",
 		enabledVar:     "DEPENDABOT_NUGET_ENABLED",
-		directoriesVar: "DEPENDABOT_NUGET_DIRECTORY",
+		directoriesVar: "DEPENDABOT_NUGET_DIRECTORIES",
 		manifests: []string{
 			"*.csproj",
 			"*.fsproj",
@@ -108,6 +118,8 @@ var dependabotEcosystems = []dependabotEcosystem{
 			"packages.config",
 			"Directory.Packages.props",
 		},
+		discover:   true,
+		rootCovers: []string{"*.sln"},
 	},
 }
 
@@ -116,10 +128,17 @@ var errNoDependabotEcosystems = errors.New("no Dependabot ecosystems detected")
 // DependabotVarsForRepo merges the template variables and adds Dependabot
 // ecosystem flags from manifests in the target repo. If detection fails, the
 // merged variables without flags are returned with the error, so callers fall
-// back to the full historical template output.
+// back to the full historical template output. Directories of discovered
+// ecosystems come from the tree unless overrides pins them.
 func DependabotVarsForRepo(repoDir string, defaultVars map[string]string, overrides map[string]string) (map[string]string, error) {
 	data := mergeTemplateVars(defaultVars, overrides)
-	detected, err := DependabotEcosystemVars(repoDir, data)
+	detectInput := copyTemplateVars(data)
+	for _, ecosystem := range dependabotEcosystems {
+		if _, pinned := overrides[ecosystem.directoriesVar]; ecosystem.discover && !pinned {
+			delete(detectInput, ecosystem.directoriesVar)
+		}
+	}
+	detected, err := DependabotEcosystemVars(repoDir, detectInput)
 	if err != nil {
 		return templateVarsWithoutDependabotFlags(data), err
 	}
@@ -157,6 +176,20 @@ func DependabotEcosystemVars(repoDir string, vars map[string]string) (map[string
 
 	anyEnabled := false
 	for _, ecosystem := range dependabotEcosystems {
+		if ecosystem.discover && strings.TrimSpace(vars[ecosystem.directoriesVar]) == "" {
+			dirs, err := discoverManifestDirectories(repoRoot, ecosystem)
+			if err != nil {
+				return nil, fmt.Errorf("discover %s manifests: %w", ecosystem.name, err)
+			}
+			encoded, _ := json.Marshal(dirs)
+			out[ecosystem.directoriesVar] = string(encoded)
+			out[ecosystem.enabledVar] = "0"
+			if len(dirs) > 0 {
+				out[ecosystem.enabledVar] = "1"
+				anyEnabled = true
+			}
+			continue
+		}
 		present, err := dependabotEcosystemPresent(repoRoot, ecosystem, vars)
 		switch {
 		case err != nil:
@@ -222,6 +255,57 @@ func dependabotEcosystemPresent(repoRoot string, ecosystem dependabotEcosystem, 
 		}
 	}
 	return false, nil
+}
+
+// discoveryPrunedDirs are never searched for discovered manifests.
+var discoveryPrunedDirs = map[string]bool{".git": true, "node_modules": true}
+
+// discoverManifestDirectories returns, sorted, every directory under repoRoot
+// that directly holds a regular file matching one of ecosystem's manifests,
+// as Dependabot "/"-rooted paths. Links are not followed.
+func discoverManifestDirectories(repoRoot string, ecosystem dependabotEcosystem) ([]string, error) {
+	found := map[string]bool{}
+	err := filepath.WalkDir(repoRoot, func(current string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if current != repoRoot && discoveryPrunedDirs[entry.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.Type().IsRegular() || !matchesAnyPattern(ecosystem.manifests, entry.Name()) {
+			return nil
+		}
+		rel, err := filepath.Rel(repoRoot, filepath.Dir(current))
+		if err != nil {
+			return err
+		}
+		if rel == "." && matchesAnyPattern(ecosystem.rootCovers, entry.Name()) {
+			found = map[string]bool{"/": true}
+			return filepath.SkipAll
+		}
+		found[path.Join("/", filepath.ToSlash(rel))] = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	dirs := make([]string, 0, len(found))
+	for dir := range found {
+		dirs = append(dirs, dir)
+	}
+	slices.Sort(dirs)
+	return dirs, nil
+}
+
+func matchesAnyPattern(patterns []string, name string) bool {
+	return slices.ContainsFunc(patterns, func(pattern string) bool {
+		// Manifest patterns are constants, so Match cannot fail here.
+		matched, _ := filepath.Match(pattern, name)
+		return matched
+	})
 }
 
 func parseDependabotDirectories(raw string) ([]string, error) {

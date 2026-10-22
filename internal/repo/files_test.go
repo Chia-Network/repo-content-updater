@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
-	"slices"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -112,12 +112,11 @@ func TestExistingFileState(t *testing.T) {
 	}
 }
 
-// TestAdoptedDefaultRoots covers the adopt-only rules for both default
+// TestAdoptableDefaults covers the adopt-only rules for both default
 // bundles as selected from config.yaml.
-func TestAdoptedDefaultRoots(t *testing.T) {
+func TestAdoptableDefaults(t *testing.T) {
 	cfg := loadDependabotTestConfig(t)
 	t.Chdir(t.TempDir())
-	content := &Content{}
 	workflow := filepath.Join(".github", "workflows", "ci.yml")
 	actionsMarker := "# " + cfg.GetFileInfo("dependabot-actions").AdoptionMarker + "\nversion: 2\n"
 	reviewMarker := "# " + cfg.GetFileInfo("dependency-cursor-review").AdoptionMarker + "\nname: x\n"
@@ -146,10 +145,17 @@ func TestAdoptedDefaultRoots(t *testing.T) {
 			for rel, body := range tt.files {
 				writeDependabotTestFile(t, repoDir(repoName), rel, body)
 			}
-			files := filesForRepo(cfg.ResolveManagedFileSelection(repoName, nil), &github.Repository{})
-			adopted, err := content.adoptedDefaultRoots(repoName, files, cfg)
+			selection := filesForRepo(cfg.ResolveManagedFileSelection(repoName, nil), &github.Repository{})
+			files, err := adoptableDefaults(repoName, selection.Defaults, cfg)
 			if err != nil {
 				t.Fatal(err)
+			}
+			adopted := map[string]bool{}
+			for _, file := range files {
+				if file.Origin != config.OriginDefault {
+					t.Fatalf("%s origin = %d, want default", file.Name, file.Origin)
+				}
+				adopted[file.Name] = true
 			}
 			if adopted["dependabot-actions"] != tt.actions || adopted["dependency-cursor-review"] != tt.review {
 				t.Fatalf("adopted = %v, want dependabot-actions=%v dependency-cursor-review=%v", adopted, tt.actions, tt.review)
@@ -169,6 +175,7 @@ func TestDefaultDependabotRendersDetectedEcosystems(t *testing.T) {
 	t.Chdir(t.TempDir())
 	content := &Content{templates: templates}
 	fileinfo := cfg.GetFileInfo("dependabot-actions")
+	asDefault := config.SelectedFile{Name: fileinfo.Name, Origin: config.OriginDefault}
 	workflow := filepath.Join(".github", "workflows", "ci.yml")
 
 	tests := []struct {
@@ -198,8 +205,8 @@ func TestDefaultDependabotRendersDetectedEcosystems(t *testing.T) {
 			for _, manifest := range tt.manifests {
 				writeDependabotTestFile(t, repoDir(repoName), manifest, "")
 			}
-			rendered, err := content.renderManagedFile(repoName, fileinfo, cfg, Config{VarOverrides: tt.overrides})
-			if err != nil {
+			rendered, ok, err := content.renderManagedFile(repoName, asDefault, fileinfo, cfg, Config{VarOverrides: tt.overrides})
+			if err != nil || !ok {
 				t.Fatal(err)
 			}
 			if got := renderedDependabotEcosystems(t, rendered); got != tt.want {
@@ -215,8 +222,8 @@ func TestDefaultDependabotRendersDetectedEcosystems(t *testing.T) {
 		repoName := "ecosystem-error"
 		writeDependabotTestFile(t, repoDir(repoName), workflow, "")
 		overrides := map[string]string{"DEPENDABOT_GOMOD_DIRECTORY": "../outside"}
-		rendered, err := content.renderManagedFile(repoName, fileinfo, cfg, Config{VarOverrides: overrides})
-		if err != nil {
+		rendered, ok, err := content.renderManagedFile(repoName, asDefault, fileinfo, cfg, Config{VarOverrides: overrides})
+		if err != nil || !ok {
 			t.Fatal(err)
 		}
 		if got := renderedDependabotEcosystems(t, rendered); got != "gomod,github-actions" {
@@ -224,9 +231,17 @@ func TestDefaultDependabotRendersDetectedEcosystems(t *testing.T) {
 		}
 	})
 
-	t.Run("a repository detection error keeps the full configuration", func(t *testing.T) {
-		rendered, err := content.renderManagedFile("missing-repo", fileinfo, cfg, Config{})
-		if err != nil {
+	t.Run("a repository detection error skips the default", func(t *testing.T) {
+		rendered, ok, err := content.renderManagedFile("missing-repo", asDefault, fileinfo, cfg, Config{})
+		if err != nil || ok || rendered != nil {
+			t.Fatalf("render = %q, %v, %v; want a skip", rendered, ok, err)
+		}
+	})
+
+	t.Run("a repository detection error keeps the full explicit configuration", func(t *testing.T) {
+		explicit := cfg.GetFileInfo("dependabot")
+		rendered, ok, err := content.renderManagedFile("missing-repo", config.SelectedFile{Name: explicit.Name}, explicit, cfg, Config{})
+		if err != nil || !ok {
 			t.Fatal(err)
 		}
 		if got, want := renderedDependabotEcosystems(t, rendered), "gomod,pip,github-actions,npm,cargo,swift,docker,terraform,nuget"; got != want {
@@ -237,8 +252,8 @@ func TestDefaultDependabotRendersDetectedEcosystems(t *testing.T) {
 	t.Run("explicit dependabot renders without the adoption marker", func(t *testing.T) {
 		repoName := "explicit"
 		writeDependabotTestFile(t, repoDir(repoName), "go.mod", "")
-		rendered, err := content.renderManagedFile(repoName, cfg.GetFileInfo("dependabot"), cfg, Config{})
-		if err != nil {
+		rendered, ok, err := content.renderManagedFile(repoName, config.SelectedFile{Name: "dependabot"}, cfg.GetFileInfo("dependabot"), cfg, Config{})
+		if err != nil || !ok {
 			t.Fatal(err)
 		}
 		if strings.Contains(string(rendered), "repo-content-updater:") {
@@ -251,86 +266,39 @@ func TestDefaultDependabotRendersDetectedEcosystems(t *testing.T) {
 }
 
 func TestFilesForRepo(t *testing.T) {
-	defaultActions := config.SelectedFile{Name: "dependabot-actions", Origin: config.OriginDefault, Root: "dependabot-actions"}
+	defaultActions := config.DefaultBundle{Root: "dependabot-actions", Files: []string{"dependabot-actions"}}
 	selection := config.ManagedFileSelection{
 		Explicit: []string{"dep-review"},
-		Defaults: []config.SelectedFile{defaultActions},
+		Defaults: []config.DefaultBundle{defaultActions},
 	}
-	wantBoth := []config.SelectedFile{
-		{Name: "dep-review", Origin: config.OriginExplicit},
-		defaultActions,
+	wantBoth := selection
+	wantExplicit := config.ManagedFileSelection{Explicit: selection.Explicit}
+	defaultsOnly := config.ManagedFileSelection{Defaults: selection.Defaults}
+
+	tests := []struct {
+		name      string
+		selection config.ManagedFileSelection
+		repo      *github.Repository
+		want      config.ManagedFileSelection
+	}{
+		{name: "defaults apply to a normal repo", selection: selection, repo: &github.Repository{}, want: wantBoth},
+		{name: "explicit files still apply to archived repos", selection: selection, repo: &github.Repository{Archived: github.Bool(true)}, want: wantExplicit},
+		{name: "archived repos without explicit files get nothing", selection: defaultsOnly, repo: &github.Repository{Archived: github.Bool(true)}},
+		{name: "explicit files still apply to forks", selection: selection, repo: &github.Repository{Fork: github.Bool(true)}, want: wantExplicit},
+		{name: "forks without explicit files get nothing", selection: defaultsOnly, repo: &github.Repository{Fork: github.Bool(true)}},
+		{name: "private suffix", selection: selection, repo: &github.Repository{Name: github.String("chiavdf-private")}, want: wantExplicit},
+		{name: "private prefix", selection: selection, repo: &github.Repository{Name: github.String("private-chiapos")}, want: wantExplicit},
+		{name: "dos suffix", selection: selection, repo: &github.Repository{Name: github.String("chiavdf-dos")}, want: wantExplicit},
+		{name: "dos suffix any case", selection: selection, repo: &github.Repository{Name: github.String("Chia-DOS")}, want: wantExplicit},
+		{name: "dos prefix is eligible", selection: selection, repo: &github.Repository{Name: github.String("dosbox")}, want: wantBoth},
+		{name: "defaults apply regardless of repo size", selection: selection, repo: &github.Repository{Size: github.Int(0)}, want: wantBoth},
+		{name: "missing metadata keeps explicit files only", selection: selection, want: wantExplicit},
 	}
-	wantExplicit := []config.SelectedFile{
-		{Name: "dep-review", Origin: config.OriginExplicit},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := filesForRepo(tt.selection, tt.repo); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("selection = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
-
-	t.Run("defaults apply to a normal repo", func(t *testing.T) {
-		got := filesForRepo(selection, &github.Repository{})
-		if !slices.Equal(got, wantBoth) {
-			t.Fatalf("files = %#v, want %#v", got, wantBoth)
-		}
-	})
-
-	t.Run("explicit files still apply to archived repos", func(t *testing.T) {
-		got := filesForRepo(selection, &github.Repository{Archived: github.Bool(true)})
-		if !slices.Equal(got, wantExplicit) {
-			t.Fatalf("files = %#v, want %#v", got, wantExplicit)
-		}
-	})
-
-	t.Run("archived repos without explicit files get nothing", func(t *testing.T) {
-		got := filesForRepo(config.ManagedFileSelection{Defaults: []config.SelectedFile{defaultActions}}, &github.Repository{Archived: github.Bool(true)})
-		if len(got) != 0 {
-			t.Fatalf("files = %#v, want none", got)
-		}
-	})
-
-	t.Run("explicit files still apply to forks", func(t *testing.T) {
-		got := filesForRepo(selection, &github.Repository{Fork: github.Bool(true)})
-		if !slices.Equal(got, wantExplicit) {
-			t.Fatalf("files = %#v, want %#v", got, wantExplicit)
-		}
-	})
-
-	t.Run("forks without explicit files get nothing", func(t *testing.T) {
-		got := filesForRepo(config.ManagedFileSelection{Defaults: []config.SelectedFile{defaultActions}}, &github.Repository{Fork: github.Bool(true)})
-		if len(got) != 0 {
-			t.Fatalf("files = %#v, want none", got)
-		}
-	})
-
-	t.Run("name rules decide default eligibility", func(t *testing.T) {
-		tests := []struct {
-			repoName string
-			want     []config.SelectedFile
-		}{
-			{repoName: "chiavdf-private", want: wantExplicit},
-			{repoName: "private-chiapos", want: wantExplicit},
-			{repoName: "chiavdf-dos", want: wantExplicit},
-			{repoName: "Chia-DOS", want: wantExplicit},
-			{repoName: "dosbox", want: wantBoth},
-		}
-		for _, tt := range tests {
-			t.Run(tt.repoName, func(t *testing.T) {
-				got := filesForRepo(selection, &github.Repository{Name: github.String(tt.repoName)})
-				if !slices.Equal(got, tt.want) {
-					t.Fatalf("files = %#v, want %#v", got, tt.want)
-				}
-			})
-		}
-	})
-
-	t.Run("defaults apply regardless of repo size", func(t *testing.T) {
-		got := filesForRepo(selection, &github.Repository{Size: github.Int(0)})
-		if !slices.Equal(got, wantBoth) {
-			t.Fatalf("files = %#v, want %#v", got, wantBoth)
-		}
-	})
-
-	t.Run("missing metadata keeps explicit files only", func(t *testing.T) {
-		got := filesForRepo(selection, nil)
-		if !slices.Equal(got, wantExplicit) {
-			t.Fatalf("files = %#v, want %#v", got, wantExplicit)
-		}
-	})
 }

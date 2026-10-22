@@ -47,43 +47,6 @@ func writeManagedContent(repoPath string, content []byte) error {
 	return os.Chmod(repoPath, mode)
 }
 
-// managedWritePath returns where repoRelPath is written under repoRoot. The
-// write must land inside the clone: a symlinked parent directory that leads
-// outside is an error, and a symlink at the path itself is removed so the
-// managed content replaces the link instead of following it.
-func managedWritePath(repoRoot, repoRelPath string) (string, error) {
-	root, err := filepath.Abs(repoRoot)
-	if err != nil {
-		return "", err
-	}
-	target := filepath.Join(root, filepath.FromSlash(repoRelPath))
-	if escapesRepository(root, target) {
-		return "", fmt.Errorf("managed path %s escapes the repository", repoRelPath)
-	}
-	if resolvedRoot, err := filepath.EvalSymlinks(root); err == nil {
-		root = resolvedRoot
-	}
-	for dir := filepath.Dir(target); ; dir = filepath.Dir(dir) {
-		resolved, err := filepath.EvalSymlinks(dir)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		if escapesRepository(root, resolved) {
-			return "", fmt.Errorf("managed path %s escapes the repository", repoRelPath)
-		}
-		break
-	}
-	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		if err := os.Remove(target); err != nil {
-			return "", err
-		}
-	}
-	return target, nil
-}
-
 // ManagedFiles updates all managed files in the org with current versions.
 // The repository listing defines which repos are considered; custom properties
 // provide the explicit selections for those repos.
@@ -105,7 +68,7 @@ func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
 
 	for _, check := range repoChecks(cfg, onlyRepo, repositories, properties) {
 		files := filesForRepo(check.selection, check.repo)
-		if len(files) == 0 {
+		if len(files.Explicit) == 0 && len(files.Defaults) == 0 {
 			continue
 		}
 		log.Printf("Need to check %s\n", check.name)
@@ -204,16 +167,13 @@ func defaultFilesEligible(repo *github.Repository) bool {
 }
 
 // filesForRepo applies default-file eligibility to a repo. Explicit selections
-// are always kept; defaults are only added when defaultFilesEligible is true.
-func filesForRepo(selection config.ManagedFileSelection, repo *github.Repository) []config.SelectedFile {
-	files := make([]config.SelectedFile, 0, len(selection.Explicit)+len(selection.Defaults))
-	for _, name := range selection.Explicit {
-		files = append(files, config.SelectedFile{Name: name, Origin: config.OriginExplicit})
+// are always kept; default bundles are only kept when defaultFilesEligible is
+// true.
+func filesForRepo(selection config.ManagedFileSelection, repo *github.Repository) config.ManagedFileSelection {
+	if !defaultFilesEligible(repo) {
+		selection.Defaults = nil
 	}
-	if defaultFilesEligible(repo) {
-		files = append(files, selection.Defaults...)
-	}
-	return files
+	return selection
 }
 
 // CheckFiles checks all the files for updates in the repo
@@ -224,14 +184,10 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 		return fmt.Errorf("error ensuring companion files for %s: %w", repoName, err)
 	}
 
-	selected := make([]config.SelectedFile, 0, len(files))
-	for _, name := range files {
-		selected = append(selected, config.SelectedFile{Name: name, Origin: config.OriginExplicit})
-	}
-	return c.checkSelectedFiles(repoName, selected, cfg, props)
+	return c.checkSelectedFiles(repoName, config.ManagedFileSelection{Explicit: files}, cfg, props)
 }
 
-func (c *Content) checkSelectedFiles(repoName string, files []config.SelectedFile, cfg *config.Config, props CustomProperties) error {
+func (c *Content) checkSelectedFiles(repoName string, selection config.ManagedFileSelection, cfg *config.Config, props CustomProperties) error {
 	defer removeDirIfExists(repoDir(repoName))
 
 	r, w, err := c.cloneRepo(repoName)
@@ -268,75 +224,28 @@ func (c *Content) checkSelectedFiles(repoName string, files []config.SelectedFil
 		return err
 	}
 
-	adoptedRoots, err := c.adoptedDefaultRoots(repoName, files, cfg)
-	if err != nil {
-		return err
-	}
-
 	hadChanges := false
-	for _, selected := range files {
-		file := selected.Name
-		log.Printf(" - Checking %s\n", file)
-
-		fileinfo := cfg.GetFileInfo(file)
-		if fileinfo == nil {
-			log.Printf("unknown file %s. Skipping...", file)
-			continue
-		}
-
-		if selected.Origin == config.OriginDefault && !adoptedRoots[selected.Root] {
-			continue
-		}
-
-		content, err := c.renderManagedFile(repoName, fileinfo, cfg, repoConfig)
-		if err != nil {
+	err = c.applySelection(repoName, selection, cfg, repoConfig, func(file string, repoPaths []string) error {
+		if _, err := w.Add(repoPaths[0]); err != nil {
 			return err
 		}
-
-		for _, form := range fileinfo.AlternatePaths {
-			// Ignoring errors since these alternate file names may not exist
-			removePath := fmt.Sprintf("%s/%s", repoDir(repoName), form)
-			_ = os.Remove(removePath)
-			_, _ = w.Add(form)
+		for _, removed := range repoPaths[1:] {
+			// An alternate path that never existed has nothing to stage.
+			_, _ = w.Add(removed)
 		}
-
-		repoPath, err := managedWritePath(repoDir(repoName), fileinfo.RepoPath)
-		if err != nil {
-			return err
-		}
-		if err := writeManagedContent(repoPath, content); err != nil {
-			return err
-		}
-
-		// Stage the changes
-		_, err = w.Add(fileinfo.RepoPath)
-		if err != nil {
-			return err
-		}
-
 		status, err := w.Status()
-		if err != nil {
+		if err != nil || status.IsClean() {
 			return err
-		}
-
-		if status.IsClean() {
-			continue
 		}
 		hadChanges = true
-
-		var message string
+		message := fmt.Sprintf("Update %s", file)
 		if repoConfig.CommitPrefix != nil {
-			// Dereference the pointer to get the string value
 			message = fmt.Sprintf("%s Update %s", *repoConfig.CommitPrefix, file)
-		} else {
-			// Handle the case where PrTargetBranch is nil
-			// For example, use a default message or branch name
-			message = fmt.Sprintf("Update %s", file)
 		}
-		err = c.commit(w, repoName, message)
-		if err != nil {
-			return err
-		}
+		return c.commit(w, repoName, message)
+	})
+	if err != nil {
+		return err
 	}
 
 	repo, _, err := ghDo(func() (*github.Repository, *github.Response, error) {
@@ -365,22 +274,75 @@ func (c *Content) checkSelectedFiles(repoName string, files []config.SelectedFil
 	return nil
 }
 
-// renderManagedFile renders fileinfo's template for repoName. A Dependabot
-// detection failure is logged and keeps the full template output.
-func (c *Content) renderManagedFile(repoName string, fileinfo *config.File, cfg *config.Config, repoConfig Config) ([]byte, error) {
+// stageFunc stages one written managed file. repoPaths starts with the file's
+// repo_path, followed by alternate paths that were removed.
+type stageFunc func(file string, repoPaths []string) error
+
+// applySelection writes a repo's managed files into its checkout without
+// touching GitHub: explicit files, then the files of every adoptable default
+// bundle. stage runs after each file is written.
+func (c *Content) applySelection(repoName string, selection config.ManagedFileSelection, cfg *config.Config, repoConfig Config, stage stageFunc) error {
+	defaults, err := adoptableDefaults(repoName, selection.Defaults, cfg)
+	if err != nil {
+		return err
+	}
+	files := make([]config.SelectedFile, 0, len(selection.Explicit)+len(defaults))
+	for _, name := range selection.Explicit {
+		files = append(files, config.SelectedFile{Name: name, Origin: config.OriginExplicit})
+	}
+	files = append(files, defaults...)
+
+	for _, selected := range files {
+		log.Printf(" - Checking %s\n", selected.Name)
+		fileinfo := cfg.GetFileInfo(selected.Name)
+		if fileinfo == nil {
+			log.Printf("unknown file %s. Skipping...", selected.Name)
+			continue
+		}
+		content, ok, err := c.renderManagedFile(repoName, selected, fileinfo, cfg, repoConfig)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		if err := removeConfined(repoDir(repoName), fileinfo.AlternatePaths); err != nil {
+			return err
+		}
+		repoPath, err := managedWritePath(repoDir(repoName), fileinfo.RepoPath)
+		if err != nil {
+			return err
+		}
+		if err := writeManagedContent(repoPath, content); err != nil {
+			return err
+		}
+		if err := stage(selected.Name, managedPaths(fileinfo)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renderManagedFile renders fileinfo's template for repoName. When Dependabot
+// detection fails, an explicit file keeps the full template output and a
+// default file is skipped (ok is false) so an adopted file stays as it is.
+func (c *Content) renderManagedFile(repoName string, selected config.SelectedFile, fileinfo *config.File, cfg *config.Config, repoConfig Config) ([]byte, bool, error) {
 	tmplContent, err := os.ReadFile(path.Join(c.templates, fileinfo.TemplateName))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	templateVars, templateOverrides, err := templateInputsForFile(fileinfo, repoName, cfg, repoConfig)
-	if errors.Is(err, errNoDependabotEcosystems) {
-		log.Printf("No Dependabot ecosystems detected for %s; keeping full configuration\n", repoName)
-	} else if err != nil {
-		log.Printf("Error inspecting Dependabot manifests for %s; keeping full configuration: %v\n", repoName, err)
+	if err != nil {
+		if selected.Origin == config.OriginDefault {
+			log.Printf("Skipping default %s for %s: Dependabot detection failed: %v\n", selected.Name, repoName, err)
+			return nil, false, nil
+		}
+		log.Printf("Dependabot detection for %s failed; keeping full configuration: %v\n", repoName, err)
 	}
 
-	return ProcessTemplate(tmplContent, templateVars, templateOverrides)
+	content, err := ProcessTemplate(tmplContent, templateVars, templateOverrides)
+	return content, err == nil, err
 }
 
 // templateInputsForFile keeps template-specific variable derivation out of the

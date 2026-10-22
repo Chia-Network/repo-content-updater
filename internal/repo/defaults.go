@@ -26,20 +26,22 @@ const (
 )
 
 // existingFileState inspects fileinfo's repo_path and alternate_paths under dir.
-// A file without an adoption marker is unowned whenever any copy exists, and
-// anything other than a regular file (a symlink or directory) is never owned,
-// so adoption never reads through a link.
+// A file without an adoption marker is unowned whenever any copy exists.
+// Anything other than a regular file, or a path whose parent is not a real
+// directory inside dir, is never owned, so adoption only reads checkout files.
 func existingFileState(dir string, fileinfo *config.File) (fileState, error) {
 	marker := strings.TrimSpace(fileinfo.AdoptionMarker)
 	state := fileAbsent
-	for _, repoPath := range append([]string{fileinfo.RepoPath}, fileinfo.AlternatePaths...) {
-		fullPath := filepath.Join(dir, filepath.FromSlash(repoPath))
-		info, err := os.Lstat(fullPath)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
+	for _, repoPath := range managedPaths(fileinfo) {
+		fullPath, info, err := lstatConfined(dir, repoPath)
+		if errors.Is(err, errUnconfinedPath) {
+			return fileUnowned, nil
 		}
 		if err != nil {
 			return fileAbsent, err
+		}
+		if info == nil {
+			continue
 		}
 		if marker == "" || !info.Mode().IsRegular() {
 			return fileUnowned, nil
@@ -56,31 +58,34 @@ func existingFileState(dir string, fileinfo *config.File) (fileState, error) {
 	return state, nil
 }
 
-// adoptedDefaultRoots returns, for each default root among files, whether its
-// bundle may be written to repoName.
-func (c *Content) adoptedDefaultRoots(repoName string, files []config.SelectedFile, cfg *config.Config) (map[string]bool, error) {
-	var roots []string
-	members := map[string][]*config.File{}
-	for _, selected := range files {
-		fileinfo := cfg.GetFileInfo(selected.Name)
-		if selected.Origin != config.OriginDefault || fileinfo == nil {
-			continue
-		}
-		if _, ok := members[selected.Root]; !ok {
-			roots = append(roots, selected.Root)
-		}
-		members[selected.Root] = append(members[selected.Root], fileinfo)
-	}
+// managedPaths lists fileinfo's repo_path followed by its alternate_paths.
+func managedPaths(fileinfo *config.File) []string {
+	return append([]string{fileinfo.RepoPath}, fileinfo.AlternatePaths...)
+}
 
-	adopted := make(map[string]bool, len(roots))
-	for _, root := range roots {
-		ok, err := defaultBundleAdoptable(repoName, cfg.GetFileInfo(root), members[root])
+// adoptableDefaults returns the files of every default bundle that may be
+// written to repoName, in bundle order.
+func adoptableDefaults(repoName string, bundles []config.DefaultBundle, cfg *config.Config) ([]config.SelectedFile, error) {
+	var files []config.SelectedFile
+	for _, bundle := range bundles {
+		members := make([]*config.File, 0, len(bundle.Files))
+		for _, name := range bundle.Files {
+			if fileinfo := cfg.GetFileInfo(name); fileinfo != nil {
+				members = append(members, fileinfo)
+			}
+		}
+		ok, err := defaultBundleAdoptable(repoName, cfg.GetFileInfo(bundle.Root), members)
 		if err != nil {
 			return nil, err
 		}
-		adopted[root] = ok
+		if !ok {
+			continue
+		}
+		for _, name := range bundle.Files {
+			files = append(files, config.SelectedFile{Name: name, Origin: config.OriginDefault})
+		}
 	}
-	return adopted, nil
+	return files, nil
 }
 
 // defaultBundleAdoptable applies the adoption rules to one bundle: the root's
@@ -130,14 +135,17 @@ func defaultBundleAdoptable(repoName string, root *config.File, members []*confi
 }
 
 // anyPathExists reports whether anything, including a dangling symlink, sits
-// at fileinfo's repo_path or an alternate_path under dir.
+// at fileinfo's repo_path or an alternate_path under dir. A path that cannot
+// be confined to dir counts as occupied.
 func anyPathExists(dir string, fileinfo *config.File) (bool, error) {
-	for _, repoPath := range append([]string{fileinfo.RepoPath}, fileinfo.AlternatePaths...) {
-		_, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(repoPath)))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
+	for _, repoPath := range managedPaths(fileinfo) {
+		_, info, err := lstatConfined(dir, repoPath)
+		if errors.Is(err, errUnconfinedPath) {
+			return true, nil
 		}
-		return err == nil, err
+		if err != nil || info != nil {
+			return info != nil, err
+		}
 	}
 	return false, nil
 }
@@ -173,19 +181,22 @@ func containsTrimmedLine(content, want string) bool {
 	return false
 }
 
-// requiredPathExists reports whether repoRelPath exists under root. A directory
-// only satisfies the requirement when it directly contains a .yml or .yaml file.
+// requiredPathExists reports whether repoRelPath exists under root as a
+// regular file, or as a real directory that directly contains a regular .yml
+// or .yaml file. Links, and paths below a linked parent, never satisfy it.
 func requiredPathExists(root, repoRelPath string) (bool, error) {
-	fullPath := filepath.Join(root, filepath.FromSlash(repoRelPath))
-	info, err := os.Stat(fullPath)
-	if errors.Is(err, os.ErrNotExist) {
+	fullPath, info, err := lstatConfined(root, repoRelPath)
+	if errors.Is(err, errUnconfinedPath) {
 		return false, nil
 	}
-	if err != nil {
+	if err != nil || info == nil {
 		return false, err
 	}
-	if !info.IsDir() {
+	if info.Mode().IsRegular() {
 		return true, nil
+	}
+	if !info.IsDir() {
+		return false, nil
 	}
 
 	entries, err := os.ReadDir(fullPath)
@@ -193,7 +204,7 @@ func requiredPathExists(root, repoRelPath string) (bool, error) {
 		return false, err
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if !entry.Type().IsRegular() {
 			continue
 		}
 		switch strings.ToLower(filepath.Ext(entry.Name())) {

@@ -127,14 +127,15 @@ func TestResolveManagedFileSelection(t *testing.T) {
 		cursorBundle, err := cfg.EnsureCompanionFiles([]string{"dependency-cursor-review"})
 		assert.Nil(t, err)
 		assert.Equal(t, append([]string{"dependabot-actions"}, cursorBundle...), defaultNames(selection))
-		for _, file := range selection.Defaults {
-			assert.Equal(t, config.OriginDefault, file.Origin)
-			if file.Name == "dependabot-actions" {
-				assert.Equal(t, "dependabot-actions", file.Root)
-			} else {
-				assert.Equal(t, "dependency-cursor-review", file.Root)
-			}
+		if assert.Len(t, selection.Defaults, 2) {
+			assert.Equal(t, config.DefaultBundle{Root: "dependabot-actions", Files: []string{"dependabot-actions"}}, selection.Defaults[0])
+			assert.Equal(t, config.DefaultBundle{Root: "dependency-cursor-review", Files: cursorBundle}, selection.Defaults[1])
 		}
+	})
+
+	t.Run("opting out of a review companion drops the whole review bundle", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!malware-verdict-formatter"})
+		assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
 	})
 
 	t.Run("default resolves to the manifest-aware dependabot template", func(t *testing.T) {
@@ -246,9 +247,9 @@ files:
 		assert.Equal(t, []string{"workflow", "script"}, defaultNames(selection))
 	})
 
-	t.Run("opt-out of a required default companion is rejected", func(t *testing.T) {
+	t.Run("opt-out of a default companion drops the bundle", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", []string{"!script"})
-		assert.Equal(t, []string{"workflow", "script"}, defaultNames(selection))
+		assert.Empty(t, selection.Defaults)
 	})
 
 	t.Run("opt-out of a default root removes its companions", func(t *testing.T) {
@@ -258,9 +259,9 @@ files:
 }
 
 func defaultNames(selection config.ManagedFileSelection) []string {
-	names := make([]string, 0, len(selection.Defaults))
-	for _, file := range selection.Defaults {
-		names = append(names, file.Name)
+	var names []string
+	for _, bundle := range selection.Defaults {
+		names = append(names, bundle.Files...)
 	}
 	return names
 }

@@ -99,7 +99,7 @@ updates:
     rebase-strategy: auto
 
   - package-ecosystem: docker
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -113,7 +113,7 @@ updates:
       - "Changed"
 
   - package-ecosystem: terraform
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -127,7 +127,7 @@ updates:
       - "Changed"
 
   - package-ecosystem: nuget
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"

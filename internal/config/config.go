@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -34,18 +35,22 @@ const (
 )
 
 // SelectedFile is a canonical managed file name plus its selection origin.
-// Root names the default_files entry whose adoption decision governs a
-// default file; it is the file itself for a root and empty for explicit files.
 type SelectedFile struct {
 	Name   string
 	Origin FileOrigin
-	Root   string
+}
+
+// DefaultBundle is one default_files root plus the companion files that are
+// installed with it. The root's adoption decision applies to every file.
+type DefaultBundle struct {
+	Root  string
+	Files []string
 }
 
 // ManagedFileSelection is the resolved managed-files set for one repo.
 type ManagedFileSelection struct {
 	Explicit []string
-	Defaults []SelectedFile
+	Defaults []DefaultBundle
 }
 
 // Group is a defined group of template files to include at once
@@ -317,25 +322,37 @@ func (c *Config) ResolveManagedFileSelection(repoName string, entries []string) 
 }
 
 // resolveDefaultBundles expands each default root into its companion closure.
-// A bundle is dropped whole when its root is opted out or its root's repo path
-// is claimed by an explicit or opted-out file; members already selected
+// A bundle is dropped whole when any member is opted out or the root's repo
+// path is claimed by an explicit or opted-out file; members already selected
 // explicitly are left to the explicit selection.
-func (c *Config) resolveDefaultBundles(repoName string, explicitSet, optOuts map[string]bool) []SelectedFile {
-	var defaults []SelectedFile
+func (c *Config) resolveDefaultBundles(repoName string, explicitSet, optOuts map[string]bool) []DefaultBundle {
+	var bundles []DefaultBundle
 	seen := map[string]bool{}
 	for _, root := range c.DefaultFiles {
-		if optOuts[root] || explicitSet[root] || c.sharesRepoPathWith(root, explicitSet) || c.sharesRepoPathWith(root, optOuts) {
+		if explicitSet[root] || c.sharesRepoPathWith(root, explicitSet) || c.sharesRepoPathWith(root, optOuts) {
 			continue
 		}
-		for _, name := range c.resolveSelectedFiles(repoName, []string{root}, optOuts) {
+		members, err := c.EnsureCompanionFiles([]string{root})
+		if err != nil {
+			log.Printf("Error resolving default %s for %s: %v\n", root, repoName, err)
+			continue
+		}
+		if slices.ContainsFunc(members, func(name string) bool { return optOuts[name] }) {
+			continue
+		}
+		bundle := DefaultBundle{Root: root}
+		for _, name := range members {
 			if seen[name] || explicitSet[name] || c.sharesRepoPathWith(name, explicitSet) {
 				continue
 			}
 			seen[name] = true
-			defaults = append(defaults, SelectedFile{Name: name, Origin: OriginDefault, Root: root})
+			bundle.Files = append(bundle.Files, name)
+		}
+		if len(bundle.Files) > 0 {
+			bundles = append(bundles, bundle)
 		}
 	}
-	return defaults
+	return bundles
 }
 
 func (c *Config) resolveSelectedFiles(repoName string, roots []string, optOuts map[string]bool) []string {

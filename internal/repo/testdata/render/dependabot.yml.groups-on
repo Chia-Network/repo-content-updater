@@ -123,7 +123,7 @@ updates:
           - "*"
 
   - package-ecosystem: docker
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -141,7 +141,7 @@ updates:
           - "*"
 
   - package-ecosystem: terraform
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -159,7 +159,7 @@ updates:
           - "*"
 
   - package-ecosystem: nuget
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
