@@ -134,7 +134,9 @@ class ReleaseResolutionTest(UpstreamScanCase):
             )
             self.assertEqual(report["_returncode"], 0, msg=report["_stderr"])
             self.assertEqual(report["status"], "warn", msg=report)
-            self.assertTrue(report["scan_conclusive"], msg=report)
+            # A raw 0x85 is not UTF-8: still searched for IOCs, but unread for codepoint scans.
+            self.assertFalse(report["scan_conclusive"], msg=report)
+            self.assertEqual(report["unread"], [{"file": "pkg/rawnel.js", "cause": "undecodable blob"}])
             self.assertIn("- Status: **warn**", report["_summary"])
             self.assertNotIn("Status: **clean**", report["_summary"])
             files = {item["file"] for item in report["findings"]["ioc"]}

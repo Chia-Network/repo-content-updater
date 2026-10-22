@@ -196,7 +196,7 @@ poetry.lock, Pipfile.lock, requirements.txt, requirements-dev.txt, requirements/
 - Treat .github/workflows/ modifications in the PR under review as highly suspicious in a pure dependency update PR. \
 Upstream release workflow files are not executed by this repository; a path-touch finding there is context unless the \
 workflow content itself adds a payload.
-- Unchanged submodule pointers are recorded in the report and their contents are not scanned. \
+- Unchanged or removed submodule pointers are recorded in the report and their contents are not scanned. \
 An added or moved submodule pointer is reported as unread with cause "submodule changed".
 
 IOC matches, and Unicode or confusable-character findings in files changed by this update, are blocking. \
