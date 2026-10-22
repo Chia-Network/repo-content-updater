@@ -32,6 +32,9 @@ const dependabotTemplateName = "dependabot.yml"
 // directories are discovered from the whole tree and written back to
 // directoriesVar as a JSON list. A directory matching rootCovers at the root
 // stands for the whole tree (a NuGet solution lists its projects).
+//
+// listDirectories marks ecosystems the template renders with a `directories`
+// sequence, so a bare pinned directory is written as a one-item list.
 type dependabotEcosystem struct {
 	name               string
 	enabledVar         string
@@ -40,6 +43,7 @@ type dependabotEcosystem struct {
 	nonRootManifests   []string
 	rootExtraManifests []string
 	discover           bool
+	listDirectories    bool
 	rootCovers         []string
 }
 
@@ -74,6 +78,7 @@ var dependabotEcosystems = []dependabotEcosystem{
 		manifests:          []string{"action.yml", "action.yaml"},
 		nonRootManifests:   []string{"*.yml", "*.yaml"},
 		rootExtraManifests: []string{".github/workflows/*.yml", ".github/workflows/*.yaml"},
+		listDirectories:    true,
 	},
 	{
 		name:           "npm",
@@ -94,18 +99,20 @@ var dependabotEcosystems = []dependabotEcosystem{
 		manifests:      []string{"Package.swift"},
 	},
 	{
-		name:           "docker",
-		enabledVar:     "DEPENDABOT_DOCKER_ENABLED",
-		directoriesVar: "DEPENDABOT_DOCKER_DIRECTORIES",
-		manifests:      []string{"Dockerfile", "Dockerfile.*", "*.dockerfile"},
-		discover:       true,
+		name:            "docker",
+		enabledVar:      "DEPENDABOT_DOCKER_ENABLED",
+		directoriesVar:  "DEPENDABOT_DOCKER_DIRECTORIES",
+		manifests:       []string{"Dockerfile", "Dockerfile.*", "*.dockerfile"},
+		discover:        true,
+		listDirectories: true,
 	},
 	{
-		name:           "terraform",
-		enabledVar:     "DEPENDABOT_TERRAFORM_ENABLED",
-		directoriesVar: "DEPENDABOT_TERRAFORM_DIRECTORIES",
-		manifests:      []string{"*.tf", "*.tf.json", ".terraform.lock.hcl"},
-		discover:       true,
+		name:            "terraform",
+		enabledVar:      "DEPENDABOT_TERRAFORM_ENABLED",
+		directoriesVar:  "DEPENDABOT_TERRAFORM_DIRECTORIES",
+		manifests:       []string{"*.tf", "*.tf.json", ".terraform.lock.hcl"},
+		discover:        true,
+		listDirectories: true,
 	},
 	{
 		name:           "nuget",
@@ -173,6 +180,7 @@ func DependabotEcosystemVars(repoDir string, vars map[string]string) (map[string
 		return nil, fmt.Errorf("inspect repository %s: not a directory", repoDir)
 	}
 
+	vars = withDirectoryLists(vars)
 	out := copyTemplateVars(vars)
 	var unpinned []dependabotEcosystem
 	for _, ecosystem := range dependabotEcosystems {
@@ -211,26 +219,24 @@ func DependabotEcosystemVars(repoDir string, vars map[string]string) (map[string
 		}
 	}
 	if !anyEnabled {
-		fallback := templateVarsWithoutDependabotFlags(vars)
-		encodeDirectoryLists(fallback)
-		return fallback, errNoDependabotEcosystems
+		return templateVarsWithoutDependabotFlags(vars), errNoDependabotEcosystems
 	}
-	encodeDirectoryLists(out)
 	return out, nil
 }
 
-// encodeDirectoryLists turns a bare `directories` pin such as "/docker" into
-// the JSON list ["/docker"], because the template renders these vars as a YAML
-// sequence. Values that are already lists are left as written.
-func encodeDirectoryLists(vars map[string]string) {
+// withDirectoryLists returns vars with each bare listDirectories pin, such as
+// "/docker", written as the JSON list ["/docker"]. Lists are kept as written.
+func withDirectoryLists(vars map[string]string) map[string]string {
+	out := copyTemplateVars(vars)
 	for _, ecosystem := range dependabotEcosystems {
-		raw := strings.TrimSpace(vars[ecosystem.directoriesVar])
-		if !strings.HasSuffix(ecosystem.directoriesVar, "_DIRECTORIES") || raw == "" || strings.HasPrefix(raw, "[") {
+		raw := strings.TrimSpace(out[ecosystem.directoriesVar])
+		if !ecosystem.listDirectories || raw == "" || strings.HasPrefix(raw, "[") {
 			continue
 		}
 		encoded, _ := json.Marshal([]string{raw})
-		vars[ecosystem.directoriesVar] = string(encoded)
+		out[ecosystem.directoriesVar] = string(encoded)
 	}
+	return out
 }
 
 func copyTemplateVars(vars map[string]string) map[string]string {
