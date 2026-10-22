@@ -109,7 +109,8 @@ jobs:
         if: steps.target_pr.outputs.already_reviewed != 'true'
         shell: bash
         run: |
-          rm -rf -- .malware-scan .upstream-dependency github_output.txt \
+          rm -rf -- .malware-scan .upstream-dependency .dcr-dependency-scans \
+            github_output.txt \
             dependency_updates.json dependabot_comment_context.json \
             dependabot_release_notes.md dependabot_commits.md \
             malware_scan_report.json malware_scan_summary.md \
@@ -292,7 +293,9 @@ jobs:
         shell: bash
         run: |
           rm -rf -- .dcr-strip .upstream-dependency dcr-scan-input \
-            cursor_output_malware.json cursor_output_compatibility.json
+            cursor_output_malware.json cursor_output_compatibility.json \
+            cursor_output_malware.json.stream \
+            cursor_output_compatibility.json.stream
 
       - name: Checkout trusted instruction strip
         uses: actions/checkout@v7
