@@ -294,19 +294,21 @@ func TestDefaultDependabotDiscoversNestedManifests(t *testing.T) {
 		})
 	}
 
-	t.Run("a pinned directory list is used as configured", func(t *testing.T) {
-		repo := t.TempDir()
-		writeDependabotTestFile(t, repo, filepath.Join("docker", "Dockerfile"), "")
-		writeDependabotTestFile(t, repo, filepath.Join("other", "Dockerfile"), "")
-		vars, err := DependabotVarsForRepo(repo, cfg.Variables, map[string]string{"DEPENDABOT_DOCKER_DIRECTORIES": `["/docker"]`})
-		if err != nil {
-			t.Fatal(err)
-		}
-		rendered := renderDependabotTemplate(t, cfg, vars)
-		if got := renderedDependabotDirectories(t, rendered, "docker"); !reflect.DeepEqual(got, []string{"/docker"}) {
-			t.Fatalf("docker directories = %v, want [/docker]", got)
-		}
-	})
+	for _, pin := range []string{`["/docker"]`, "/docker", " /docker "} {
+		t.Run("pinned directories "+pin+" render as a list", func(t *testing.T) {
+			repo := t.TempDir()
+			writeDependabotTestFile(t, repo, filepath.Join("docker", "Dockerfile"), "")
+			writeDependabotTestFile(t, repo, filepath.Join("other", "Dockerfile"), "")
+			vars, err := DependabotVarsForRepo(repo, cfg.Variables, map[string]string{"DEPENDABOT_DOCKER_DIRECTORIES": pin})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rendered := renderDependabotTemplate(t, cfg, vars)
+			if got := renderedDependabotDirectories(t, rendered, "docker"); !reflect.DeepEqual(got, []string{"/docker"}) {
+				t.Fatalf("docker directories = %v, want [/docker]\n%s", got, rendered)
+			}
+		})
+	}
 }
 
 func renderedDependabotDirectories(t *testing.T, raw []byte, ecosystem string) []string {

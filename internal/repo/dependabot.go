@@ -211,9 +211,26 @@ func DependabotEcosystemVars(repoDir string, vars map[string]string) (map[string
 		}
 	}
 	if !anyEnabled {
-		return templateVarsWithoutDependabotFlags(vars), errNoDependabotEcosystems
+		fallback := templateVarsWithoutDependabotFlags(vars)
+		encodeDirectoryLists(fallback)
+		return fallback, errNoDependabotEcosystems
 	}
+	encodeDirectoryLists(out)
 	return out, nil
+}
+
+// encodeDirectoryLists turns a bare `directories` pin such as "/docker" into
+// the JSON list ["/docker"], because the template renders these vars as a YAML
+// sequence. Values that are already lists are left as written.
+func encodeDirectoryLists(vars map[string]string) {
+	for _, ecosystem := range dependabotEcosystems {
+		raw := strings.TrimSpace(vars[ecosystem.directoriesVar])
+		if !strings.HasSuffix(ecosystem.directoriesVar, "_DIRECTORIES") || raw == "" || strings.HasPrefix(raw, "[") {
+			continue
+		}
+		encoded, _ := json.Marshal([]string{raw})
+		vars[ecosystem.directoriesVar] = string(encoded)
+	}
 }
 
 func copyTemplateVars(vars map[string]string) map[string]string {
