@@ -147,6 +147,50 @@ func TestApplySelection(t *testing.T) {
 	})
 }
 
+func TestApplySelectionChecksEveryPathBeforeWriting(t *testing.T) {
+	cfg := loadDependabotTestConfig(t)
+	templates, err := filepath.Abs(filepath.Join("..", "..", "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	repoName := "linked-workflows"
+	writeDependabotTestFile(t, repoDir(repoName), "go.mod", "")
+	if err := os.MkdirAll(filepath.Join(repoDir(repoName), ".github"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(repoDir(repoName), ".github", "workflows")); err != nil {
+		t.Fatal(err)
+	}
+	selection := config.ManagedFileSelection{Explicit: []string{"dependabot", "dependency-cursor-review"}}
+	err = (&Content{templates: templates}).applySelection(repoName, selection, cfg, Config{}, func(string, []string) error { return nil })
+	if err == nil {
+		t.Fatal("expected an error for a linked workflows directory")
+	}
+	if _, err := os.Lstat(filepath.Join(repoDir(repoName), ".github", "dependabot.yml")); !os.IsNotExist(err) {
+		t.Fatalf("dependabot.yml was written before the failing path was checked: %v", err)
+	}
+}
+
+func TestLoadRepoConfigReadsOnlyRegularFiles(t *testing.T) {
+	repo := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "cfg.yaml")
+	if err := os.WriteFile(outside, []byte("var_overrides:\n  X: outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(repo, ".repo-content-updater.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	writeDependabotTestFile(t, repo, ".repo-content-updater.yml", "var_overrides:\n  X: inside\n")
+	got, err := (&Content{}).LoadRepoConfig(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.VarOverrides["X"] != "inside" {
+		t.Fatalf("overrides = %v, want the in-repo .yml", got.VarOverrides)
+	}
+}
+
 func TestAdoptionStaysInsideTheCheckout(t *testing.T) {
 	cfg := loadDependabotTestConfig(t)
 	fileinfo := cfg.GetFileInfo("dependabot-actions")

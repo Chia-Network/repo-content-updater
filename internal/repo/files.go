@@ -292,6 +292,14 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 	}
 	files = append(files, defaults...)
 
+	// Render and confine every file before touching the checkout, so a path
+	// problem in any file leaves the whole checkout unchanged.
+	type plannedWrite struct {
+		name     string
+		fileinfo *config.File
+		content  []byte
+	}
+	planned := make([]plannedWrite, 0, len(files))
 	for _, selected := range files {
 		log.Printf(" - Checking %s\n", selected.Name)
 		fileinfo := cfg.GetFileInfo(selected.Name)
@@ -306,17 +314,26 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 		if !ok {
 			continue
 		}
-		if err := removeConfined(repoDir(repoName), fileinfo.AlternatePaths); err != nil {
+		for _, repoRelPath := range managedPaths(fileinfo) {
+			if _, err := confinedPath(repoDir(repoName), repoRelPath); err != nil {
+				return err
+			}
+		}
+		planned = append(planned, plannedWrite{name: selected.Name, fileinfo: fileinfo, content: content})
+	}
+
+	for _, write := range planned {
+		if err := removeConfined(repoDir(repoName), write.fileinfo.AlternatePaths); err != nil {
 			return err
 		}
-		repoPath, err := managedWritePath(repoDir(repoName), fileinfo.RepoPath)
+		repoPath, err := managedWritePath(repoDir(repoName), write.fileinfo.RepoPath)
 		if err != nil {
 			return err
 		}
-		if err := writeManagedContent(repoPath, content); err != nil {
+		if err := writeManagedContent(repoPath, write.content); err != nil {
 			return err
 		}
-		if err := stage(selected.Name, managedPaths(fileinfo)); err != nil {
+		if err := stage(write.name, managedPaths(write.fileinfo)); err != nil {
 			return err
 		}
 	}

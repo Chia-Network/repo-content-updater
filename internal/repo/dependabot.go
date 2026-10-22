@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -173,14 +174,20 @@ func DependabotEcosystemVars(repoDir string, vars map[string]string) (map[string
 	}
 
 	out := copyTemplateVars(vars)
+	var unpinned []dependabotEcosystem
+	for _, ecosystem := range dependabotEcosystems {
+		if ecosystem.discover && strings.TrimSpace(vars[ecosystem.directoriesVar]) == "" {
+			unpinned = append(unpinned, ecosystem)
+		}
+	}
+	discovered, err := discoverManifestDirectories(repoRoot, unpinned)
+	if err != nil {
+		return nil, fmt.Errorf("discover manifests: %w", err)
+	}
 
 	anyEnabled := false
 	for _, ecosystem := range dependabotEcosystems {
-		if ecosystem.discover && strings.TrimSpace(vars[ecosystem.directoriesVar]) == "" {
-			dirs, err := discoverManifestDirectories(repoRoot, ecosystem)
-			if err != nil {
-				return nil, fmt.Errorf("discover %s manifests: %w", ecosystem.name, err)
-			}
+		if dirs, ok := discovered[ecosystem.name]; ok {
 			encoded, _ := json.Marshal(dirs)
 			out[ecosystem.directoriesVar] = string(encoded)
 			out[ecosystem.enabledVar] = "0"
@@ -260,44 +267,57 @@ func dependabotEcosystemPresent(repoRoot string, ecosystem dependabotEcosystem, 
 // discoveryPrunedDirs are never searched for discovered manifests.
 var discoveryPrunedDirs = map[string]bool{".git": true, "node_modules": true}
 
-// discoverManifestDirectories returns, sorted, every directory under repoRoot
-// that directly holds a regular file matching one of ecosystem's manifests,
-// as Dependabot "/"-rooted paths. Links are not followed.
-func discoverManifestDirectories(repoRoot string, ecosystem dependabotEcosystem) ([]string, error) {
-	found := map[string]bool{}
-	err := filepath.WalkDir(repoRoot, func(current string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if current != repoRoot && discoveryPrunedDirs[entry.Name()] {
-				return filepath.SkipDir
+// discoverManifestDirectories walks repoRoot once and returns, for each
+// ecosystem, the sorted "/"-rooted directories that directly hold a regular
+// file matching its manifests. A root file matching rootCovers maps that
+// ecosystem to ["/"]. Links are not followed.
+func discoverManifestDirectories(repoRoot string, ecosystems []dependabotEcosystem) (map[string][]string, error) {
+	found := make(map[string]map[string]bool, len(ecosystems))
+	coveredAtRoot := map[string]bool{}
+	for _, ecosystem := range ecosystems {
+		found[ecosystem.name] = map[string]bool{}
+	}
+	if len(ecosystems) > 0 {
+		err := filepath.WalkDir(repoRoot, func(current string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				if current != repoRoot && discoveryPrunedDirs[entry.Name()] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !entry.Type().IsRegular() {
+				return nil
+			}
+			rel, err := filepath.Rel(repoRoot, filepath.Dir(current))
+			if err != nil {
+				return err
+			}
+			for _, ecosystem := range ecosystems {
+				if rel == "." && matchesAnyPattern(ecosystem.rootCovers, entry.Name()) {
+					coveredAtRoot[ecosystem.name] = true
+				}
+				if matchesAnyPattern(ecosystem.manifests, entry.Name()) {
+					found[ecosystem.name][path.Join("/", filepath.ToSlash(rel))] = true
+				}
 			}
 			return nil
-		}
-		if !entry.Type().IsRegular() || !matchesAnyPattern(ecosystem.manifests, entry.Name()) {
-			return nil
-		}
-		rel, err := filepath.Rel(repoRoot, filepath.Dir(current))
+		})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if rel == "." && matchesAnyPattern(ecosystem.rootCovers, entry.Name()) {
-			found = map[string]bool{"/": true}
-			return filepath.SkipAll
+	}
+	out := make(map[string][]string, len(found))
+	for name, dirs := range found {
+		if coveredAtRoot[name] {
+			out[name] = []string{"/"}
+			continue
 		}
-		found[path.Join("/", filepath.ToSlash(rel))] = true
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		out[name] = slices.Sorted(maps.Keys(dirs))
 	}
-	dirs := make([]string, 0, len(found))
-	for dir := range found {
-		dirs = append(dirs, dir)
-	}
-	slices.Sort(dirs)
-	return dirs, nil
+	return out, nil
 }
 
 func matchesAnyPattern(patterns []string, name string) bool {
