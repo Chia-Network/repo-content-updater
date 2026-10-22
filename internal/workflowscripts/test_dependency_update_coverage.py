@@ -68,6 +68,7 @@ def _clean(name: str, repo: str) -> dict:
         "filtered_count": 0,
         "changed_files": ["pkg/index.js"],
         "errors": [],
+        "unread": [],
         "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
         "package_name": name,
         "upstream_repo": repo,
