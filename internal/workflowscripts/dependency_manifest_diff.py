@@ -22,7 +22,7 @@ _REQ_RE = re.compile(
 )
 _YARN_DESCRIPTOR_RE = re.compile(r'"?(@?[^@"\s]+)@')
 _YARN_VERSION_RE = re.compile(r'^  version "([^"]+)"')
-_VERSION_PREFIX_RE = re.compile(r"^(===|==|~=|!=|>=|<=|\^|~|=|>|<|v)")
+_VERSION_PREFIX_RE = re.compile(r"^(===|==|~=|!=|>=|<=|\^|~|=|>|<|[vV])")
 # A TOML table header, and a `name = "spec"` or `name = { version = "spec" }` dependency line.
 _TOML_TABLE_RE = re.compile(r"^\s*\[+\s*([^\]]+?)\s*\]+\s*$")
 _TOML_DEP_RE = re.compile(
@@ -145,15 +145,15 @@ def _version_body(value: str) -> str:
 def _reached_listed_version(name: str, old: str, new: str, listed: dict[str, set[tuple[str, str]]]) -> bool:
     """True when this package moved from its listed version to its listed version.
 
-    A leading v is optional. Any other prefix, such as an npm range, must be
+    A leading v or V is optional. Any other prefix, such as an npm range, must be
     unchanged, and the version text after it must be the listed one.
     """
     if not old or not new or old == new:
         return False
     old_prefix = _VERSION_PREFIX_RE.match(old)
     new_prefix = _VERSION_PREFIX_RE.match(new)
-    old_mark = old_prefix.group(1) if old_prefix else ""
-    new_mark = new_prefix.group(1) if new_prefix else ""
+    old_mark = old_prefix.group(1).lower() if old_prefix else ""
+    new_mark = new_prefix.group(1).lower() if new_prefix else ""
     if old_mark != new_mark and (old_mark not in {"", "v"} or new_mark not in {"", "v"}):
         return False
     old_body, new_body = _version_body(old), _version_body(new)

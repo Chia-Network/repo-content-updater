@@ -23,6 +23,12 @@ class VersionOperatorTest(unittest.TestCase):
         for operator in ("==", "===", "~=", "!=", ">=", "^", "~"):
             self.assertEqual(manifest._VERSION_PREFIX_RE.sub("", f"{operator}2.0"), "2.0", operator)
 
+    def test_uppercase_v_listed_version_matches_manifest(self) -> None:
+        listed = {"tool": {("V1.0", "V1.1")}}
+        for old, new in (("v1.0", "v1.1"), ("1.0", "1.1"), ("V1.0", "V1.1")):
+            self.assertTrue(manifest._reached_listed_version("tool", old, new, listed), (old, new))
+        self.assertFalse(manifest._reached_listed_version("tool", "^1.0", "1.1", listed))
+
 
 class PythonManifestTest(unittest.TestCase):
     def test_python_manifests_are_requirements(self) -> None:

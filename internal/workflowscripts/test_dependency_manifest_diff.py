@@ -315,12 +315,7 @@ class DependencyManifestDiffTest(unittest.TestCase):
             return json.dumps(body) + "\n"
 
         def yarn(version: str) -> str:
-            return (
-                "lodash@^4.17.20:\n"
-                f'  version "{version}"\n'
-                f'  resolved "{old_url}"\n'
-                f'  integrity "{integrity}"\n'
-            )
+            return f'lodash@^4.17.20:\n  version "{version}"\n  resolved "{old_url}"\n  integrity "{integrity}"\n'
 
         for path, render in (
             ("package-lock.json", npm),
@@ -684,6 +679,7 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertEqual(separators["status"], "clean")
         self.assertEqual(separators["package_name"], "Foo_Bar.Baz")
         self.assertEqual(separators["not_scanned_reason"], "")
+
 
 if __name__ == "__main__":
     unittest.main()
