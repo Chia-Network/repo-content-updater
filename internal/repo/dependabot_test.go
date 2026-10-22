@@ -453,3 +453,16 @@ func writeDependabotTestFile(t *testing.T, root, relative, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestListDirectoriesMatchesTemplate(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "templates", "dependabot.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ecosystem := range dependabotEcosystems {
+		rendersList := strings.Contains(string(raw), `directories: "{{ .`+ecosystem.directoriesVar+` }}"`)
+		if rendersList != ecosystem.listDirectories {
+			t.Errorf("%s: template renders a directories list = %v, listDirectories = %v", ecosystem.name, rendersList, ecosystem.listDirectories)
+		}
+	}
+}

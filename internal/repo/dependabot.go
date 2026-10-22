@@ -126,8 +126,9 @@ var dependabotEcosystems = []dependabotEcosystem{
 			"packages.config",
 			"Directory.Packages.props",
 		},
-		discover:   true,
-		rootCovers: []string{"*.sln"},
+		discover:        true,
+		listDirectories: true,
+		rootCovers:      []string{"*.sln"},
 	},
 }
 

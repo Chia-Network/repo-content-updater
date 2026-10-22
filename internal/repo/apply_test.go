@@ -294,20 +294,28 @@ func TestDefaultDependabotDiscoversNestedManifests(t *testing.T) {
 		})
 	}
 
-	for _, pin := range []string{`["/docker"]`, "/docker", " /docker "} {
-		t.Run("pinned directories "+pin+" render as a list", func(t *testing.T) {
-			repo := t.TempDir()
-			writeDependabotTestFile(t, repo, filepath.Join("docker", "Dockerfile"), "")
-			writeDependabotTestFile(t, repo, filepath.Join("other", "Dockerfile"), "")
-			vars, err := DependabotVarsForRepo(repo, cfg.Variables, map[string]string{"DEPENDABOT_DOCKER_DIRECTORIES": pin})
-			if err != nil {
-				t.Fatal(err)
-			}
-			rendered := renderDependabotTemplate(t, cfg, vars)
-			if got := renderedDependabotDirectories(t, rendered, "docker"); !reflect.DeepEqual(got, []string{"/docker"}) {
-				t.Fatalf("docker directories = %v, want [/docker]\n%s", got, rendered)
-			}
-		})
+	listEcosystems := []struct{ ecosystem, directoriesVar, manifest string }{
+		{"github-actions", "DEPENDABOT_ACTIONS_DIRECTORIES", "action.yml"},
+		{"docker", "DEPENDABOT_DOCKER_DIRECTORIES", "Dockerfile"},
+		{"terraform", "DEPENDABOT_TERRAFORM_DIRECTORIES", "main.tf"},
+		{"nuget", "DEPENDABOT_NUGET_DIRECTORIES", "App.csproj"},
+	}
+	for _, tc := range listEcosystems {
+		for _, pin := range []string{`["/pinned"]`, "/pinned", " /pinned "} {
+			t.Run(tc.ecosystem+" pinned directories "+pin+" render as a list", func(t *testing.T) {
+				repo := t.TempDir()
+				writeDependabotTestFile(t, repo, filepath.Join("pinned", tc.manifest), "")
+				writeDependabotTestFile(t, repo, filepath.Join("other", tc.manifest), "")
+				vars, err := DependabotVarsForRepo(repo, cfg.Variables, map[string]string{tc.directoriesVar: pin})
+				if err != nil {
+					t.Fatal(err)
+				}
+				rendered := renderDependabotTemplate(t, cfg, vars)
+				if got := renderedDependabotDirectories(t, rendered, tc.ecosystem); !reflect.DeepEqual(got, []string{"/pinned"}) {
+					t.Fatalf("%s directories = %v, want [/pinned]\n%s", tc.ecosystem, got, rendered)
+				}
+			})
+		}
 	}
 }
 
