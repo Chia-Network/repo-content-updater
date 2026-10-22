@@ -84,6 +84,31 @@ var dependabotEcosystems = []dependabotEcosystem{
 		directoriesVar: "DEPENDABOT_SWIFT_DIRECTORY",
 		manifests:      []string{"Package.swift"},
 	},
+	{
+		name:           "docker",
+		enabledVar:     "DEPENDABOT_DOCKER_ENABLED",
+		directoriesVar: "DEPENDABOT_DOCKER_DIRECTORY",
+		manifests:      []string{"Dockerfile", "Dockerfile.*", "*.Dockerfile", "*.dockerfile", "Containerfile"},
+	},
+	{
+		name:           "terraform",
+		enabledVar:     "DEPENDABOT_TERRAFORM_ENABLED",
+		directoriesVar: "DEPENDABOT_TERRAFORM_DIRECTORY",
+		manifests:      []string{"*.tf", "*.tf.json", ".terraform.lock.hcl"},
+	},
+	{
+		name:           "nuget",
+		enabledVar:     "DEPENDABOT_NUGET_ENABLED",
+		directoriesVar: "DEPENDABOT_NUGET_DIRECTORY",
+		manifests: []string{
+			"*.csproj",
+			"*.fsproj",
+			"*.vbproj",
+			"*.sln",
+			"packages.config",
+			"Directory.Packages.props",
+		},
+	},
 }
 
 var errNoDependabotEcosystems = errors.New("no Dependabot ecosystems detected")

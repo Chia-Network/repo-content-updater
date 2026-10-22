@@ -10,6 +10,7 @@
 # out of the default.
 default_files:
   - dependabot-actions
+  - dependency-cursor-review
 
 # Groups allow inheriting a potentially evolving set of templates for a particular project type without needing to
 # constantly update the list of files in the repo settings
@@ -79,6 +80,9 @@ files:
   - name: dependency-cursor-review
     template_name: dependency-cursor-review.yml
     repo_path: .github/workflows/dependency-cursor-review.yml
+    adoption_marker: "repo-content-updater:dependency-cursor-review"
+    requires_paths:
+      - .github/workflows
     aliases:
       - dependabot-cursor-review
     companion_files:
@@ -211,9 +215,9 @@ files:
       - .github/dependabot.yaml
 
   - name: dependabot-actions
-    template_name: dependabot-actions.yml
-    adoption_marker: "repo-content-updater:dependabot-actions"
+    template_name: dependabot.yml
     repo_path: .github/dependabot.yml
+    adoption_marker: "repo-content-updater:dependabot-actions"
     alternate_paths:
       - .github/dependabot.yaml
     requires_paths:
@@ -288,6 +292,18 @@ variables:
   DEPENDABOT_SWIFT_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_SWIFT_REBASE_STRATEGY: "auto"
   DEPENDABOT_SWIFT_GROUP_UPDATES: "0"
+  DEPENDABOT_DOCKER_DIRECTORY: "/"
+  DEPENDABOT_DOCKER_PULL_REQUEST_LIMIT: "10"
+  DEPENDABOT_DOCKER_REBASE_STRATEGY: "auto"
+  DEPENDABOT_DOCKER_GROUP_UPDATES: "0"
+  DEPENDABOT_TERRAFORM_DIRECTORY: "/"
+  DEPENDABOT_TERRAFORM_PULL_REQUEST_LIMIT: "10"
+  DEPENDABOT_TERRAFORM_REBASE_STRATEGY: "auto"
+  DEPENDABOT_TERRAFORM_GROUP_UPDATES: "0"
+  DEPENDABOT_NUGET_DIRECTORY: "/"
+  DEPENDABOT_NUGET_PULL_REQUEST_LIMIT: "10"
+  DEPENDABOT_NUGET_REBASE_STRATEGY: "auto"
+  DEPENDABOT_NUGET_GROUP_UPDATES: "0"
   DEPENDABOT_CURSOR_MALWARE_WARN_ONLY: "1"
   DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS: '["axios@1\\.14\\.1", "axios@0\\.30\\.4", "plain-crypto-js", "sfrclak\\.com", "@shadanai/openclaw", "@shadanai/[a-z0-9._-]+", "2026\\.3\\.28-2", "2026\\.3\\.28-3", "2026\\.3\\.31-1", "2026\\.3\\.31-2"]'
   DEPENDABOT_CURSOR_MALWARE_IOC_ALLOWLIST: "[]"

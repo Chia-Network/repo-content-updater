@@ -1,11 +1,11 @@
 package repo
 
 import (
-	"bytes"
+	"fmt"
 	"maps"
-	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/go-github/v59/github"
@@ -68,176 +68,99 @@ func TestTemplateInputsForFile(t *testing.T) {
 	})
 }
 
-func TestShouldAdoptExistingFile(t *testing.T) {
-	templates, err := filepath.Abs(filepath.Join("..", "..", "templates"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Chdir(t.TempDir())
-	content := &Content{templates: templates}
+func TestExistingFileState(t *testing.T) {
+	dir := t.TempDir()
 	fileinfo := &config.File{
-		Name:           "dependabot-actions",
-		TemplateName:   "dependabot-actions.yml",
 		RepoPath:       ".github/dependabot.yml",
 		AlternatePaths: []string{".github/dependabot.yaml"},
 		AdoptionMarker: "repo-content-updater:dependabot-actions",
 	}
 	markerLine := "# " + fileinfo.AdoptionMarker
-	fullManagedFirstLine := "# This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back"
+	fullManaged := "# This file is managed by the repo-content-updater project.\nversion: 2\n"
+	unmarked := *fileinfo
+	unmarked.AdoptionMarker = ""
 
-	t.Run("creates when absent", func(t *testing.T) {
-		adopt, err := content.shouldAdoptExistingFile("absent", fileinfo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !adopt {
-			t.Fatal("absent file should be adopted")
-		}
-	})
-
-	t.Run("skips an unmarked existing file", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("unmarked"), fileinfo.RepoPath, "version: 2\n")
-		adopt, err := content.shouldAdoptExistingFile("unmarked", fileinfo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if adopt {
-			t.Fatal("unmarked file should not be adopted")
-		}
-	})
-
-	t.Run("skips a full managed config carrying the generic marker", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("full-managed"), fileinfo.RepoPath, fullManagedFirstLine+"\n# inline with the upstream template, unless you add !dependabot to the repo's managed-files property\nversion: 2\n")
-		adopt, err := content.shouldAdoptExistingFile("full-managed", fileinfo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if adopt {
-			t.Fatal("full managed config should not be adopted")
-		}
-	})
-
-	t.Run("updates a file carrying the adoption marker", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-default"), fileinfo.RepoPath, markerLine+"\nversion: 2\n")
-		adopt, err := content.shouldAdoptExistingFile("actions-default", fileinfo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !adopt {
-			t.Fatal("marked file should be adopted")
-		}
-	})
-
-	t.Run("updates a file carrying the adoption marker at the alternate path", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-alternate"), fileinfo.AlternatePaths[0], markerLine+"\nversion: 2\n")
-		adopt, err := content.shouldAdoptExistingFile("actions-alternate", fileinfo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !adopt {
-			t.Fatal("marked alternate should be adopted")
-		}
-	})
-
-	t.Run("skips an unmarked alternate path", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("alternate"), fileinfo.AlternatePaths[0], "version: 2\n")
-		adopt, err := content.shouldAdoptExistingFile("alternate", fileinfo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if adopt {
-			t.Fatal("unmarked alternate should not be adopted")
-		}
-	})
-
-	t.Run("writes an absent file without an adoption marker", func(t *testing.T) {
-		unmarked := *fileinfo
-		unmarked.AdoptionMarker = ""
-		adopt, err := content.shouldAdoptExistingFile("unmarked-absent", &unmarked)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !adopt {
-			t.Fatal("absent file without a marker should be adopted")
-		}
-	})
-
-	t.Run("skips an existing file without an adoption marker", func(t *testing.T) {
-		unmarked := *fileinfo
-		unmarked.AdoptionMarker = ""
-		writeDependabotTestFile(t, repoDir("unmarked-existing"), unmarked.RepoPath, markerLine+"\nversion: 2\n")
-		adopt, err := content.shouldAdoptExistingFile("unmarked-existing", &unmarked)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if adopt {
-			t.Fatal("existing file without a marker should not be adopted")
-		}
-	})
+	tests := []struct {
+		name     string
+		fileinfo *config.File
+		files    map[string]string
+		want     fileState
+	}{
+		{name: "absent", fileinfo: fileinfo, want: fileAbsent},
+		{name: "unmarked", fileinfo: fileinfo, files: map[string]string{fileinfo.RepoPath: "version: 2\n"}, want: fileUnowned},
+		{name: "generic managed marker only", fileinfo: fileinfo, files: map[string]string{fileinfo.RepoPath: fullManaged}, want: fileUnowned},
+		{name: "marked", fileinfo: fileinfo, files: map[string]string{fileinfo.RepoPath: markerLine + "\nversion: 2\n"}, want: fileMarked},
+		{name: "marked alternate", fileinfo: fileinfo, files: map[string]string{fileinfo.AlternatePaths[0]: "  " + markerLine + "  \n"}, want: fileMarked},
+		{name: "unmarked alternate beside marked", fileinfo: fileinfo, files: map[string]string{fileinfo.RepoPath: markerLine + "\n", fileinfo.AlternatePaths[0]: "version: 2\n"}, want: fileUnowned},
+		{name: "no marker absent", fileinfo: &unmarked, want: fileAbsent},
+		{name: "no marker existing", fileinfo: &unmarked, files: map[string]string{unmarked.RepoPath: markerLine + "\n"}, want: fileUnowned},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := filepath.Join(dir, fmt.Sprint(i))
+			for rel, body := range tt.files {
+				writeDependabotTestFile(t, root, rel, body)
+			}
+			got, err := existingFileState(root, tt.fileinfo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("state = %d, want %d", got, tt.want)
+			}
+		})
+	}
 }
 
-func TestPrepareManagedFileOrigin(t *testing.T) {
+// TestAdoptedDefaultRoots covers the adopt-only rules for both default
+// bundles as selected from config.yaml.
+func TestAdoptedDefaultRoots(t *testing.T) {
 	cfg := loadDependabotTestConfig(t)
-	templates, err := filepath.Abs(filepath.Join("..", "..", "templates"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Chdir(t.TempDir())
-	content := &Content{templates: templates}
-	fileinfo := cfg.GetFileInfo("dependabot")
-	if fileinfo == nil {
-		t.Fatal("dependabot file missing from config")
+	content := &Content{}
+	workflow := filepath.Join(".github", "workflows", "ci.yml")
+	actionsMarker := "# " + cfg.GetFileInfo("dependabot-actions").AdoptionMarker + "\nversion: 2\n"
+	reviewMarker := "# " + cfg.GetFileInfo("dependency-cursor-review").AdoptionMarker + "\nname: x\n"
+	reviewPath := cfg.GetFileInfo("dependency-cursor-review").RepoPath
+	companionPath := cfg.GetFileInfo("upstream-release-checkout").RepoPath
+
+	tests := []struct {
+		name    string
+		files   map[string]string
+		actions bool
+		review  bool
+	}{
+		{name: "nothing", files: map[string]string{"notes.txt": ""}},
+		{name: "workflows dir without workflow files", files: map[string]string{".github/workflows/notes.txt": ""}},
+		{name: "workflows only", files: map[string]string{workflow: ""}, actions: true, review: true},
+		{name: "marked dependabot is upgraded", files: map[string]string{workflow: "", ".github/dependabot.yml": actionsMarker}, actions: true, review: true},
+		{name: "marked alternate dependabot is upgraded", files: map[string]string{workflow: "", ".github/dependabot.yaml": actionsMarker}, actions: true, review: true},
+		{name: "unmarked dependabot is left alone", files: map[string]string{workflow: "", ".github/dependabot.yml": "version: 2\n"}, review: true},
+		{name: "unmarked review workflow is left alone", files: map[string]string{workflow: "", reviewPath: "name: x\n"}, actions: true},
+		{name: "occupied companion path blocks a new bundle", files: map[string]string{workflow: "", companionPath: "#!/bin/sh\n"}, actions: true},
+		{name: "owned bundle updates existing companions", files: map[string]string{workflow: "", reviewPath: reviewMarker, companionPath: "#!/bin/sh\n"}, actions: true, review: true},
 	}
-
-	t.Run("default skips when no ecosystem is detected", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("default-empty"), "notes.txt", "")
-		rendered, skip, err := content.prepareManagedFile("default-empty", fileinfo, config.OriginDefault, cfg, Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !skip {
-			t.Fatal("default dependabot should be skipped without ecosystems")
-		}
-		if rendered != nil {
-			t.Fatalf("rendered = %q, want nil", rendered)
-		}
-	})
-
-	t.Run("default skips an unmarked existing file", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("default-unmarked"), fileinfo.RepoPath, "version: 2\n")
-		_, skip, err := content.prepareManagedFile("default-unmarked", fileinfo, config.OriginDefault, cfg, Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !skip {
-			t.Fatal("default dependabot should not adopt an unmarked file")
-		}
-	})
-
-	t.Run("explicit dependabot keeps the full-template fallback", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("explicit-empty"), "notes.txt", "")
-		rendered, skip, err := content.prepareManagedFile("explicit-empty", fileinfo, config.OriginExplicit, cfg, Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if skip {
-			t.Fatal("explicit dependabot should not be skipped")
-		}
-		raw, err := os.ReadFile(filepath.Join(templates, "dependabot.yml"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		want, err := ProcessTemplate(raw, cfg.Variables, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(rendered, want) {
-			t.Fatalf("explicit fallback changed\n--- got ---\n%s\n--- want ---\n%s", rendered, want)
-		}
-	})
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoName := fmt.Sprintf("repo-%d", i)
+			for rel, body := range tt.files {
+				writeDependabotTestFile(t, repoDir(repoName), rel, body)
+			}
+			files := filesForRepo(cfg.ResolveManagedFileSelection(repoName, nil), &github.Repository{})
+			adopted, err := content.adoptedDefaultRoots(repoName, files, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if adopted["dependabot-actions"] != tt.actions || adopted["dependency-cursor-review"] != tt.review {
+				t.Fatalf("adopted = %v, want dependabot-actions=%v dependency-cursor-review=%v", adopted, tt.actions, tt.review)
+			}
+		})
+	}
 }
 
-func TestPrepareManagedFileDefaultActionsAdoption(t *testing.T) {
+// TestDefaultDependabotRendersDetectedEcosystems renders the default through
+// the same manifest detection as the explicit dependabot file.
+func TestDefaultDependabotRendersDetectedEcosystems(t *testing.T) {
 	cfg := loadDependabotTestConfig(t)
 	templates, err := filepath.Abs(filepath.Join("..", "..", "templates"))
 	if err != nil {
@@ -246,133 +169,96 @@ func TestPrepareManagedFileDefaultActionsAdoption(t *testing.T) {
 	t.Chdir(t.TempDir())
 	content := &Content{templates: templates}
 	fileinfo := cfg.GetFileInfo("dependabot-actions")
-	if fileinfo == nil {
-		t.Fatal("dependabot-actions file missing from config")
+	workflow := filepath.Join(".github", "workflows", "ci.yml")
+
+	tests := []struct {
+		name      string
+		manifests []string
+		overrides map[string]string
+		want      string
+	}{
+		{name: "workflows only", want: "github-actions"},
+		{name: "go", manifests: []string{"go.mod"}, want: "gomod,github-actions"},
+		{name: "python", manifests: []string{"pyproject.toml"}, want: "pip,github-actions"},
+		{name: "node", manifests: []string{"package.json"}, want: "github-actions,npm"},
+		{name: "docker", manifests: []string{"Dockerfile"}, want: "github-actions,docker"},
+		{name: "terraform", manifests: []string{".terraform.lock.hcl"}, want: "github-actions,terraform"},
+		{name: "nuget", manifests: []string{"App.csproj"}, want: "github-actions,nuget"},
+		{
+			name:      "override directory",
+			manifests: []string{filepath.Join("svc", "go.mod")},
+			overrides: map[string]string{"DEPENDABOT_GOMOD_DIRECTORY": "svc"},
+			want:      "gomod,github-actions",
+		},
 	}
-	markerLine := "# " + fileinfo.AdoptionMarker
-	fullManagedFirstLine := "# This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back"
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoName := strings.ReplaceAll(tt.name, " ", "-")
+			writeDependabotTestFile(t, repoDir(repoName), workflow, "")
+			for _, manifest := range tt.manifests {
+				writeDependabotTestFile(t, repoDir(repoName), manifest, "")
+			}
+			rendered, err := content.renderManagedFile(repoName, fileinfo, cfg, Config{VarOverrides: tt.overrides})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := renderedDependabotEcosystems(t, rendered); got != tt.want {
+				t.Fatalf("ecosystems = %q, want %q\n%s", got, tt.want, rendered)
+			}
+			if !containsTrimmedLine(string(rendered), "# "+fileinfo.AdoptionMarker) {
+				t.Fatalf("rendered default lost its adoption marker\n%s", rendered)
+			}
+		})
+	}
 
-	t.Run("skips when .github/workflows is absent", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-no-workflows"), "notes.txt", "")
-		_, skip, err := content.prepareManagedFile("actions-no-workflows", fileinfo, config.OriginDefault, cfg, Config{})
+	t.Run("an ecosystem detection error keeps that ecosystem", func(t *testing.T) {
+		repoName := "ecosystem-error"
+		writeDependabotTestFile(t, repoDir(repoName), workflow, "")
+		overrides := map[string]string{"DEPENDABOT_GOMOD_DIRECTORY": "../outside"}
+		rendered, err := content.renderManagedFile(repoName, fileinfo, cfg, Config{VarOverrides: overrides})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !skip {
-			t.Fatal("default should be skipped when .github/workflows is absent")
+		if got := renderedDependabotEcosystems(t, rendered); got != "gomod,github-actions" {
+			t.Fatalf("ecosystems = %q, want gomod,github-actions", got)
 		}
 	})
 
-	t.Run("skips when .github/workflows has no workflow files", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-empty-workflows"), filepath.Join(".github", "workflows", "notes.txt"), "")
-		_, skip, err := content.prepareManagedFile("actions-empty-workflows", fileinfo, config.OriginDefault, cfg, Config{})
+	t.Run("a repository detection error keeps the full configuration", func(t *testing.T) {
+		rendered, err := content.renderManagedFile("missing-repo", fileinfo, cfg, Config{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !skip {
-			t.Fatal("default should be skipped when .github/workflows has no workflow files")
+		if got, want := renderedDependabotEcosystems(t, rendered), "gomod,pip,github-actions,npm,cargo,swift,docker,terraform,nuget"; got != want {
+			t.Fatalf("ecosystems = %q, want %q", got, want)
 		}
 	})
 
-	t.Run("writes when a workflow .yml exists", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-workflow"), filepath.Join(".github", "workflows", "ci.yml"), "")
-		rendered, skip, err := content.prepareManagedFile("actions-workflow", fileinfo, config.OriginDefault, cfg, Config{})
+	t.Run("explicit dependabot renders without the adoption marker", func(t *testing.T) {
+		repoName := "explicit"
+		writeDependabotTestFile(t, repoDir(repoName), "go.mod", "")
+		rendered, err := content.renderManagedFile(repoName, cfg.GetFileInfo("dependabot"), cfg, Config{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if skip {
-			t.Fatal("default should be written when a workflow .yml exists")
+		if strings.Contains(string(rendered), "repo-content-updater:") {
+			t.Fatalf("explicit dependabot carries an adoption marker\n%s", rendered)
 		}
-		if len(rendered) == 0 {
-			t.Fatal("rendered content is empty")
-		}
-	})
-
-	t.Run("writes when absent with a workflow present", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-absent"), filepath.Join(".github", "workflows", "ci.yml"), "")
-		rendered, skip, err := content.prepareManagedFile("actions-absent", fileinfo, config.OriginDefault, cfg, Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if skip {
-			t.Fatal("absent default should be written")
-		}
-		if len(rendered) == 0 {
-			t.Fatal("rendered content is empty")
-		}
-	})
-
-	t.Run("explicit selection ignores requires_paths", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-explicit"), "notes.txt", "")
-		rendered, skip, err := content.prepareManagedFile("actions-explicit", fileinfo, config.OriginExplicit, cfg, Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if skip {
-			t.Fatal("explicit selection should not be skipped by requires_paths")
-		}
-		if len(rendered) == 0 {
-			t.Fatal("rendered content is empty")
-		}
-	})
-
-	t.Run("writes a file carrying the adoption marker", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-marked"), filepath.Join(".github", "workflows", "ci.yml"), "")
-		writeDependabotTestFile(t, repoDir("actions-marked"), fileinfo.RepoPath, markerLine+"\nversion: 2\n")
-		_, skip, err := content.prepareManagedFile("actions-marked", fileinfo, config.OriginDefault, cfg, Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if skip {
-			t.Fatal("marked file should be written")
-		}
-	})
-
-	t.Run("writes a file carrying the adoption marker at the alternate path", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-alternate"), filepath.Join(".github", "workflows", "ci.yml"), "")
-		writeDependabotTestFile(t, repoDir("actions-alternate"), fileinfo.AlternatePaths[0], markerLine+"\nversion: 2\n")
-		_, skip, err := content.prepareManagedFile("actions-alternate", fileinfo, config.OriginDefault, cfg, Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if skip {
-			t.Fatal("marked alternate should be written")
-		}
-	})
-
-	t.Run("skips a full managed config carrying the generic marker", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-full"), filepath.Join(".github", "workflows", "ci.yml"), "")
-		writeDependabotTestFile(t, repoDir("actions-full"), fileinfo.RepoPath, fullManagedFirstLine+"\nversion: 2\n")
-		_, skip, err := content.prepareManagedFile("actions-full", fileinfo, config.OriginDefault, cfg, Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !skip {
-			t.Fatal("full managed config should not be overwritten")
-		}
-	})
-
-	t.Run("skips an unmarked file", func(t *testing.T) {
-		writeDependabotTestFile(t, repoDir("actions-unmarked"), filepath.Join(".github", "workflows", "ci.yml"), "")
-		writeDependabotTestFile(t, repoDir("actions-unmarked"), fileinfo.RepoPath, "version: 2\n")
-		_, skip, err := content.prepareManagedFile("actions-unmarked", fileinfo, config.OriginDefault, cfg, Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !skip {
-			t.Fatal("unmarked file should not be adopted")
+		if got := renderedDependabotEcosystems(t, rendered); got != "gomod" {
+			t.Fatalf("ecosystems = %q, want gomod", got)
 		}
 	})
 }
 
 func TestFilesForRepo(t *testing.T) {
+	defaultActions := config.SelectedFile{Name: "dependabot-actions", Origin: config.OriginDefault, Root: "dependabot-actions"}
 	selection := config.ManagedFileSelection{
 		Explicit: []string{"dep-review"},
-		Defaults: []string{"dependabot-actions"},
+		Defaults: []config.SelectedFile{defaultActions},
 	}
 	wantBoth := []config.SelectedFile{
 		{Name: "dep-review", Origin: config.OriginExplicit},
-		{Name: "dependabot-actions", Origin: config.OriginDefault},
+		defaultActions,
 	}
 	wantExplicit := []config.SelectedFile{
 		{Name: "dep-review", Origin: config.OriginExplicit},
@@ -393,7 +279,7 @@ func TestFilesForRepo(t *testing.T) {
 	})
 
 	t.Run("archived repos without explicit files get nothing", func(t *testing.T) {
-		got := filesForRepo(config.ManagedFileSelection{Defaults: []string{"dependabot-actions"}}, &github.Repository{Archived: github.Bool(true)})
+		got := filesForRepo(config.ManagedFileSelection{Defaults: []config.SelectedFile{defaultActions}}, &github.Repository{Archived: github.Bool(true)})
 		if len(got) != 0 {
 			t.Fatalf("files = %#v, want none", got)
 		}
@@ -407,7 +293,7 @@ func TestFilesForRepo(t *testing.T) {
 	})
 
 	t.Run("forks without explicit files get nothing", func(t *testing.T) {
-		got := filesForRepo(config.ManagedFileSelection{Defaults: []string{"dependabot-actions"}}, &github.Repository{Fork: github.Bool(true)})
+		got := filesForRepo(config.ManagedFileSelection{Defaults: []config.SelectedFile{defaultActions}}, &github.Repository{Fork: github.Bool(true)})
 		if len(got) != 0 {
 			t.Fatalf("files = %#v, want none", got)
 		}

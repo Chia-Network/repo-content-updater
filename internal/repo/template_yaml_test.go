@@ -67,71 +67,6 @@ func TestYAMLTemplatesParse(t *testing.T) {
 	}
 }
 
-func TestDependabotActionsTemplateRenders(t *testing.T) {
-	cfg, err := config.LoadConfig(filepath.Join("..", "..", "config.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(filepath.Join("..", "..", "templates", "dependabot-actions.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	rendered, err := ProcessTemplate(raw, cfg.Variables, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var doc struct {
-		Version int `yaml:"version"`
-		Updates []struct {
-			Ecosystem string `yaml:"package-ecosystem"`
-			Directory string `yaml:"directory"`
-			Schedule  struct {
-				Interval string `yaml:"interval"`
-			} `yaml:"schedule"`
-			Cooldown struct {
-				DefaultDays int `yaml:"default-days"`
-			} `yaml:"cooldown"`
-			Labels []string `yaml:"labels"`
-			Groups map[string]struct {
-				Patterns []string `yaml:"patterns"`
-			} `yaml:"groups"`
-		} `yaml:"updates"`
-	}
-	if err := yaml.Unmarshal(rendered, &doc); err != nil {
-		t.Fatalf("rendered template does not parse as YAML: %v\n%s", err, rendered)
-	}
-	if doc.Version != 2 {
-		t.Errorf("version = %d, want 2", doc.Version)
-	}
-	if len(doc.Updates) != 1 {
-		t.Fatalf("updates = %d, want exactly 1\n%s", len(doc.Updates), rendered)
-	}
-	update := doc.Updates[0]
-	if update.Ecosystem != "github-actions" {
-		t.Errorf("ecosystem = %q, want github-actions", update.Ecosystem)
-	}
-	if update.Directory != "/" {
-		t.Errorf("directory = %q, want /", update.Directory)
-	}
-	if update.Schedule.Interval != "monthly" {
-		t.Errorf("schedule interval = %q, want monthly", update.Schedule.Interval)
-	}
-	if update.Cooldown.DefaultDays != 7 {
-		t.Errorf("cooldown default-days = %d, want 7", update.Cooldown.DefaultDays)
-	}
-	if strings.Join(update.Labels, ",") != "dependencies,Changed" {
-		t.Errorf("labels = %#v, want dependencies,Changed", update.Labels)
-	}
-	group, ok := update.Groups["github-actions"]
-	if !ok {
-		t.Fatalf("groups = %#v, want github-actions", update.Groups)
-	}
-	if strings.Join(group.Patterns, ",") != "*" {
-		t.Errorf("group patterns = %#v, want [*]", group.Patterns)
-	}
-}
-
 func TestExpandYAMLSafeActions(t *testing.T) {
 	src := "" +
 		"key: \"{{ .Name }}\"\n" +
@@ -211,7 +146,7 @@ func TestExpandLeavesUnmarkedTemplates(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := expandYAMLSafeActions(string(raw))
-		rewritten := name == "dependabot.yml" || name == "dependency-review.yml"
+		rewritten := name == "dependabot.yml" || name == "dependency-review.yml" || name == "dependency-cursor-review.yml"
 		if rewritten {
 			if got == string(raw) {
 				t.Errorf("%s: expected YAML-safe actions to expand", name)

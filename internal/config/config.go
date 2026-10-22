@@ -33,15 +33,18 @@ const (
 )
 
 // SelectedFile is a canonical managed file name plus its selection origin.
+// Root names the default_files entry whose adoption decision governs a
+// default file; it is the file itself for a root and empty for explicit files.
 type SelectedFile struct {
 	Name   string
 	Origin FileOrigin
+	Root   string
 }
 
 // ManagedFileSelection is the resolved managed-files set for one repo.
 type ManagedFileSelection struct {
 	Explicit []string
-	Defaults []string
+	Defaults []SelectedFile
 }
 
 // Group is a defined group of template files to include at once
@@ -134,9 +137,8 @@ func (c *Config) resolveDefaultFiles() error {
 		claimed[name] = true
 	}
 
-	for _, name := range expanded {
-		file := c.GetFileInfo(name)
-		if file == nil || strings.TrimSpace(file.AdoptionMarker) == "" {
+	for _, name := range roots {
+		if strings.TrimSpace(c.GetFileInfo(name).AdoptionMarker) == "" {
 			return fmt.Errorf("default file %q must set a non-empty adoption_marker", name)
 		}
 	}
@@ -303,17 +305,29 @@ func (c *Config) ResolveManagedFileSelection(repoName string, entries []string) 
 		explicitSet[name] = true
 	}
 
-	defaults := c.resolveSelectedFiles(repoName, c.DefaultFiles, optOuts)
+	return ManagedFileSelection{Explicit: explicit, Defaults: c.resolveDefaultBundles(repoName, explicitSet, optOuts)}
+}
 
-	selectedDefaults := make([]string, 0, len(defaults))
-	for _, name := range defaults {
-		if explicitSet[name] || c.sharesRepoPathWith(name, explicitSet) || c.sharesRepoPathWith(name, optOuts) {
+// resolveDefaultBundles expands each default root into its companion closure.
+// A bundle is dropped whole when its root is opted out or its root's repo path
+// is claimed by an explicit or opted-out file; members already selected
+// explicitly are left to the explicit selection.
+func (c *Config) resolveDefaultBundles(repoName string, explicitSet, optOuts map[string]bool) []SelectedFile {
+	var defaults []SelectedFile
+	seen := map[string]bool{}
+	for _, root := range c.DefaultFiles {
+		if optOuts[root] || explicitSet[root] || c.sharesRepoPathWith(root, explicitSet) || c.sharesRepoPathWith(root, optOuts) {
 			continue
 		}
-		selectedDefaults = append(selectedDefaults, name)
+		for _, name := range c.resolveSelectedFiles(repoName, []string{root}, optOuts) {
+			if seen[name] || explicitSet[name] || c.sharesRepoPathWith(name, explicitSet) {
+				continue
+			}
+			seen[name] = true
+			defaults = append(defaults, SelectedFile{Name: name, Origin: OriginDefault, Root: root})
+		}
 	}
-
-	return ManagedFileSelection{Explicit: explicit, Defaults: selectedDefaults}
+	return defaults
 }
 
 func (c *Config) resolveSelectedFiles(repoName string, roots []string, optOuts map[string]bool) []string {

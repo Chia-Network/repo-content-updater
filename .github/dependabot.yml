@@ -101,3 +101,45 @@ updates:
       default-days: 7
     open-pull-requests-limit: 10
     rebase-strategy: auto
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    rebase-strategy: auto
+    labels:
+      - dependencies
+      - docker
+      - "Changed"
+
+  - package-ecosystem: terraform
+    directory: /
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    rebase-strategy: auto
+    labels:
+      - dependencies
+      - terraform
+      - "Changed"
+
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    rebase-strategy: auto
+    labels:
+      - dependencies
+      - dotnet
+      - "Changed"
