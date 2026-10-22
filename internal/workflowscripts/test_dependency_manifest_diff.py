@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import dependency_manifest_diff as manifest
+import dependency_manifest_python as python_manifest
 import dependency_update_coverage as coverage
 import malware_verdict_formatter as formatter
 from manifest_scan_support import _PASS_REVIEW, _bump, _run_listed_scan, _unresolved
@@ -659,8 +660,8 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertTrue(manifest._entries_explain("go.sum", both, go_sum(("v1.8.1", new_digest)), updates))
 
     def test_mixed_case_requirement_name_is_covered(self) -> None:
-        self.assertEqual(manifest._requirement_name("PyYAML"), "pyyaml")
-        self.assertEqual(manifest._requirement_name("Foo_Bar.Baz"), "foo-bar-baz")
+        self.assertEqual(python_manifest._requirement_name("PyYAML"), "pyyaml")
+        self.assertEqual(python_manifest._requirement_name("Foo_Bar.Baz"), "foo-bar-baz")
         report = _run_listed_scan(
             {"requirements.txt": "PyYAML==5.4.1\n"},
             {"requirements.txt": "PyYAML==6.0.1\n"},

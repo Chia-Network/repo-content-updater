@@ -47,6 +47,10 @@ groups:
       - upstream-malware-scan
       - dependency-update-coverage
       - dependency-manifest-diff
+      - dependency-manifest-versions
+      - dependency-manifest-go
+      - dependency-manifest-npm
+      - dependency-manifest-python
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
       - dependency-cursor-review-dependabot-context
@@ -97,6 +101,10 @@ files:
       - upstream-malware-scan
       - dependency-update-coverage
       - dependency-manifest-diff
+      - dependency-manifest-versions
+      - dependency-manifest-go
+      - dependency-manifest-npm
+      - dependency-manifest-python
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
       - dependency-cursor-review-dependabot-context
@@ -159,6 +167,22 @@ files:
   - name: dependency-manifest-diff
     template_name: dependency-cursor-review-manifest-diff.py
     repo_path: .github/scripts/dependency_manifest_diff.py
+
+  - name: dependency-manifest-versions
+    template_name: dependency-cursor-review-manifest-versions.py
+    repo_path: .github/scripts/dependency_manifest_versions.py
+
+  - name: dependency-manifest-go
+    template_name: dependency-cursor-review-manifest-go.py
+    repo_path: .github/scripts/dependency_manifest_go.py
+
+  - name: dependency-manifest-npm
+    template_name: dependency-cursor-review-manifest-npm.py
+    repo_path: .github/scripts/dependency_manifest_npm.py
+
+  - name: dependency-manifest-python
+    template_name: dependency-cursor-review-manifest-python.py
+    repo_path: .github/scripts/dependency_manifest_python.py
 
   - name: dependency-cursor-review-prompts
     template_name: dependency-cursor-review-prompts.py

@@ -6,6 +6,7 @@ import json
 import unittest
 
 import dependency_manifest_diff as manifest
+import dependency_manifest_npm as npm_manifest
 import malware_verdict_formatter as formatter
 from manifest_scan_support import (
     _BLOCK_REVIEW,
@@ -176,7 +177,7 @@ class DependencyLockResidueTest(unittest.TestCase):
         listed = [_bump("prettier", "3.9.8", "3.9.9", "prettier/prettier")]
         base_npm = npm(prettier_old, "^3.9.8", "^16.0.3", stylis)
         head_npm = npm(prettier_new, "^3.9.9", "16.0.3", stylis)
-        entries, residue = manifest._json_parts(base_npm)
+        entries, residue = npm_manifest._json_parts(base_npm)
         self.assertIn("stylis", entries)
         self.assertNotIn(nested, residue)
         report = _run_listed_scan(

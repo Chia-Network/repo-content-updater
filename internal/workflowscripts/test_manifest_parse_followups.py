@@ -10,6 +10,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import dependency_manifest_diff as manifest
+import dependency_manifest_npm as npm_manifest
+import dependency_manifest_python as python_manifest
+import dependency_manifest_versions as version_manifest
 import dependency_update_coverage as coverage
 from test_dependency_update_coverage import _commit, _git, _git_repo
 
@@ -21,9 +24,9 @@ def _update(name: str, old: str, new: str) -> dict:
 class VersionOperatorTest(unittest.TestCase):
     def test_only_exact_pins_lose_their_operator(self) -> None:
         for operator in ("==", "===", "v", "V"):
-            self.assertEqual(manifest._exact_body(f"{operator}2.0"), "2.0", operator)
+            self.assertEqual(version_manifest._exact_body(f"{operator}2.0"), "2.0", operator)
         for operator in ("~=", "!=", ">=", "<=", ">", "<", "^", "~", "=", "vv"):
-            self.assertEqual(manifest._exact_body(f"{operator}2.0"), "", operator)
+            self.assertEqual(version_manifest._exact_body(f"{operator}2.0"), "", operator)
 
     def test_range_listed_version_is_not_explained(self) -> None:
         old, new = "clvm==0.9.7\n", "clvm>=0.9.8\n"
@@ -35,8 +38,8 @@ class VersionOperatorTest(unittest.TestCase):
     def test_uppercase_v_listed_version_matches_manifest(self) -> None:
         listed = {"tool": {("V1.0", "V1.1")}}
         for old, new in (("v1.0", "v1.1"), ("1.0", "1.1"), ("V1.0", "V1.1")):
-            self.assertTrue(manifest._reached_listed_version("tool", old, new, listed), (old, new))
-        self.assertFalse(manifest._reached_listed_version("tool", "^1.0", "1.1", listed))
+            self.assertTrue(version_manifest._reached_listed_version("tool", old, new, listed), (old, new))
+        self.assertFalse(version_manifest._reached_listed_version("tool", "^1.0", "1.1", listed))
 
 
 class PythonManifestTest(unittest.TestCase):
@@ -61,14 +64,14 @@ class PythonManifestTest(unittest.TestCase):
 
     def test_setup_py_and_poetry_and_pipfile_entries(self) -> None:
         setup = 'setup(\n    name="demo",\n    install_requires=["clvm==0.9.7", "blspy>=2.0"],\n)\n'
-        self.assertEqual(set(manifest._req_parts(setup)[0]), {"clvm", "blspy"})
+        self.assertEqual(set(python_manifest._req_parts(setup)[0]), {"clvm", "blspy"})
         poetry = '[tool.poetry.dependencies]\npython = "^3.10"\nclick = "^8.0"\nrich = { version = "^13.0" }\n'
-        self.assertEqual(set(manifest._req_parts(poetry)[0]), {"click", "rich"})
+        self.assertEqual(set(python_manifest._req_parts(poetry)[0]), {"click", "rich"})
         pipfile = '[packages]\nrequests = "==2.31.0"\n\n[requires]\npython_version = "3.11"\n'
-        self.assertEqual(set(manifest._req_parts(pipfile)[0]), {"requests"})
+        self.assertEqual(set(python_manifest._req_parts(pipfile)[0]), {"requests"})
 
     def test_requirements_marker_line_stays_an_entry(self) -> None:
-        entries, residue = manifest._req_parts('foo==1.0 ; python_version < "3.8"\n')
+        entries, residue = python_manifest._req_parts('foo==1.0 ; python_version < "3.8"\n')
         self.assertEqual(set(entries), {"foo"})
         self.assertEqual(residue, "")
 
@@ -193,8 +196,8 @@ class GoAndYarnLockTest(unittest.TestCase):
 
     def test_yarn_header_keeps_every_descriptor_name(self) -> None:
         header = '"@babel/core@^7.0.0", "@babel/core@^7.1.0", left-pad@^1.0.0:'
-        self.assertEqual(manifest._yarn_names(header), ["@babel/core", "left-pad"])
-        self.assertEqual(manifest._yarn_names('"lodash@npm:^4.17.21":'), ["lodash"])
+        self.assertEqual(npm_manifest._yarn_names(header), ["@babel/core", "left-pad"])
+        self.assertEqual(npm_manifest._yarn_names('"lodash@npm:^4.17.21":'), ["lodash"])
 
 
 class RenamedManifestTest(unittest.TestCase):

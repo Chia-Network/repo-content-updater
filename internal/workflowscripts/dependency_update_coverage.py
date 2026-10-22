@@ -295,6 +295,15 @@ def any_read(report: dict) -> bool:
     return int(report.get("materialized_count") or 0) > 0
 
 
+_MANIFEST_MODULES = (
+    "dependency_manifest_versions",
+    "dependency_manifest_go",
+    "dependency_manifest_npm",
+    "dependency_manifest_python",
+    "dependency_manifest_diff",
+)
+
+
 def _load_manifest_diff():
     """Load the manifest grammar beside this file under python3 -I.
 
@@ -305,11 +314,10 @@ def _load_manifest_diff():
     cold = runpy.run_path(str(script_dir / "trusted_formatter_loader_cold_start.py"))
     cold["resolve_loader_for_dir"](script_dir)
     scrub = sys.modules["scripts_dir_path_scrub"]
-    return scrub.bootstrap_module_from_scripts_dir(
-        script_dir,
-        "dependency_manifest_diff.py",
-        "dependency_manifest_diff",
-    )
+    # Each grammar registers in sys.modules before the module that imports it.
+    for name in _MANIFEST_MODULES:
+        module = scrub.bootstrap_module_from_scripts_dir(script_dir, f"{name}.py", name)
+    return module
 
 
 _diff = _load_manifest_diff()
