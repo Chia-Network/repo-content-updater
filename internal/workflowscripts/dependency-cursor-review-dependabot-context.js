@@ -311,12 +311,24 @@ function isActionsBotMarkerComment(comment) {
   return /^<!-- cursor-dependabot-review patch-id:[0-9a-f]{40}(?: resolved:[0-9a-f]{40})? -->$/.test(line);
 }
 
+// Replace the entry at name with a new file, so a link there is replaced, not followed.
+function publishText(name, text) {
+  const dir = fs.mkdtempSync('.dcr-publish-');
+  const tmp = `${dir}/out`;
+  try {
+    fs.writeFileSync(tmp, text, { flag: 'wx' });
+    fs.renameSync(tmp, name);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 async function runDependabotContext({ core }) {
   const body = process.env.PR_BODY || '';
   const title = process.env.PR_TITLE || '';
   const prNumber = Number(process.env.PR_NUMBER || '0');
   const parsed = parseDependencyUpdate(title, body);
-  fs.writeFileSync('dependency_updates.json', JSON.stringify(parsed.updates, null, 2));
+  publishText('dependency_updates.json', JSON.stringify(parsed.updates, null, 2));
 
   if (!parsed.updates.some((item) => item.upstreamRepo)) {
     core.warning('PR body is missing an upstream GitHub repository link; the scan will record no_upstream_link.');
@@ -334,9 +346,9 @@ async function runDependabotContext({ core }) {
     releaseNotes: normalizedReleaseNotes,
     commits: normalizedCommits,
   };
-  fs.writeFileSync('dependabot_comment_context.json', JSON.stringify(out, null, 2));
-  fs.writeFileSync('dependabot_release_notes.md', normalizedReleaseNotes);
-  fs.writeFileSync('dependabot_commits.md', normalizedCommits);
+  publishText('dependabot_comment_context.json', JSON.stringify(out, null, 2));
+  publishText('dependabot_release_notes.md', normalizedReleaseNotes);
+  publishText('dependabot_commits.md', normalizedCommits);
   core.setOutput('upstream_repo', parsed.upstreamRepo);
   core.setOutput('package_name', parsed.packageName);
   core.setOutput('from_version', parsed.fromVersion);
