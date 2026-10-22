@@ -399,8 +399,28 @@ def _base_commit(token: str = "") -> str | None:
     return _verify_commit(ref) or _verify_commit(f"origin/{ref}") or ""
 
 
-# Lockfiles whose extra names are transitive residue once a listed bump is explained.
-_TRANSITIVE_LOCKS = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock"})
+def _changed_paths(base: str) -> list[tuple[str, str]] | None:
+    """(before path, after path) for each file added, modified, renamed or copied since base."""
+    diff = subprocess.run(
+        ["git", "diff", "--name-status", "-z", "-M", "--diff-filter=AMRC", base, "HEAD"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if diff.returncode != 0:
+        return None
+    fields = diff.stdout.split("\0")
+    changed: list[tuple[str, str]] = []
+    index = 0
+    while index + 1 < len(fields):
+        status = fields[index]
+        if status[:1] in "RC":
+            changed.append((fields[index + 1], fields[index + 2]))
+            index += 3
+        else:
+            changed.append((fields[index + 1], fields[index + 1]))
+            index += 2
+    return changed
 
 
 def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
@@ -413,7 +433,7 @@ def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
     with more than one unexplained entry is named as well.
 
     An opaque lockfile cannot name a package, so it is not a gap. Unlisted
-    names in a npm or Yarn lock are transitive residue when every listed
+    names in a npm, Yarn or Go lock are transitive residue when every listed
     name in that lock moved to its listed version and each unlisted entry
     was bumped, added or removed as a registry tarball. Both stay inputs to the
     review instead of uncovered dependencies.
@@ -424,27 +444,22 @@ def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
     if not base:
         return [uncovered({"packageName": "manifest-diff"}, "unresolved")]
     listed = {str(item.get("packageName") or "").strip() for item in updates}
-    diff = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=AM", base, "HEAD"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if diff.returncode != 0:
+    changed = _changed_paths(base)
+    if changed is None:
         return [uncovered({"packageName": "manifest-diff"}, "unresolved")]
     gaps: list[dict] = []
     seen = set(listed)
-    for path in diff.stdout.splitlines():
+    for old_path, path in changed:
         kind = _diff._manifest_kind(path)
         if not kind or kind == "opaque":
             continue
-        before = _git_text(base, path)
+        before = _git_text(base, old_path)
         after = _git_text("HEAD", path)
         names = _diff._changed_names(kind, before, after)
         explained = names is not None and _diff._entries_explain(kind, before, after, updates)
         file_unresolved = names is None or (before != after and not explained)
         if (
-            Path(path).name in _TRANSITIVE_LOCKS
+            Path(path).name in _diff.TRANSITIVE_LOCK_NAMES
             and names
             and _diff._lock_covers_listed(kind, before, after, updates, names)
         ):

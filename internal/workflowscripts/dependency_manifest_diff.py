@@ -14,14 +14,24 @@ _GO_MOD_RE = re.compile(
     r"^\s*(?:require\s+)?([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)\s+(v\S+)",
     re.M,
 )
+_GO_INDIRECT_RE = re.compile(r"//\s*indirect\s*$")
 _GO_SUM_RE = re.compile(r"^(\S+)\s+(v\S+)\s+", re.M)
 _REQ_RE = re.compile(
     r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:==|>=|<=|~=|!=|===)\s*([^\s#;]+)",
     re.M,
 )
-_YARN_HEADER_RE = re.compile(r'"?(@?[^@"\s]+)@[^:]*:')
+_YARN_DESCRIPTOR_RE = re.compile(r'"?(@?[^@"\s]+)@')
 _YARN_VERSION_RE = re.compile(r'^  version "([^"]+)"')
-_VERSION_PREFIX_RE = re.compile(r"^(>=|<=|v|\^|~|=|>|<)")
+_VERSION_PREFIX_RE = re.compile(r"^(===|==|~=|!=|>=|<=|\^|~|=|>|<|v)")
+# A TOML table header, and a `name = "spec"` or `name = { version = "spec" }` dependency line.
+_TOML_TABLE_RE = re.compile(r"^\s*\[+\s*([^\]]+?)\s*\]+\s*$")
+_TOML_DEP_RE = re.compile(
+    r'^\s*"?([A-Za-z0-9][A-Za-z0-9._-]*)"?\s*=\s*(?:\{[^}]*?\bversion\s*=\s*)?["\']([^"\']+)["\']'
+)
+_QUOTED_RE = re.compile(r'["\']([^"\']+)["\']')
+_PYTHON_MANIFESTS = frozenset({"pyproject.toml", "setup.py", "setup.cfg", "Pipfile"})
+# Lockfiles whose unlisted names are transitive residue once every listed bump is explained.
+TRANSITIVE_LOCK_NAMES = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "go.mod", "go.sum"})
 _GO_BLOCK_STARTS = frozenset({"require(", "replace(", "exclude(", "retract("})
 _OPAQUE_LOCKS = {
     "pnpm-lock.yaml",
@@ -82,7 +92,7 @@ def _go_mod_lines(text: str) -> list[tuple[str, str]]:
 
 def _manifest_kind(path: str) -> str:
     name = Path(path).name
-    lowered = path.replace("\\", "/")
+    lowered = "/" + path.replace("\\", "/")
     if name in {"package.json", "package-lock.json", "npm-shrinkwrap.json"}:
         return "json"
     if name == "go.mod":
@@ -93,6 +103,8 @@ def _manifest_kind(path: str) -> str:
         return "yarn"
     if name in _OPAQUE_LOCKS:
         return "opaque"
+    if name in _PYTHON_MANIFESTS:
+        return "requirements"
     if (name.startswith("requirements") or "/requirements/" in lowered) and name.endswith(".txt"):
         return "requirements"
     return ""
@@ -150,13 +162,15 @@ def _reached_listed_version(name: str, old: str, new: str, listed: dict[str, set
     return any(_version_body(frm) == old_body and _version_body(to) == new_body for frm, to in listed.get(name, ()))
 
 
-def _take_specs(block: object, parts: dict[str, dict[str, object]]) -> None:
+def _take_specs(block: object, parts: dict[str, dict[str, object]], section: str) -> None:
+    """Move each spec out of one section. A name listed in several sections keeps one spec per section."""
     if not isinstance(block, dict):
         return
     for name in list(block):
         spec = block[name]
+        specs = parts.setdefault(str(name), {}).setdefault("specs", [])
         if isinstance(spec, str):
-            parts.setdefault(str(name), {})["spec"] = spec
+            specs.append((section, spec))
             del block[name]
             continue
         if not isinstance(spec, dict) or not spec.get("version"):
@@ -164,7 +178,7 @@ def _take_specs(block: object, parts: dict[str, dict[str, object]]) -> None:
         nested = {
             key: spec.pop(key) for key in ("dependencies", "optionalDependencies") if isinstance(spec.get(key), dict)
         }
-        parts.setdefault(str(name), {})["spec"] = spec
+        specs.append((section, spec))
         if nested:
             block[name] = nested
         else:
@@ -174,17 +188,13 @@ def _take_specs(block: object, parts: dict[str, dict[str, object]]) -> None:
 def _json_blocks(blob: dict[str, object], name: str) -> list[tuple[str, str]]:
     """One block per manifest spec and per lockfile path. Paths do not collapse."""
     blocks: list[tuple[str, str]] = []
-    spec = blob.get("spec")
-    if isinstance(spec, str):
-        blocks.append((spec, json.dumps({"spec": spec}, separators=(",", ":"))))
-    elif isinstance(spec, dict):
-        # `name` is the dependencies key. Lockfile v1 has no packages path.
-        blocks.append(
-            (
-                str(spec.get("version") or ""),
-                json.dumps({"name": name, "spec": spec}, sort_keys=True, separators=(",", ":")),
-            )
-        )
+    for section, spec in blob.get("specs") or ():
+        if isinstance(spec, str):
+            blocks.append((spec, json.dumps({"section": section, "spec": spec}, separators=(",", ":"))))
+        else:
+            # `name` is the dependencies key. Lockfile v1 has no packages path.
+            body = {"name": name, "section": section, "spec": spec}
+            blocks.append((str(spec.get("version") or ""), json.dumps(body, sort_keys=True, separators=(",", ":"))))
     locks = blob.get("locks")
     if isinstance(locks, list):
         ordered = [item for item in locks if isinstance(item, tuple) and len(item) == 2]
@@ -208,7 +218,7 @@ def _json_parts(text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
         return None
     parts: dict[str, dict[str, object]] = {}
     for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
-        _take_specs(doc.get(section), parts)
+        _take_specs(doc.get(section), parts, section)
         block = doc.get(section)
         if isinstance(block, dict) and not block:
             doc.pop(section, None)
@@ -217,7 +227,7 @@ def _json_parts(text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
         root = packages.get("")
         if isinstance(root, dict):
             for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
-                _take_specs(root.get(section), parts)
+                _take_specs(root.get(section), parts, "packages:" + section)
                 block = root.get(section)
                 if isinstance(block, dict) and not block:
                     root.pop(section, None)
@@ -251,7 +261,9 @@ def _go_mod_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
         code = line.split("//", 1)[0]
         match = _GO_MOD_RE.match(code) if kind == "entry" else None
         if match:
-            entries.setdefault(match.group(1), []).append((match.group(2), code.strip()))
+            # `// indirect` stays on the entry: an unlisted indirect bump is transitive.
+            payload = " ".join(line.split()) if _GO_INDIRECT_RE.search(line) else code.strip()
+            entries.setdefault(match.group(1), []).append((match.group(2), payload))
             continue
         residue.append(line)
     return entries, "".join(residue)
@@ -281,16 +293,44 @@ def _go_sum_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
     return entries, "".join(residue)
 
 
+def _requirement_specs(line: str, table: str) -> list[tuple[str, str]]:
+    """(name, version) pairs on one requirements, setup or TOML line.
+
+    A pinned PEP 508 line, or each quoted PEP 508 string, is an entry. Inside a
+    Poetry or Pipfile dependency table a `name = "spec"` line is one as well.
+    """
+    if table.endswith("dependencies") or table in {"packages", "dev-packages"}:
+        match = _TOML_DEP_RE.match(line)
+        if match and match.group(1).lower() != "python":
+            return [(match.group(1), match.group(2))]
+    whole = _REQ_RE.match(line.strip())
+    candidates = [whole] if whole else [_REQ_RE.match(text.strip()) for text in _QUOTED_RE.findall(line)]
+    return [(match.group(1), match.group(2)) for match in candidates if match]
+
+
 def _req_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
     entries: dict[str, list[tuple[str, str]]] = {}
     residue: list[str] = []
+    table = ""
     for line in text.splitlines(keepends=True):
-        match = _REQ_RE.match(line)
-        if match:
-            entries.setdefault(_requirement_name(match.group(1)), []).append((match.group(2), line.strip()))
-            continue
-        residue.append(line)
+        header = _TOML_TABLE_RE.match(line)
+        table = header.group(1) if header else table
+        found = _requirement_specs(line, table)
+        for name, version in found:
+            entries.setdefault(_requirement_name(name), []).append((version, line.strip()))
+        if not found:
+            residue.append(line)
     return entries, "".join(residue)
+
+
+def _yarn_names(header: str) -> list[str]:
+    """Package names of a Yarn stanza header, one per distinct comma-separated descriptor."""
+    names: list[str] = []
+    for descriptor in header.rstrip().rstrip(":").split(","):
+        match = _YARN_DESCRIPTOR_RE.match(descriptor.strip())
+        if match and match.group(1) not in names:
+            names.append(match.group(1))
+    return names
 
 
 def _yarn_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
@@ -313,7 +353,7 @@ def _yarn_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
     for raw in text.splitlines():
         if raw and not raw.startswith((" ", "\t")):
             flush()
-            names = _YARN_HEADER_RE.findall(raw)
+            names = _yarn_names(raw)
             block = [raw]
             version = ""
             continue
@@ -579,7 +619,7 @@ def _yarn_rest(payload: str) -> str | None:
     package is named like a locator.
     """
     lines = payload.splitlines()
-    names = _YARN_HEADER_RE.findall(lines[0]) if lines else []
+    names = _yarn_names(lines[0]) if lines else []
     if len(names) != 1:
         return None
     version = resolved = ""
@@ -638,7 +678,7 @@ def _payload_id(payload: str) -> str:
     if isinstance(path, str) and path:
         return "path:" + path
     if "spec" in doc:
-        return "spec"
+        return "spec:" + str(doc.get("section") or "")
     return ""
 
 
@@ -677,7 +717,7 @@ def _payload_kind(payload: str) -> str:
         doc = json.loads(payload)
     except json.JSONDecodeError:
         return "text"
-    if isinstance(doc, dict) and set(doc) == {"spec"} and isinstance(doc.get("spec"), str):
+    if isinstance(doc, dict) and set(doc) == {"section", "spec"} and isinstance(doc.get("spec"), str):
         return "spec"
     return "json"
 
@@ -757,7 +797,7 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
             if not _name_explained(kind, name, old_blocks, new_blocks, listed):
                 return False
             continue
-        if not _transitive_change_ok(old_blocks, new_blocks):
+        if not _transitive_change_ok(kind, old_blocks, new_blocks):
             return False
     return True
 
@@ -775,12 +815,20 @@ def _registry_block(payload: str) -> bool:
     return _both_resolved_canonical(name, body, name, body)
 
 
-def _transitive_change_ok(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
+def _transitive_change_ok(kind: str, old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
     """An unlisted lock name may bump, appear or disappear.
 
-    Paired entries must be a registry version bump. An added or removed
-    entry must itself be the registry tarball for its name and version.
+    In go.mod that holds for one `// indirect` requirement. In go.sum versions
+    may come and go, but a version on both sides keeps its checksums. In npm
+    and Yarn locks paired entries must be a registry version bump, and an added
+    or removed entry must itself be the registry tarball for its name and version.
     """
+    if kind == "go.mod":
+        blocks = (*old_blocks, *new_blocks)
+        return len(old_blocks) <= 1 and len(new_blocks) <= 1 and all(_GO_INDIRECT_RE.search(p) for _v, p in blocks)
+    if kind == "go.sum":
+        old, new = _version_map(old_blocks), _version_map(new_blocks)
+        return old is not None and new is not None and all(old[key] == new[key] for key in old.keys() & new.keys())
     if _version_bump(old_blocks, new_blocks):
         return True
     if not old_blocks or not new_blocks:
