@@ -47,6 +47,43 @@ func writeManagedContent(repoPath string, content []byte) error {
 	return os.Chmod(repoPath, mode)
 }
 
+// managedWritePath returns where repoRelPath is written under repoRoot. The
+// write must land inside the clone: a symlinked parent directory that leads
+// outside is an error, and a symlink at the path itself is removed so the
+// managed content replaces the link instead of following it.
+func managedWritePath(repoRoot, repoRelPath string) (string, error) {
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	target := filepath.Join(root, filepath.FromSlash(repoRelPath))
+	if escapesRepository(root, target) {
+		return "", fmt.Errorf("managed path %s escapes the repository", repoRelPath)
+	}
+	if resolvedRoot, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolvedRoot
+	}
+	for dir := filepath.Dir(target); ; dir = filepath.Dir(dir) {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if escapesRepository(root, resolved) {
+			return "", fmt.Errorf("managed path %s escapes the repository", repoRelPath)
+		}
+		break
+	}
+	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(target); err != nil {
+			return "", err
+		}
+	}
+	return target, nil
+}
+
 // ManagedFiles updates all managed files in the org with current versions.
 // The repository listing defines which repos are considered; custom properties
 // provide the explicit selections for those repos.
@@ -263,7 +300,10 @@ func (c *Content) checkSelectedFiles(repoName string, files []config.SelectedFil
 			_, _ = w.Add(form)
 		}
 
-		repoPath := fmt.Sprintf("%s/%s", repoDir(repoName), fileinfo.RepoPath)
+		repoPath, err := managedWritePath(repoDir(repoName), fileinfo.RepoPath)
+		if err != nil {
+			return err
+		}
 		if err := writeManagedContent(repoPath, content); err != nil {
 			return err
 		}

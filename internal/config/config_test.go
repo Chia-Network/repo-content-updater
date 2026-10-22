@@ -427,3 +427,20 @@ func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Empty(t, expanded)
 }
+
+func TestLoadConfigRejectsMultilineAdoptionMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+default_files:
+  - first
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+    adoption_marker: "ok\nversion: 9"
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "adoption_marker")
+}

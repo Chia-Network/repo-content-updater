@@ -26,19 +26,29 @@ const (
 )
 
 // existingFileState inspects fileinfo's repo_path and alternate_paths under dir.
-// A file without an adoption marker is unowned whenever any copy exists.
+// A file without an adoption marker is unowned whenever any copy exists, and
+// anything other than a regular file (a symlink or directory) is never owned,
+// so adoption never reads through a link.
 func existingFileState(dir string, fileinfo *config.File) (fileState, error) {
 	marker := strings.TrimSpace(fileinfo.AdoptionMarker)
 	state := fileAbsent
 	for _, repoPath := range append([]string{fileinfo.RepoPath}, fileinfo.AlternatePaths...) {
-		content, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(repoPath)))
+		fullPath := filepath.Join(dir, filepath.FromSlash(repoPath))
+		info, err := os.Lstat(fullPath)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return fileAbsent, err
 		}
-		if marker == "" || !containsTrimmedLine(string(content), "# "+marker) {
+		if marker == "" || !info.Mode().IsRegular() {
+			return fileUnowned, nil
+		}
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			return fileAbsent, err
+		}
+		if !containsTrimmedLine(string(content), "# "+marker) {
 			return fileUnowned, nil
 		}
 		state = fileMarked
@@ -107,16 +117,29 @@ func defaultBundleAdoptable(repoName string, root *config.File, members []*confi
 		if member.Name == root.Name {
 			continue
 		}
-		state, err := existingFileState(dir, &config.File{RepoPath: member.RepoPath, AlternatePaths: member.AlternatePaths})
+		occupied, err := anyPathExists(dir, member)
 		if err != nil {
 			return false, err
 		}
-		if state != fileAbsent {
+		if occupied {
 			log.Printf("Skipping default %s for %s: companion path for %s already exists\n", root.Name, repoName, member.Name)
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+// anyPathExists reports whether anything, including a dangling symlink, sits
+// at fileinfo's repo_path or an alternate_path under dir.
+func anyPathExists(dir string, fileinfo *config.File) (bool, error) {
+	for _, repoPath := range append([]string{fileinfo.RepoPath}, fileinfo.AlternatePaths...) {
+		_, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(repoPath)))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		return err == nil, err
+	}
+	return false, nil
 }
 
 // withAdoptionMarker exposes a file's adoption marker to its template as

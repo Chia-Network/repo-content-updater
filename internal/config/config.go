@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -168,6 +169,10 @@ func (c *Config) validateRequiresPaths() error {
 	return nil
 }
 
+// adoptionMarkerPattern keeps markers to one plain comment token: they are
+// rendered into templates and matched as a whole line.
+var adoptionMarkerPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
+
 func (c *Config) validateAdoptionMarkers() error {
 	seen := map[string]string{}
 	for i := range c.Files {
@@ -175,6 +180,9 @@ func (c *Config) validateAdoptionMarkers() error {
 		marker := strings.TrimSpace(file.AdoptionMarker)
 		if marker == "" {
 			continue
+		}
+		if !adoptionMarkerPattern.MatchString(marker) {
+			return fmt.Errorf("adoption_marker %q for %q must use only letters, digits and . _ : / -", marker, file.Name)
 		}
 		if previous, ok := seen[marker]; ok && previous != file.Name {
 			return fmt.Errorf("adoption_marker %q is used by both %q and %q", marker, previous, file.Name)
