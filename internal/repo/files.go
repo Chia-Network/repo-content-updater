@@ -343,6 +343,8 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 // renderManagedFile renders fileinfo's template for repoName. When Dependabot
 // detection fails, an explicit file keeps the full template output and a
 // default file is skipped (ok is false) so an adopted file stays as it is.
+// A default Dependabot file is also skipped when the rendering would drop an
+// ecosystem the existing file configures.
 func (c *Content) renderManagedFile(repoName string, selected config.SelectedFile, fileinfo *config.File, cfg *config.Config, repoConfig Config) ([]byte, bool, error) {
 	tmplContent, err := os.ReadFile(path.Join(c.templates, fileinfo.TemplateName))
 	if err != nil {
@@ -359,7 +361,18 @@ func (c *Content) renderManagedFile(repoName string, selected config.SelectedFil
 	}
 
 	content, err := ProcessTemplate(tmplContent, templateVars, templateOverrides)
-	return content, err == nil, err
+	if err != nil || selected.Origin != config.OriginDefault || fileinfo.TemplateName != dependabotTemplateName {
+		return content, err == nil, err
+	}
+	dropped, err := droppedDependabotEcosystems(repoDir(repoName), fileinfo, content)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(dropped) > 0 {
+		log.Printf("Skipping default %s for %s: the existing file also configures %v\n", selected.Name, repoName, dropped)
+		return nil, false, nil
+	}
+	return content, true, nil
 }
 
 // templateInputsForFile keeps template-specific variable derivation out of the
