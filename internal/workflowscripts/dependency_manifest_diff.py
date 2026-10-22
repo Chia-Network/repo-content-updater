@@ -815,20 +815,23 @@ def _registry_block(payload: str) -> bool:
     return _both_resolved_canonical(name, body, name, body)
 
 
-def _transitive_change_ok(kind: str, old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
-    """An unlisted lock name may bump, appear or disappear.
+Blocks = list[tuple[str, str]]
 
-    In go.mod that holds for one `// indirect` requirement. In go.sum versions
-    may come and go, but a version on both sides keeps its checksums. In npm
-    and Yarn locks paired entries must be a registry version bump, and an added
-    or removed entry must itself be the registry tarball for its name and version.
-    """
-    if kind == "go.mod":
-        blocks = (*old_blocks, *new_blocks)
-        return len(old_blocks) <= 1 and len(new_blocks) <= 1 and all(_GO_INDIRECT_RE.search(p) for _v, p in blocks)
-    if kind == "go.sum":
-        old, new = _version_map(old_blocks), _version_map(new_blocks)
-        return old is not None and new is not None and all(old[key] == new[key] for key in old.keys() & new.keys())
+
+def _go_mod_transitive(old_blocks: Blocks, new_blocks: Blocks) -> bool:
+    """One `// indirect` requirement on each side."""
+    blocks = (*old_blocks, *new_blocks)
+    return len(old_blocks) <= 1 and len(new_blocks) <= 1 and all(_GO_INDIRECT_RE.search(p) for _v, p in blocks)
+
+
+def _go_sum_transitive(old_blocks: Blocks, new_blocks: Blocks) -> bool:
+    """Versions may come and go; a version on both sides keeps its checksums."""
+    old, new = _version_map(old_blocks), _version_map(new_blocks)
+    return old is not None and new is not None and all(old[key] == new[key] for key in old.keys() & new.keys())
+
+
+def _registry_transitive(old_blocks: Blocks, new_blocks: Blocks) -> bool:
+    """npm and Yarn: paired entries are a registry version bump; a lone entry is a registry tarball."""
     if _version_bump(old_blocks, new_blocks):
         return True
     if not old_blocks or not new_blocks:
@@ -844,6 +847,14 @@ def _transitive_change_ok(kind: str, old_blocks: list[tuple[str, str]], new_bloc
         return False
     lone = [old_by_id[key] for key in old_by_id.keys() - common] + [new_by_id[key] for key in new_by_id.keys() - common]
     return all(_registry_block(payload) for _version, payload in lone)
+
+
+# How an unlisted name in each lock kind may bump, appear or disappear.
+_TRANSITIVE_RULES = {"go.mod": _go_mod_transitive, "go.sum": _go_sum_transitive}
+
+
+def _transitive_change_ok(kind: str, old_blocks: Blocks, new_blocks: Blocks) -> bool:
+    return _TRANSITIVE_RULES.get(kind, _registry_transitive)(old_blocks, new_blocks)
 
 
 def _changed_names(kind: str, before: str, after: str) -> set[str] | None:

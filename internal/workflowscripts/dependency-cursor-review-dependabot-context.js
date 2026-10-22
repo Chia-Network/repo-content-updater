@@ -12,53 +12,47 @@ function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function extractDetailsSection(text, summaryLabel) {
-  const summaryRe = new RegExp(`<details[^>]*>\\s*<summary>\\s*${escapeRegex(summaryLabel)}[^<]*</summary>`, 'i');
-  const summaryMatch = summaryRe.exec(text);
-  if (!summaryMatch) return '';
-
-  const start = summaryMatch.index;
+// [start, end) of each top-level <details> block. An unclosed block runs to the end.
+function detailsSpans(text) {
   const tagRe = /<details\b[^>]*>|<\/details>/gi;
-  tagRe.lastIndex = start;
+  const spans = [];
   let depth = 0;
-  let end = -1;
+  let start = 0;
   let tag;
-
   while ((tag = tagRe.exec(text)) !== null) {
-    if (tag[0].toLowerCase().startsWith('<details')) {
-      depth += 1;
-    } else {
-      depth -= 1;
-    }
-    if (depth === 0) {
-      end = tagRe.lastIndex;
-      break;
+    const opens = tag[0].toLowerCase().startsWith('<details');
+    if (opens && depth === 0) start = tag.index;
+    depth = Math.max(0, depth + (opens ? 1 : -1));
+    if (!opens && depth === 0) spans.push([start, tagRe.lastIndex, true]);
+  }
+  if (depth > 0) spans.push([start, text.length, false]);
+  return spans;
+}
+
+function extractDetailsSection(text, summaryLabel) {
+  const summaryRe = new RegExp(`^<details[^>]*>\\s*<summary>\\s*${escapeRegex(summaryLabel)}[^<]*</summary>`, 'i');
+  for (const [start, end, closed] of detailsSpans(text)) {
+    const block = text.slice(start, end);
+    if (closed && summaryRe.test(block)) {
+      return block
+        .replace(summaryRe, '')
+        .replace(/<\/details>\s*$/i, '')
+        .trim();
     }
   }
-
-  if (end === -1) return '';
-  const block = text.slice(start, end);
-  return block
-    .replace(summaryRe, '')
-    .replace(/<\/details>\s*$/i, '')
-    .trim();
+  return '';
 }
 
 // The body outside every top-level <details> block. Release notes and commit
 // lists live there and must not add packages or versions; text after a block still counts.
 function withoutDetails(text) {
-  const tagRe = /<details\b[^>]*>|<\/details>/gi;
-  let depth = 0;
-  let keptFrom = 0;
   let kept = '';
-  let tag;
-  while ((tag = tagRe.exec(text)) !== null) {
-    const opens = tag[0].toLowerCase().startsWith('<details');
-    if (opens && depth === 0) kept += text.slice(keptFrom, tag.index);
-    depth = Math.max(0, depth + (opens ? 1 : -1));
-    if (!opens && depth === 0) keptFrom = tagRe.lastIndex;
+  let from = 0;
+  for (const [start, end] of detailsSpans(text)) {
+    kept += text.slice(from, start);
+    from = end;
   }
-  return depth === 0 ? kept + text.slice(keptFrom) : kept;
+  return kept + text.slice(from);
 }
 
 // Constraint operators go; a leading v or V stays because tags are looked up as written.
