@@ -44,10 +44,33 @@ function extractDetailsSection(text, summaryLabel) {
     .trim();
 }
 
-function stripLeadingV(version) {
+// The body outside every top-level <details> block. Release notes and commit
+// lists live there and must not add packages or versions; text after a block still counts.
+function withoutDetails(text) {
+  const tagRe = /<details\b[^>]*>|<\/details>/gi;
+  let depth = 0;
+  let keptFrom = 0;
+  let kept = '';
+  let tag;
+  while ((tag = tagRe.exec(text)) !== null) {
+    const opens = tag[0].toLowerCase().startsWith('<details');
+    if (opens && depth === 0) kept += text.slice(keptFrom, tag.index);
+    depth = Math.max(0, depth + (opens ? 1 : -1));
+    if (!opens && depth === 0) keptFrom = tagRe.lastIndex;
+  }
+  return depth === 0 ? kept + text.slice(keptFrom) : kept;
+}
+
+// Constraint operators go; a leading v or V stays because tags are looked up as written.
+function normalizeVersion(version) {
   return String(version || '')
     .trim()
-    .replace(/^v/i, '');
+    .replace(/^(?:===|==|~=|!=|>=|<=|\^|~|=|>|<)\s*/, '');
+}
+
+function sameValue(key, left, right) {
+  if (key === 'upstreamRepo') return left === right;
+  return left.replace(/^v/i, '') === right.replace(/^v/i, '');
 }
 
 function githubRepoFromText(text) {
@@ -55,16 +78,24 @@ function githubRepoFromText(text) {
   const url = source.match(/https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/i);
   if (url) return url[1].replace(/\.git$/i, '');
   const moduleName = source.match(/^github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:\/|$)/i);
-  return moduleName ? moduleName[1] : '';
+  if (moduleName) return moduleName[1];
+  // Terraform Registry providers and modules publish from conventionally named GitHub repositories.
+  const provider = source.match(/registry\.terraform\.io\/providers\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)/i);
+  if (provider) return `${provider[1]}/terraform-provider-${provider[2]}`;
+  const module = source.match(
+    /registry\.terraform\.io\/modules\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)/i,
+  );
+  return module ? `${module[1]}/terraform-${module[3]}-${module[2]}` : '';
 }
 
+// A table Package cell: `name`, `[name](url)`, or Renovate's `[name](url) ([source](repo))`.
 function packageCell(cell) {
-  const trimmed = cell.trim();
-  const link = trimmed.match(/^\[([^\]]*)\]\(([^)]*)\)$/);
-  if (!link) return { name: trimmed, repo: githubRepoFromText(trimmed) };
+  const links = [...cell.matchAll(/\[([^\]]*)\]\(([^)]*)\)/g)];
+  if (links.length === 0) return { name: cell.trim(), repo: githubRepoFromText(cell.trim()) };
+  const source = links.find((link) => link[1].trim().toLowerCase() === 'source');
   return {
-    name: link[1].trim(),
-    repo: githubRepoFromText(link[2]) || githubRepoFromText(link[1]),
+    name: links[0][1].trim(),
+    repo: githubRepoFromText(source?.[2]) || githubRepoFromText(links[0][2]) || githubRepoFromText(links[0][1]),
   };
 }
 
@@ -72,7 +103,7 @@ function agree(record, key, incoming) {
   if (record.disputed[key]) return '';
   if (!incoming) return record[key];
   if (!record[key]) return incoming;
-  if (record[key] === incoming) return record[key];
+  if (sameValue(key, record[key], incoming)) return record[key];
   record.disputed[key] = true;
   return '';
 }
@@ -80,8 +111,8 @@ function agree(record, key, incoming) {
 function rememberUpdate(byName, name, fromVersion, toVersion, repo) {
   const packageName = String(name || '').trim();
   if (!packageName || packageName.toLowerCase() === 'package') return;
-  const from = stripLeadingV(fromVersion);
-  const to = stripLeadingV(toVersion);
+  const from = normalizeVersion(fromVersion);
+  const to = normalizeVersion(toVersion);
   const repoName = String(repo || '')
     .trim()
     .replace(/\.git$/i, '');
@@ -101,42 +132,62 @@ function rememberUpdate(byName, name, fromVersion, toVersion, repo) {
   existing.upstreamRepo = agree(existing, 'upstreamRepo', repoName);
 }
 
-function groupPreamble(body) {
-  if (/^(?:Updates |<details|\|)/i.test(body)) return '';
-  const marks = ['\nUpdates ', '\n|', '\n<details', '\n### '];
-  let cut = body.length;
-  for (const mark of marks) {
-    const index = body.indexOf(mark);
-    if (index >= 0 && index < cut) cut = index;
-  }
-  return body.slice(0, cut);
+// The opening paragraph that names the packages. It ends at the first blank
+// line, bullet list (Release notes, Changelog, Commits), table, or heading.
+function groupPreamble(visible) {
+  if (visible.trimStart().startsWith('|')) return '';
+  return visible.trimStart().split(/\n\s*\n|\n\s*[-*] |\n\||\n### |\nUpdates `/)[0];
 }
 
-// The Dependabot update table only. Release-note tables sit later, often inside
-// <details>, and a row there must not invent a package or clear a real version.
-function dependabotUpdateTable(body) {
-  const source = String(body || '');
-  const detailsAt = source.search(/<details\b/i);
-  const region = detailsAt === -1 ? source : source.slice(0, detailsAt);
-  const header = /^\|\s*Package\s*\|\s*From\s*\|\s*To\s*\|/im.exec(region);
-  if (!header) return '';
-  const kept = [];
-  for (const line of region.slice(header.index).split('\n')) {
-    if (!line.trim()) {
-      if (kept.length > 0) break;
-      continue;
-    }
+function tableCells(line) {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+const BACKTICKS_RE = /^`([^`]+)`$/;
+const CHANGE_RE = /`([^`]+)`\s*(?:->|→)\s*`([^`]+)`/;
+
+// Rows of the update table: Dependabot's `Package | From | To` or Renovate's
+// `Package | ... | Change`. Release-note tables live inside <details>, which is already gone.
+function updateTableRows(visible) {
+  const lines = visible.split('\n');
+  const start = lines.findIndex((line) => /^\|\s*Package\s*\|/i.test(line.trim()));
+  if (start === -1) return [];
+  const columns = tableCells(lines[start]).map((cell) => cell.toLowerCase());
+  const rows = [];
+  for (const line of lines.slice(start + 2)) {
     if (!line.trim().startsWith('|')) break;
-    kept.push(line);
+    const cell = Object.fromEntries(tableCells(line).map((value, index) => [columns[index], value]));
+    const change = CHANGE_RE.exec(cell.change || '');
+    const from = change ? change[1] : (BACKTICKS_RE.exec(cell.from || '') || [])[1];
+    const to = change ? change[2] : (BACKTICKS_RE.exec(cell.to || '') || [])[1];
+    if (from && to) rows.push({ ...packageCell(cell.package || ''), from, to });
   }
-  return kept.join('\n');
+  return rows;
+}
+
+// The repository the body names first: the `Bumps [x](github)` link, else any GitHub link.
+function upstreamRepoFromBody(text) {
+  const dependencyRepoMatch = text.match(
+    /^\s*(?:Bumps|Update(?:s|d)?)\s+(?:the\s+requirements\s+on\s+)?\[[^\]]+\]\(\s*https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:[\/#?][^)\s]*)?\s*\)/im,
+  );
+  const repoMatch =
+    dependencyRepoMatch ||
+    text.match(/https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=\/|$|[)\]>\s"'?#])/i);
+  return repoMatch ? repoMatch[1].replace(/\.git$/i, '') : '';
 }
 
 // One map. Intro links, table rows, Updates lines, and the title all write it.
 // A second non-empty repository or version that differs clears that field.
+// Only the body outside <details> is read.
 function collectPackageUpdates(title, body) {
   const byName = new Map();
-  const preamble = groupPreamble(body);
+  const visible = withoutDetails(body);
+  const preamble = groupPreamble(visible);
   const linkRe = /\[([^\]]+)\]\(\s*(https?:\/\/[^)\s]+)[^)]*\)/gi;
   let link;
   while ((link = linkRe.exec(preamble)) !== null) {
@@ -153,16 +204,12 @@ function collectPackageUpdates(title, body) {
       githubRepoFromText(bumps[2]),
     );
   }
-  const tableRe = /^\|\s*([^|\n]+?)\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|/gm;
-  const table = dependabotUpdateTable(body);
-  let row;
-  while ((row = tableRe.exec(table)) !== null) {
-    const cell = packageCell(row[1]);
-    rememberUpdate(byName, cell.name, row[2], row[3], cell.repo);
+  for (const row of updateTableRows(visible)) {
+    rememberUpdate(byName, row.name, row.from, row.to, row.repo);
   }
   const lineRe = /^Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+)/gm;
   let line;
-  while ((line = lineRe.exec(body)) !== null) {
+  while ((line = lineRe.exec(visible)) !== null) {
     rememberUpdate(
       byName,
       line[1].trim(),
@@ -178,9 +225,9 @@ function collectPackageUpdates(title, body) {
     title.match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
   const renovateTitleMatch =
     !titleMatch &&
-    (title.match(/(?:update|pin)\s+dependency\s+(.+?)\s+to\s+v?([^\s]+)/i) ||
-      title.match(/(?:update|pin)\s+(.+?)\s+(?:action|digest|docker\s+tag)\s+to\s+v?([^\s]+)/i) ||
-      title.match(/(?:update|pin)\s+(.+?)\s+to\s+v?([^\s]+)/i));
+    (title.match(/(?:update|pin)\s+dependency\s+(.+?)\s+to\s+([^\s]+)/i) ||
+      title.match(/(?:update|pin)\s+(.+?)\s+(?:action|digest|docker\s+tag)\s+to\s+([^\s]+)/i) ||
+      title.match(/(?:update|pin)\s+(.+?)\s+to\s+([^\s]+)/i));
   if (titleMatch) {
     rememberUpdate(byName, titleMatch[1], titleMatch[2], titleMatch[3], '');
   } else if (renovateTitleMatch) {
@@ -189,8 +236,9 @@ function collectPackageUpdates(title, body) {
 
   if (byName.size === 1) {
     const only = [...byName.values()][0];
+    if (!only.upstreamRepo) rememberUpdate(byName, only.packageName, '', '', upstreamRepoFromBody(visible));
     if (!only.fromVersion || !only.toVersion) {
-      const arrow = body.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
+      const arrow = visible.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
       if (arrow) {
         rememberUpdate(
           byName,
@@ -206,13 +254,7 @@ function collectPackageUpdates(title, body) {
 }
 
 function parseDependencyUpdate(title, body) {
-  const dependencyRepoMatch = body.match(
-    /^\s*(?:Bumps|Update(?:s|d)?)\s+\[[^\]]+\]\(\s*https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:[\/#?][^)\s]*)?\s*\)/im,
-  );
-  const repoMatch =
-    dependencyRepoMatch ||
-    body.match(/https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=\/|$|[)\]>\s"'?#])/i);
-  const upstreamRepo = repoMatch ? repoMatch[1].replace(/\.git$/i, '') : '';
+  const upstreamRepo = upstreamRepoFromBody(body);
 
   let releaseNotes = extractDetailsSection(body, 'Release notes');
   if (!releaseNotes && upstreamRepo) {
