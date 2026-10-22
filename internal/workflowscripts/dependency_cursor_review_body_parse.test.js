@@ -73,32 +73,49 @@ test('a Renovate Package | Change table supplies versions and the source reposit
   ]);
 });
 
-test('a sole update without a repository takes the body repository', () => {
+test('a sole update does not take an unrelated GitHub URL from the body', () => {
   const body = 'This PR contains the following updates:\n\nSee https://github.com/Chia-Network/homebrew-chia for details.';
   const parsed = parseDependencyUpdate('Update dependency chia to v2.5.0', body);
-  assert.equal(parsed.upstreamRepo, 'Chia-Network/homebrew-chia');
+  assert.equal(parsed.upstreamRepo, '');
+  assert.deepEqual(rows(parsed), [['chia', '', 'v2.5.0', '']]);
 });
 
-test('Terraform Registry links map to their GitHub repositories', () => {
+test('Terraform Registry links leave the repository empty', () => {
   const provider = parseDependencyUpdate(
     'Update terraform aws to v5.1.0',
     '| Package | Type | Update | Change |\n|---|---|---|---|\n| [aws](https://registry.terraform.io/providers/hashicorp/aws) | required_provider | minor | `5.0.0` -> `5.1.0` |',
   );
-  assert.equal(provider.updates.find((item) => item.packageName === 'aws').upstreamRepo, 'hashicorp/terraform-provider-aws');
+  assert.deepEqual(rows(provider), [['aws', '5.0.0', '5.1.0', '']]);
   const module = parseDependencyUpdate(
     'Update terraform vpc to v5.1.0',
     '| Package | Type | Update | Change |\n|---|---|---|---|\n| [vpc](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws) | module | minor | `5.0.0` -> `5.1.0` |',
   );
-  assert.equal(
-    module.updates.find((item) => item.packageName === 'vpc').upstreamRepo,
-    'terraform-aws-modules/terraform-aws-vpc',
-  );
+  assert.deepEqual(rows(module), [['vpc', '5.0.0', '5.1.0', '']]);
 });
 
-test('constraint operators are stripped and a leading v or V is kept', () => {
+test('a title is not parsed when the update table has rows', () => {
+  const parsed = parseDependencyUpdate(
+    'Update terraform aws to v5.1.0',
+    '| Package | Type | Update | Change |\n|---|---|---|---|\n| [aws](https://github.com/hashicorp/terraform-provider-aws) | required_provider | minor | `5.0.0` -> `5.1.0` |',
+  );
+  assert.deepEqual(rows(parsed), [['aws', '5.0.0', '5.1.0', 'hashicorp/terraform-provider-aws']]);
+});
+
+test('a </details> with no open block hides nothing before it', () => {
+  const body = 'Bumps [clvm](https://github.com/Chia-Network/clvm) from 0.9.7 to 0.9.8.\n</details>';
+  const parsed = parseDependencyUpdate('Bump clvm from 0.9.7 to 0.9.8', body);
+  assert.deepEqual(rows(parsed), [['clvm', '0.9.7', '0.9.8', 'Chia-Network/clvm']]);
+});
+
+test('only == and === are stripped; range operators stay on the version', () => {
   const body = 'Bumps [clvm](https://github.com/Chia-Network/clvm) from ==0.9.7 to >=0.9.8.';
   const parsed = parseDependencyUpdate('Bump clvm from ==0.9.7 to >=0.9.8', body);
-  assert.deepEqual(rows(parsed), [['clvm', '0.9.7', '0.9.8', 'Chia-Network/clvm']]);
+  assert.deepEqual(rows(parsed), [['clvm', '0.9.7', '>=0.9.8', 'Chia-Network/clvm']]);
+  const pinned = parseDependencyUpdate(
+    'Bump clvm from ===0.9.7 to ==0.9.8',
+    'Bumps [clvm](https://github.com/Chia-Network/clvm) from ===0.9.7 to ==0.9.8.',
+  );
+  assert.deepEqual(rows(pinned), [['clvm', '0.9.7', '0.9.8', 'Chia-Network/clvm']]);
   const tagged = parseDependencyUpdate(
     'Bump tool from V1.0 to V1.1',
     'Bumps [tool](https://github.com/o/tool) from V1.0 to V1.1.\nUpdates `tool` from 1.0 to 1.1',

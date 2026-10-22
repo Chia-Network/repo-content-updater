@@ -21,18 +21,20 @@ _REPO_RE = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
 
 
+_EXACT_RE = re.compile(r"\A[vV]?[0-9][0-9A-Za-z.+_-]*\Z")
+
+
 def scannable(update: dict) -> bool:
-    """A destination version is enough to read that tree. An empty from stays inconclusive."""
+    """An explicit GitHub repository and an exact destination version. An empty from stays inconclusive.
+
+    A range, wildcard or tag name could resolve to a tree other than the one installed.
+    """
     repo = str(update.get("upstreamRepo") or "")
     from_version = str(update.get("fromVersion") or "")
     to_version = str(update.get("toVersion") or "")
-    if not _REPO_RE.fullmatch(repo):
+    if not _REPO_RE.fullmatch(repo) or not _EXACT_RE.fullmatch(to_version):
         return False
-    if not to_version:
-        return False
-    if any(char in from_version + to_version for char in "\n\r\x00"):
-        return False
-    return True
+    return not from_version or bool(_EXACT_RE.fullmatch(from_version))
 
 
 def _label(update: dict) -> str:
@@ -399,10 +401,10 @@ def _base_commit(token: str = "") -> str | None:
     return _verify_commit(ref) or _verify_commit(f"origin/{ref}") or ""
 
 
-def _changed_paths(base: str) -> list[tuple[str, str]] | None:
-    """(before path, after path) for each file added, modified, renamed or copied since base."""
+def _changed_paths(base: str) -> list[tuple[str, str, bool]] | None:
+    """(before path, after path, retyped) for each file added, modified, renamed, copied or retyped since base."""
     diff = subprocess.run(
-        ["git", "diff", "--name-status", "-z", "-M", "--diff-filter=AMRC", base, "HEAD"],
+        ["git", "diff", "--name-status", "-z", "-M", "--diff-filter=AMRCT", base, "HEAD"],
         check=False,
         capture_output=True,
         text=True,
@@ -410,15 +412,15 @@ def _changed_paths(base: str) -> list[tuple[str, str]] | None:
     if diff.returncode != 0:
         return None
     fields = diff.stdout.split("\0")
-    changed: list[tuple[str, str]] = []
+    changed: list[tuple[str, str, bool]] = []
     index = 0
     while index + 1 < len(fields):
         status = fields[index]
         if status[:1] in "RC":
-            changed.append((fields[index + 1], fields[index + 2]))
+            changed.append((fields[index + 1], fields[index + 2], False))
             index += 3
         else:
-            changed.append((fields[index + 1], fields[index + 1]))
+            changed.append((fields[index + 1], fields[index + 1], status == "T"))
             index += 2
     return changed
 
@@ -432,15 +434,13 @@ def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
     package with that path as its name does not hide the path. A dependency
     with more than one unexplained entry is named as well.
 
-    An opaque lockfile cannot name a package, so it is not a gap. Unlisted
-    names in a npm, Yarn or Go lock are transitive residue when every listed
-    name in that lock moved to its listed version and each unlisted entry
-    was bumped, added or removed as a registry tarball. Both stay inputs to the
-    review instead of uncovered dependencies.
+    A missing base, an opaque lockfile, and any changed path this grammar does
+    not parse are unresolved under their path. Unlisted names in a npm or Yarn
+    lock are transitive residue when every listed name in that lock moved to
+    its listed version and each unlisted entry was bumped, added or removed as
+    a registry tarball.
     """
     base = _base_commit(token)
-    if base is None:
-        return []
     if not base:
         return [uncovered({"packageName": "manifest-diff"}, "unresolved")]
     listed = {str(item.get("packageName") or "").strip() for item in updates}
@@ -449,9 +449,11 @@ def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
         return [uncovered({"packageName": "manifest-diff"}, "unresolved")]
     gaps: list[dict] = []
     seen = set(listed)
-    for old_path, path in changed:
+    for old_path, path, retyped in changed:
         kind = _diff._manifest_kind(path)
-        if not kind or kind == "opaque":
+        if retyped or not kind or kind == "opaque":
+            for label in dict.fromkeys((old_path, path)):
+                gaps.append(uncovered({"packageName": label}, "unresolved"))
             continue
         before = _git_text(base, old_path)
         after = _git_text("HEAD", path)

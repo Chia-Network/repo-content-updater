@@ -230,7 +230,8 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             self.assertEqual((child / "dependabot_commits.md").read_text(encoding="utf-8"), f"commit {sha}\n")
         for report in (by_sha, by_branch):
             self.assertIs(report["scan_conclusive"], False, msg=report)
-            self.assertEqual(report["not_scanned_reason"], "to_ref_unresolved")
+            # A branch name is not an exact version, so it stops before the clone.
+            self.assertIn(report["not_scanned_reason"], {"to_ref_unresolved", "unresolved"})
             self.assertEqual(report["to_tag"], "")
             self.assertEqual(report["findings"]["ioc"], [])
 

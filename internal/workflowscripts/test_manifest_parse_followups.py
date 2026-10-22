@@ -19,9 +19,18 @@ def _update(name: str, old: str, new: str) -> dict:
 
 
 class VersionOperatorTest(unittest.TestCase):
-    def test_python_operators_strip_whole(self) -> None:
-        for operator in ("==", "===", "~=", "!=", ">=", "^", "~"):
-            self.assertEqual(manifest._VERSION_PREFIX_RE.sub("", f"{operator}2.0"), "2.0", operator)
+    def test_only_exact_pins_lose_their_operator(self) -> None:
+        for operator in ("==", "===", "v", "V"):
+            self.assertEqual(manifest._exact_body(f"{operator}2.0"), "2.0", operator)
+        for operator in ("~=", "!=", ">=", "<=", ">", "<", "^", "~", "=", "vv"):
+            self.assertEqual(manifest._exact_body(f"{operator}2.0"), "", operator)
+
+    def test_range_listed_version_is_not_explained(self) -> None:
+        old, new = "clvm==0.9.7\n", "clvm>=0.9.8\n"
+        for listed in (_update("clvm", "0.9.7", "0.9.8"), _update("clvm", "==0.9.7", ">=0.9.8")):
+            self.assertFalse(manifest._entries_explain("requirements", old, new, [listed]), listed)
+        widened = "clvm>=0.9.7\n", "clvm>=0.9.8\n"
+        self.assertFalse(manifest._entries_explain("requirements", *widened, [_update("clvm", "0.9.7", "0.9.8")]))
 
     def test_uppercase_v_listed_version_matches_manifest(self) -> None:
         listed = {"tool": {("V1.0", "V1.1")}}
@@ -64,6 +73,95 @@ class PythonManifestTest(unittest.TestCase):
         self.assertEqual(residue, "")
 
 
+class SameLineChangeTest(unittest.TestCase):
+    def test_line_must_match_once_the_version_is_removed(self) -> None:
+        update = [_update("requests", "2.31.0", "2.32.0")]
+        cases = {
+            "poetry git": (
+                '[tool.poetry.dependencies]\nrequests = { version = "2.31.0" }\n',
+                '[tool.poetry.dependencies]\nrequests = { git = "https://example.invalid/r", version = "2.32.0" }\n',
+            ),
+            "poetry path": (
+                '[tool.poetry.dependencies]\nrequests = { version = "2.31.0" }\n',
+                '[tool.poetry.dependencies]\nrequests = { path = "../r", version = "2.32.0" }\n',
+            ),
+            "hash trailer": ("requests==2.31.0\n", "requests==2.32.0 --hash=sha256:abc\n"),
+            "setup.py code": (
+                'install_requires=["requests==2.31.0"],\n',
+                'install_requires=["requests==2.32.0"] + [__import__("os").getcwd()],\n',
+            ),
+        }
+        for label, (old, new) in cases.items():
+            self.assertFalse(manifest._entries_explain("requirements", old, new, update), label)
+        plain = ("requests==2.31.0\n", "requests==2.32.0\n")
+        self.assertTrue(manifest._entries_explain("requirements", *plain, update))
+
+    def test_same_line_change_is_named_in_manifest_gaps(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            _git_repo(root)
+            _commit(root, "requirements.txt", "requests==2.31.0\n", "base")
+            base = _git(root, "rev-parse", "HEAD")
+            _commit(root, "requirements.txt", "requests==2.32.0 --hash=sha256:abc\n", "bump")
+            gaps = _gaps_at(root, base, [_update("requests", "2.31.0", "2.32.0")])
+            self.assertIn("requirements.txt", {item["package_name"] for item in gaps}, msg=gaps)
+
+
+def _gaps_at(root: Path, base: str | None, updates: list[dict]) -> list[dict]:
+    previous = os.getcwd()
+    os.chdir(root)
+    env = {"PR_BASE_SHA": base} if base else {}
+    try:
+        with patch.dict(os.environ, env, clear=False):
+            if base is None:
+                os.environ.pop("PR_BASE_SHA", None)
+                os.environ.pop("GITHUB_BASE_REF", None)
+            return coverage.manifest_gaps(updates)
+    finally:
+        os.chdir(previous)
+
+
+class ChangedPathGapTest(unittest.TestCase):
+    def _repo(self, tmp: str) -> tuple[Path, str]:
+        root = Path(tmp) / "repo"
+        _git_repo(root)
+        _commit(root, "requirements.txt", "requests==2.31.0\n", "base")
+        _commit(root, "poetry.lock", "[[package]]\nname = 'requests'\n", "lock")
+        _commit(root, ".github/workflows/ci.yml", "on: push\n", "ci")
+        return root, _git(root, "rev-parse", "HEAD")
+
+    def test_opaque_lock_and_other_paths_are_gaps(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, base = self._repo(tmp)
+            _commit(root, "requirements.txt", "requests==2.32.0\n", "bump")
+            _commit(root, "poetry.lock", "[[package]]\nname = 'requests'\nversion = '2.32.0'\n", "lock")
+            _commit(root, ".github/workflows/ci.yml", "on: [push, pull_request]\n", "ci")
+            gaps = {item["package_name"] for item in _gaps_at(root, base, [_update("requests", "2.31.0", "2.32.0")])}
+            self.assertEqual(gaps, {"poetry.lock", ".github/workflows/ci.yml"})
+
+    def test_missing_base_is_a_gap(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, _base = self._repo(tmp)
+            gaps = _gaps_at(root, None, [_update("requests", "2.31.0", "2.32.0")])
+            self.assertEqual([item["package_name"] for item in gaps], ["manifest-diff"])
+
+    def test_type_change_and_rename_off_a_manifest_are_gaps(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, base = self._repo(tmp)
+            _git(root, "mv", "requirements.txt", "NOTES.md")
+            _git(root, "commit", "-qm", "rename")
+            gaps = {item["package_name"] for item in _gaps_at(root, base, [])}
+            self.assertIn("requirements.txt", gaps)
+        with TemporaryDirectory() as tmp:
+            root, base = self._repo(tmp)
+            (root / "requirements.txt").unlink()
+            os.symlink("NOTES.md", root / "requirements.txt")
+            _git(root, "add", "requirements.txt")
+            _git(root, "commit", "-qm", "link")
+            gaps = {item["package_name"] for item in _gaps_at(root, base, [])}
+            self.assertIn("requirements.txt", gaps)
+
+
 class PackageJsonSectionsTest(unittest.TestCase):
     def test_bump_in_one_section_is_not_hidden_by_another(self) -> None:
         old = json.dumps({"dependencies": {"left-pad": "^1.0.0"}, "devDependencies": {"left-pad": "^1.0.0"}})
@@ -73,29 +171,25 @@ class PackageJsonSectionsTest(unittest.TestCase):
 
 
 class GoAndYarnLockTest(unittest.TestCase):
-    def test_go_mod_indirect_bump_is_transitive(self) -> None:
-        old = "module x\n\nrequire (\n\tgithub.com/a/a v1.0.0\n\tgithub.com/b/b v1.0.0 // indirect\n)\n"
-        new = old.replace("a v1.0.0", "a v1.1.0").replace("b v1.0.0", "b v1.2.0")
+    def test_go_mod_new_indirect_module_is_a_gap(self) -> None:
+        old = "module x\n\nrequire (\n\tgithub.com/a/a v1.0.0\n)\n"
+        new = old.replace("a v1.0.0", "a v1.1.0\n\tgithub.com/b/b v1.2.0 // indirect")
         names = manifest._changed_names("go.mod", old, new)
         updates = [_update("github.com/a/a", "1.0.0", "1.1.0")]
-        self.assertTrue(manifest._lock_covers_listed("go.mod", old, new, updates, names))
-        direct = new.replace("b v1.2.0 // indirect", "b v1.2.0")
-        self.assertFalse(manifest._lock_covers_listed("go.mod", old, direct, updates, names | {"github.com/b/b"}))
+        self.assertFalse(manifest._lock_covers_listed("go.mod", old, new, updates, names))
+        self.assertNotIn("go.mod", manifest.TRANSITIVE_LOCK_NAMES)
 
-    def test_go_sum_transitive_versions_keep_their_hashes(self) -> None:
+    def test_go_sum_new_module_is_a_gap(self) -> None:
         def line(mod: str, version: str, digest: str) -> str:
             return f"{mod} {version} h1:{digest}=\n{mod} {version}/go.mod h1:{digest}m=\n"
 
-        old = line("github.com/a/a", "v1.0.0", "a1") + line("github.com/b/b", "v1.0.0", "b1")
-        new = line("github.com/a/a", "v1.1.0", "a2") + line("github.com/b/b", "v1.0.0", "b1")
-        new += line("github.com/b/b", "v1.2.0", "b2")
+        old = line("github.com/a/a", "v1.0.0", "a1")
+        new = line("github.com/a/a", "v1.1.0", "a2") + line("github.com/b/b", "v1.2.0", "b2")
         updates = [_update("github.com/a/a", "1.0.0", "1.1.0")]
         names = manifest._changed_names("go.sum", old, new)
-        self.assertTrue(manifest._lock_covers_listed("go.sum", old, new, updates, names))
-        rehashed = new.replace("v1.0.0 h1:b1=", "v1.0.0 h1:zz=")
-        self.assertFalse(manifest._lock_covers_listed("go.sum", old, rehashed, updates, names))
-        self.assertIn("go.mod", manifest.TRANSITIVE_LOCK_NAMES)
-        self.assertIn("go.sum", manifest.TRANSITIVE_LOCK_NAMES)
+        self.assertFalse(manifest._lock_covers_listed("go.sum", old, new, updates, names))
+        self.assertFalse(manifest._entries_explain("go.sum", old, new, updates))
+        self.assertNotIn("go.sum", manifest.TRANSITIVE_LOCK_NAMES)
 
     def test_yarn_header_keeps_every_descriptor_name(self) -> None:
         header = '"@babel/core@^7.0.0", "@babel/core@^7.1.0", left-pad@^1.0.0:'
@@ -125,3 +219,22 @@ class RenamedManifestTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScannableTest(unittest.TestCase):
+    def test_only_exact_versions_with_a_github_repository_are_scannable(self) -> None:
+        def update(frm: str, to: str, repo: str = "o/r") -> dict:
+            return {"packageName": "p", "fromVersion": frm, "toVersion": to, "upstreamRepo": repo}
+
+        for frm, to in (("1.0", "1.1"), ("v1.0", "V1.1"), ("", "1.1")):
+            self.assertTrue(coverage.scannable(update(frm, to)), (frm, to))
+        for frm, to in (
+            (">=1.0", "1.1"),
+            ("1.0", ">=1.1"),
+            ("1.0", "^1.1"),
+            ("1.0", "~=1.1"),
+            ("1.0", "1.*"),
+            ("1.0", "latest"),
+        ):
+            self.assertFalse(coverage.scannable(update(frm, to)), (frm, to))
+        self.assertFalse(coverage.scannable(update("1.0", "1.1", "")))

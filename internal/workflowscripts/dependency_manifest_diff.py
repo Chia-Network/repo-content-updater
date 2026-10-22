@@ -14,15 +14,16 @@ _GO_MOD_RE = re.compile(
     r"^\s*(?:require\s+)?([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)\s+(v\S+)",
     re.M,
 )
-_GO_INDIRECT_RE = re.compile(r"//\s*indirect\s*$")
 _GO_SUM_RE = re.compile(r"^(\S+)\s+(v\S+)\s+", re.M)
 _REQ_RE = re.compile(
-    r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:==|>=|<=|~=|!=|===)\s*([^\s#;]+)",
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*((?:===|==|~=|!=|>=|<=|>|<)\s*[^\s#;,]+)",
     re.M,
 )
 _YARN_DESCRIPTOR_RE = re.compile(r'"?(@?[^@"\s]+)@')
 _YARN_VERSION_RE = re.compile(r'^  version "([^"]+)"')
-_VERSION_PREFIX_RE = re.compile(r"^(===|==|~=|!=|>=|<=|\^|~|=|>|<|[vV])")
+# Only an exact pin drops its prefix. Every range operator stays on the token.
+_PIN_PREFIX_RE = re.compile(r"^(?:===|==|[vV])")
+_EXACT_VERSION_RE = re.compile(r"[0-9][0-9A-Za-z.+_-]*")
 # A TOML table header, and a `name = "spec"` or `name = { version = "spec" }` dependency line.
 _TOML_TABLE_RE = re.compile(r"^\s*\[+\s*([^\]]+?)\s*\]+\s*$")
 _TOML_DEP_RE = re.compile(
@@ -30,8 +31,8 @@ _TOML_DEP_RE = re.compile(
 )
 _QUOTED_RE = re.compile(r'["\']([^"\']+)["\']')
 _PYTHON_MANIFESTS = frozenset({"pyproject.toml", "setup.py", "setup.cfg", "Pipfile"})
-# Lockfiles whose unlisted names are transitive residue once every listed bump is explained.
-TRANSITIVE_LOCK_NAMES = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "go.mod", "go.sum"})
+# npm and Yarn locks whose unlisted names may be registry tarball residue once every listed bump is explained.
+TRANSITIVE_LOCK_NAMES = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock"})
 _GO_BLOCK_STARTS = frozenset({"require(", "replace(", "exclude(", "retract("})
 _OPAQUE_LOCKS = {
     "pnpm-lock.yaml",
@@ -138,28 +139,35 @@ def _listed_versions(updates: list[dict], *, kind: str = "") -> dict[str, set[tu
 
 
 def _version_body(value: str) -> str:
-    match = _VERSION_PREFIX_RE.match(value)
-    return value[match.end() :] if match else value
+    """The version with one exact-pin prefix (`==`, `===`, `v` or `V`) removed."""
+    value = value.strip()
+    match = _PIN_PREFIX_RE.match(value)
+    return value[match.end() :].strip() if match else value
 
 
-def _reached_listed_version(name: str, old: str, new: str, listed: dict[str, set[tuple[str, str]]]) -> bool:
-    """True when this package moved from its listed version to its listed version.
+def _exact_body(value: str) -> str:
+    """The exact version a token pins, or "" for a range, wildcard or empty token."""
+    body = _version_body(value)
+    return body if _EXACT_VERSION_RE.fullmatch(body) else ""
 
-    A leading v or V is optional. Any other prefix, such as an npm range, must be
-    unchanged, and the version text after it must be the listed one.
+
+def _reached_listed_version(
+    name: str, old: str, new: str, listed: dict[str, set[tuple[str, str]]], *, npm_range: bool = False
+) -> bool:
+    """True when this package moved from one listed exact version to the other.
+
+    Listed and manifest tokens must both be exact pins. A package.json spec
+    (`npm_range`) may keep the same leading `^` or `~` on both sides, since its
+    lockfile selects the installed version.
     """
     if not old or not new or old == new:
         return False
-    old_prefix = _VERSION_PREFIX_RE.match(old)
-    new_prefix = _VERSION_PREFIX_RE.match(new)
-    old_mark = old_prefix.group(1).lower() if old_prefix else ""
-    new_mark = new_prefix.group(1).lower() if new_prefix else ""
-    if old_mark != new_mark and (old_mark not in {"", "v"} or new_mark not in {"", "v"}):
-        return False
-    old_body, new_body = _version_body(old), _version_body(new)
+    if npm_range and old[:1] in {"^", "~"} and new[:1] == old[:1]:
+        old, new = old[1:], new[1:]
+    old_body, new_body = _exact_body(old), _exact_body(new)
     if not old_body or not new_body:
         return False
-    return any(_version_body(frm) == old_body and _version_body(to) == new_body for frm, to in listed.get(name, ()))
+    return any(_exact_body(frm) == old_body and _exact_body(to) == new_body for frm, to in listed.get(name, ()))
 
 
 def _take_specs(block: object, parts: dict[str, dict[str, object]], section: str) -> None:
@@ -261,9 +269,7 @@ def _go_mod_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
         code = line.split("//", 1)[0]
         match = _GO_MOD_RE.match(code) if kind == "entry" else None
         if match:
-            # `// indirect` stays on the entry: an unlisted indirect bump is transitive.
-            payload = " ".join(line.split()) if _GO_INDIRECT_RE.search(line) else code.strip()
-            entries.setdefault(match.group(1), []).append((match.group(2), payload))
+            entries.setdefault(match.group(1), []).append((match.group(2), code.strip()))
             continue
         residue.append(line)
     return entries, "".join(residue)
@@ -407,7 +413,7 @@ def _version_map(blocks: list[tuple[str, str]]) -> dict[str, str] | None:
 
 
 def _version_named(versions: dict[str, str], listed: str) -> str | None:
-    body = _version_body(listed)
+    body = _exact_body(listed)
     if not body:
         return None
     found = [version for version in versions if _version_body(version) == body]
@@ -730,14 +736,24 @@ def _lock_text(payloads: list[str]) -> bool:
 
 
 def _payload_ok(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
-    """True when a string spec or version line moved, or lock locators are canonical."""
+    """True when a string spec moved, a manifest line differs only in its version, or lock locators are canonical."""
     payloads = [payload for _version, payload in (*old_blocks, *new_blocks)]
     kinds = {_payload_kind(payload) for payload in payloads}
     if kinds <= {"spec"}:
         return True
-    if "text" in kinds:
-        return _version_bump(old_blocks, new_blocks) if _lock_text(payloads) else True
+    if "text" in kinds and not _lock_text(payloads):
+        return _line_rest(old_blocks) == _line_rest(new_blocks)
     return _version_bump(old_blocks, new_blocks)
+
+
+def _line_rest(blocks: list[tuple[str, str]]) -> list[str] | None:
+    """Each manifest line with its version token removed, or None when a token is not on its line."""
+    rest: list[str] = []
+    for version, payload in blocks:
+        if not version or version not in payload:
+            return None
+        rest.append(payload.replace(version, "\0", 1))
+    return rest
 
 
 def _version_bump(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
@@ -761,7 +777,8 @@ def _pair_explained(
     new: tuple[str, str],
     listed: dict[str, set[tuple[str, str]]],
 ) -> bool:
-    return _reached_listed_version(name, old[0], new[0], listed) and _payload_ok([old], [new])
+    npm_range = _payload_kind(old[1]) == "spec" and _payload_kind(new[1]) == "spec"
+    return _reached_listed_version(name, old[0], new[0], listed, npm_range=npm_range) and _payload_ok([old], [new])
 
 
 def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict], names: set[str]) -> bool:
@@ -797,7 +814,7 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
             if not _name_explained(kind, name, old_blocks, new_blocks, listed):
                 return False
             continue
-        if not _transitive_change_ok(kind, old_blocks, new_blocks):
+        if not _registry_transitive(old_blocks, new_blocks):
             return False
     return True
 
@@ -818,18 +835,6 @@ def _registry_block(payload: str) -> bool:
 Blocks = list[tuple[str, str]]
 
 
-def _go_mod_transitive(old_blocks: Blocks, new_blocks: Blocks) -> bool:
-    """One `// indirect` requirement on each side."""
-    blocks = (*old_blocks, *new_blocks)
-    return len(old_blocks) <= 1 and len(new_blocks) <= 1 and all(_GO_INDIRECT_RE.search(p) for _v, p in blocks)
-
-
-def _go_sum_transitive(old_blocks: Blocks, new_blocks: Blocks) -> bool:
-    """Versions may come and go; a version on both sides keeps its checksums."""
-    old, new = _version_map(old_blocks), _version_map(new_blocks)
-    return old is not None and new is not None and all(old[key] == new[key] for key in old.keys() & new.keys())
-
-
 def _registry_transitive(old_blocks: Blocks, new_blocks: Blocks) -> bool:
     """npm and Yarn: paired entries are a registry version bump; a lone entry is a registry tarball."""
     if _version_bump(old_blocks, new_blocks):
@@ -847,14 +852,6 @@ def _registry_transitive(old_blocks: Blocks, new_blocks: Blocks) -> bool:
         return False
     lone = [old_by_id[key] for key in old_by_id.keys() - common] + [new_by_id[key] for key in new_by_id.keys() - common]
     return all(_registry_block(payload) for _version, payload in lone)
-
-
-# How an unlisted name in each lock kind may bump, appear or disappear.
-_TRANSITIVE_RULES = {"go.mod": _go_mod_transitive, "go.sum": _go_sum_transitive}
-
-
-def _transitive_change_ok(kind: str, old_blocks: Blocks, new_blocks: Blocks) -> bool:
-    return _TRANSITIVE_RULES.get(kind, _registry_transitive)(old_blocks, new_blocks)
 
 
 def _changed_names(kind: str, before: str, after: str) -> set[str] | None:

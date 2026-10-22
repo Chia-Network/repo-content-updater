@@ -17,20 +17,15 @@ from manifest_scan_support import (
 
 
 class DependencyLockResidueTest(unittest.TestCase):
-    def test_poetry_lock_and_transitive_residue_pass_when_the_verdict_is_pass(self) -> None:
+    def test_poetry_lock_is_a_gap_and_npm_residue_passes_when_the_verdict_is_pass(self) -> None:
         listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
         poetry = _run_listed_scan(
             {"poetry.lock": '[[package]]\nname = "lodash"\nversion = "4.17.20"\n'},
             {"poetry.lock": '[[package]]\nname = "lodash"\nversion = "4.17.21"\n'},
             listed,
         )
-        self.assertIs(poetry["scan_conclusive"], True)
-        self.assertEqual(poetry["status"], "clean")
-        self.assertNotIn("poetry.lock", " ".join(poetry.get("errors") or []))
-        published = formatter.compose_published_review(poetry, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
-        self.assertEqual(published["verdict"], "benign")
-        self.assertEqual(published["check"], "pass")
-        self.assertIs(published["may_complete"], True)
+        self.assertIs(poetry["scan_conclusive"], False)
+        self.assertIn("poetry.lock", " ".join(poetry.get("errors") or []))
 
         def lock(lodash: str, minimist: str) -> str:
             return (

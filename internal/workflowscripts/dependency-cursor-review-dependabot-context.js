@@ -21,8 +21,9 @@ function detailsSpans(text) {
   let tag;
   while ((tag = tagRe.exec(text)) !== null) {
     const opens = tag[0].toLowerCase().startsWith('<details');
+    if (!opens && depth === 0) continue; // a close with no open block hides nothing
     if (opens && depth === 0) start = tag.index;
-    depth = Math.max(0, depth + (opens ? 1 : -1));
+    depth += opens ? 1 : -1;
     if (!opens && depth === 0) spans.push([start, tagRe.lastIndex, true]);
   }
   if (depth > 0) spans.push([start, text.length, false]);
@@ -55,11 +56,12 @@ function withoutDetails(text) {
   return kept + text.slice(from);
 }
 
-// Constraint operators go; a leading v or V stays because tags are looked up as written.
+// Only an exact pin (`==` or `===`) loses its operator. Range operators stay so a
+// range is never taken for a scannable version; a leading v or V stays because tags are looked up as written.
 function normalizeVersion(version) {
   return String(version || '')
     .trim()
-    .replace(/^(?:===|==|~=|!=|>=|<=|\^|~|=|>|<)\s*/, '');
+    .replace(/^(?:===|==)\s*/, '');
 }
 
 function sameValue(key, left, right) {
@@ -72,14 +74,7 @@ function githubRepoFromText(text) {
   const url = source.match(/https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/i);
   if (url) return url[1].replace(/\.git$/i, '');
   const moduleName = source.match(/^github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:\/|$)/i);
-  if (moduleName) return moduleName[1];
-  // Terraform Registry providers and modules publish from conventionally named GitHub repositories.
-  const provider = source.match(/registry\.terraform\.io\/providers\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)/i);
-  if (provider) return `${provider[1]}/terraform-provider-${provider[2]}`;
-  const module = source.match(
-    /registry\.terraform\.io\/modules\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)/i,
-  );
-  return module ? `${module[1]}/terraform-${module[3]}-${module[2]}` : '';
+  return moduleName ? moduleName[1] : '';
 }
 
 // A table Package cell: `name`, `[name](url)`, or Renovate's `[name](url) ([source](repo))`.
@@ -164,15 +159,12 @@ function updateTableRows(visible) {
   return rows;
 }
 
-// The repository the body names first: the `Bumps [x](github)` link, else any GitHub link.
+// The repository of the `Bumps [x](github)` link. Any other GitHub URL may name an unrelated project.
 function upstreamRepoFromBody(text) {
   const dependencyRepoMatch = text.match(
     /^\s*(?:Bumps|Update(?:s|d)?)\s+(?:the\s+requirements\s+on\s+)?\[[^\]]+\]\(\s*https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:[\/#?][^)\s]*)?\s*\)/im,
   );
-  const repoMatch =
-    dependencyRepoMatch ||
-    text.match(/https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=\/|$|[)\]>\s"'?#])/i);
-  return repoMatch ? repoMatch[1].replace(/\.git$/i, '') : '';
+  return dependencyRepoMatch ? dependencyRepoMatch[1].replace(/\.git$/i, '') : '';
 }
 
 // One map. Intro links, table rows, Updates lines, and the title all write it.
@@ -198,7 +190,8 @@ function collectPackageUpdates(title, body) {
       githubRepoFromText(bumps[2]),
     );
   }
-  for (const row of updateTableRows(visible)) {
+  const tableRows = updateTableRows(visible);
+  for (const row of tableRows) {
     rememberUpdate(byName, row.name, row.from, row.to, row.repo);
   }
   const lineRe = /^Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+)/gm;
@@ -213,11 +206,14 @@ function collectPackageUpdates(title, body) {
     );
   }
 
+  // A table names every package; the title would add a second, differently spelled one.
   const titleMatch =
-    title.match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-    title.match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-    title.match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/);
+    tableRows.length === 0 &&
+    (title.match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
+      title.match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
+      title.match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/));
   const renovateTitleMatch =
+    tableRows.length === 0 &&
     !titleMatch &&
     (title.match(/(?:update|pin)\s+dependency\s+(.+?)\s+to\s+([^\s]+)/i) ||
       title.match(/(?:update|pin)\s+(.+?)\s+(?:action|digest|docker\s+tag)\s+to\s+([^\s]+)/i) ||
@@ -230,7 +226,6 @@ function collectPackageUpdates(title, body) {
 
   if (byName.size === 1) {
     const only = [...byName.values()][0];
-    if (!only.upstreamRepo) rememberUpdate(byName, only.packageName, '', '', upstreamRepoFromBody(visible));
     if (!only.fromVersion || !only.toVersion) {
       const arrow = visible.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
       if (arrow) {
