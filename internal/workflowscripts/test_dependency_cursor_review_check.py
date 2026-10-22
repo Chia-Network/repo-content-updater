@@ -120,6 +120,7 @@ class PublishedCheckTest(unittest.TestCase):
         clean = {
             "status": "clean",
             "scan_conclusive": True,
+            "unread": [],
             "verdict_token_in_tree": False,
             "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
         }

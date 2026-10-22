@@ -44,6 +44,7 @@ class CombineCompleteTest(unittest.TestCase):
                 report = {
                     "status": "clean",
                     "scan_conclusive": True,
+                    "unread": [],
                     "verdict_token_in_tree": False,
                     "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
                 }
@@ -567,6 +568,7 @@ class CombineCompleteTest(unittest.TestCase):
             report={
                 "status": "warn",
                 "scan_conclusive": True,
+                "unread": [],
                 "verdict_token_in_tree": False,
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": hits},
             },
@@ -592,6 +594,7 @@ class CombineCompleteTest(unittest.TestCase):
             report={
                 "status": "clean",
                 "scan_conclusive": True,
+                "unread": [],
                 "verdict_token_in_tree": False,
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
             },
