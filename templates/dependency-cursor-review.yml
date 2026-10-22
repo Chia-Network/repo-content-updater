@@ -103,6 +103,19 @@ jobs:
           ref: ${{`{{ steps.target_pr.outputs.head_sha }}`}}
           persist-credentials: false
 
+      # Later steps write these fixed names in the PR-head checkout. Writes follow
+      # symlinks, so drop whatever the PR head has at each name first.
+      - name: Clear PR-head entries at scan output paths
+        if: steps.target_pr.outputs.already_reviewed != 'true'
+        shell: bash
+        run: |
+          rm -rf -- .malware-scan .upstream-dependency github_output.txt \
+            dependency_updates.json dependabot_comment_context.json \
+            dependabot_release_notes.md dependabot_commits.md \
+            malware_scan_report.json malware_scan_summary.md \
+            upstream_changed_files.txt package_usage.txt \
+            cursor_prompt_malware.txt cursor_prompt_compatibility.txt
+
       # PR head is untrusted: overwrite composite action.yml from default branch before uses: ./…
       - name: Install trusted git path checkout action definition
         if: steps.target_pr.outputs.already_reviewed != 'true'
@@ -272,6 +285,14 @@ jobs:
         with:
           ref: ${{`{{ needs.dependency-review-scan.outputs.head_sha }}`}}
           persist-credentials: false
+
+      # Later steps write these fixed names in the PR-head checkout. Writes follow
+      # symlinks, so drop whatever the PR head has at each name first.
+      - name: Clear PR-head entries at agent output paths
+        shell: bash
+        run: |
+          rm -rf -- .dcr-strip .upstream-dependency dcr-scan-input \
+            cursor_output_malware.json cursor_output_compatibility.json
 
       - name: Checkout trusted instruction strip
         uses: actions/checkout@v7
