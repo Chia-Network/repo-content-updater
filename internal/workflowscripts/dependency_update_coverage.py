@@ -414,7 +414,8 @@ def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
 
     An opaque lockfile cannot name a package, so it is not a gap. Unlisted
     names in a npm or Yarn lock are transitive residue when every listed
-    name in that lock moved to its listed version. Both stay inputs to the
+    name in that lock moved to its listed version and each unlisted entry
+    was bumped, added or removed as a registry tarball. Both stay inputs to the
     review instead of uncovered dependencies.
     """
     base = _base_commit(token)

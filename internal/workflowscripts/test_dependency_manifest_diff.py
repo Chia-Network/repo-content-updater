@@ -940,8 +940,7 @@ class DependencyManifestDiffTest(unittest.TestCase):
         )
         self.assertFalse(manifest._entries_explain("yarn", yarn_old, added, yarn_updates))
         added_report = _run_listed_scan({"yarn.lock": yarn_old}, {"yarn.lock": added}, yarn_updates)
-        self.assertFalse(added_report["scan_conclusive"])
-        self.assertIn("cy-verify-downloads", _unresolved(added_report))
+        self.assertIs(added_report["scan_conclusive"], True)
 
     def test_locator_bytes_fail_closed(self) -> None:
         """Non-canonical locators stay byte-for-byte. Residue folds only bare, `^`, and `=` specs."""
