@@ -596,3 +596,65 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AuthenticatedBaseFetchTest(unittest.TestCase):
+    """A base commit outside the shallow clone is fetched with one-time auth."""
+
+    def _run_fetch(self, token: str) -> list:
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return subprocess.CompletedProcess(argv, 1 if argv[1] == "rev-parse" else 0, "", "")
+
+        with patch.object(coverage.subprocess, "run", side_effect=fake_run):
+            coverage._fetch_commit("a" * 40, token)
+        return calls
+
+    def test_token_reaches_git_through_env_only(self) -> None:
+        token = "ghs_" + "x" * 20
+        calls = self._run_fetch(token)
+        fetches = [(argv, kw) for argv, kw in calls if argv[1] == "fetch"]
+        self.assertEqual(len(fetches), 1)
+        argv, kwargs = fetches[0]
+        self.assertNotIn(token, " ".join(argv))
+        env = kwargs["env"]
+        index = int(env["GIT_CONFIG_COUNT"]) - 1
+        self.assertEqual(env[f"GIT_CONFIG_KEY_{index}"], "http.extraheader")
+        expected = coverage.base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        self.assertEqual(env[f"GIT_CONFIG_VALUE_{index}"], f"AUTHORIZATION: basic {expected}")
+        self.assertTrue(kwargs["capture_output"])
+        for argv, _ in calls:
+            self.assertNotIn(token, " ".join(argv))
+
+    def test_existing_config_entries_are_kept(self) -> None:
+        with patch.dict(os.environ, {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a.b", "GIT_CONFIG_VALUE_0": "c"}):
+            env = coverage._fetch_env("tok")
+        self.assertEqual(env["GIT_CONFIG_COUNT"], "2")
+        self.assertEqual(env["GIT_CONFIG_KEY_0"], "a.b")
+        self.assertEqual(env["GIT_CONFIG_KEY_1"], "http.extraheader")
+
+    def test_no_token_adds_no_header(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GIT_CONFIG_COUNT", None)
+            env = coverage._fetch_env("")
+        self.assertNotIn("GIT_CONFIG_COUNT", env)
+        self.assertEqual(env["GIT_TERMINAL_PROMPT"], "0")
+
+    def test_main_removes_token_before_child_processes(self) -> None:
+        seen = {}
+
+        def fake_gaps(updates, token=""):
+            seen["token"] = token
+            seen["env"] = os.environ.get(coverage.FETCH_AUTH_VARIABLE)
+            raise RuntimeError("stop")
+
+        with (
+            patch.dict(os.environ, {coverage.FETCH_AUTH_VARIABLE: "tok"}),
+            patch.object(coverage, "_load_updates", return_value=[]),
+            patch.object(coverage, "manifest_gaps", side_effect=fake_gaps),
+            self.assertRaises(RuntimeError),
+        ):
+            coverage.main()
+        self.assertEqual(seen, {"token": "tok", "env": None})
