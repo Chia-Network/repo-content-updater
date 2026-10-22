@@ -728,7 +728,8 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
     """True when a listed package moves to its listed version.
 
     A listed name must be explained. Every other name may change only its
-    version and registry locators. Another resolved host, a same-version
+    version and registry locators, or be added or removed as a registry
+    tarball entry. Another resolved host, a same-version
     hash swap, leftover bytes, or a lock that never moves a listed package
     stays unresolved.
     """
@@ -756,9 +757,45 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
             if not _name_explained(kind, name, old_blocks, new_blocks, listed):
                 return False
             continue
-        if not _version_bump(old_blocks, new_blocks):
+        if not _transitive_change_ok(old_blocks, new_blocks):
             return False
     return True
+
+
+def _registry_block(payload: str) -> bool:
+    """True when one lock entry resolves to the registry tarball for its name and version."""
+    try:
+        doc = json.loads(payload)
+    except json.JSONDecodeError:
+        return _yarn_rest(payload) is not None
+    record = _lock_record(doc)
+    if record is None:
+        return False
+    name, body = record
+    return _both_resolved_canonical(name, body, name, body)
+
+
+def _transitive_change_ok(old_blocks: list[tuple[str, str]], new_blocks: list[tuple[str, str]]) -> bool:
+    """An unlisted lock name may bump, appear or disappear.
+
+    Paired entries must be a registry version bump. An added or removed
+    entry must itself be the registry tarball for its name and version.
+    """
+    if _version_bump(old_blocks, new_blocks):
+        return True
+    if not old_blocks or not new_blocks:
+        return all(_registry_block(payload) for _version, payload in (*old_blocks, *new_blocks))
+    old_by_id = {_payload_id(block[1]): block for block in old_blocks}
+    new_by_id = {_payload_id(block[1]): block for block in new_blocks}
+    if "" in old_by_id or "" in new_by_id or len(old_by_id) != len(old_blocks) or len(new_by_id) != len(new_blocks):
+        return False
+    common = old_by_id.keys() & new_by_id.keys()
+    paired_old = [old_by_id[key] for key in sorted(common)]
+    paired_new = [new_by_id[key] for key in sorted(common)]
+    if not _version_bump(paired_old, paired_new):
+        return False
+    lone = [old_by_id[key] for key in old_by_id.keys() - common] + [new_by_id[key] for key in new_by_id.keys() - common]
+    return all(_registry_block(payload) for _version, payload in lone)
 
 
 def _changed_names(kind: str, before: str, after: str) -> set[str] | None:

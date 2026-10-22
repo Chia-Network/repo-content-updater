@@ -16,13 +16,19 @@ Looks for the `managed-files` custom property on a repo, and parses out a comma 
 
 For example, the value could be: `group:base,go-test`. This would pull in the base group of files and the go-test file.
 
-Files listed under `default_files` are applied to every non-archived, non-fork repo whose name does not contain "private" or end in "-dos", even when the repo has no `managed-files` property. The default is `dependabot-actions`, a GitHub Actions-only Dependabot config. A default file may set `requires_paths`; when any required path is absent from the cloned repo, the default is skipped. The `dependabot-actions` default requires `.github/workflows` containing at least one `.yml`/`.yaml` file, so it only applies to repos that actually use GitHub Actions. Default files are adopt-only: a file is written only when the path is absent or every existing copy contains the file's adoption marker line (`# <adoption_marker>`), so an existing full managed config or other unmanaged file is left untouched. Each default file must declare a unique `adoption_marker`. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot-actions`. Opting out of any file that writes the same repo path also opts out of the default, so `!dependabot` and `!go-dependabot` both opt out of `dependabot-actions`. A default file is not added when an explicitly selected file writes the same repo path.
+Files listed under `default_files` are applied to every non-archived, non-fork repo whose name does not contain "private" or end in "-dos", even when the repo has no `managed-files` property. The defaults are `dependabot-actions` and `dependency-cursor-review`. Each default is a bundle: the default file (its root) plus its `companion_files`. The root's `requires_paths` and `adoption_marker` decide for the whole bundle; companions do not carry markers.
+
+* `dependabot-actions` renders the same `dependabot.yml` template as the explicit `dependabot` file, with manifest detection: every detected ecosystem (gomod, pip, npm, cargo, swift, docker, terraform, nuget) is enabled, plus `github-actions`. A repo with only workflows gets an Actions-only config. Docker, terraform and nuget manifests are found anywhere in the tree (outside `.git` and `node_modules`) and each directory that holds one is listed under `directories`; a root `*.sln` covers the whole tree for nuget. `var_overrides` such as `DEPENDABOT_GOMOD_DIRECTORY` or `DEPENDABOT_DOCKER_DIRECTORIES` are honoured. The github-actions entry uses the shared template policy: weekly on Tuesday, ungrouped, reviewers `cameroncooper` and `emlowe`. If detection fails for the repository, the default is skipped and an existing file is left as it is (an explicit `dependabot` keeps the full config); if one ecosystem fails, that ecosystem stays enabled.
+* `dependency-cursor-review` ships the review workflow and its companion scripts.
+
+Both defaults require `.github/workflows` containing at least one `.yml`/`.yaml` file. Defaults are adopt-only: an existing root without the adoption marker line (`# <adoption_marker>`) is left untouched; a root carrying the marker is updated in place along with its companions; a new bundle is written only when the root and every companion path are absent. Each default root must declare a unique `adoption_marker`. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot-actions` or `!dependency-cursor-review`. Opting out of any member of a default bundle, companions included, drops the whole bundle. Opting out of any file that writes the same repo path also opts out of the default, so `!dependabot` and `!go-dependabot` both opt out of `dependabot-actions`. A default is not added when an explicitly selected file writes the same repo path. Managed paths are only read, removed and written when every parent directory is a real directory inside the checkout.
 
 ## Config Format
 
 ```yaml
 default_files:
   - dependabot-actions
+  - dependency-cursor-review
 
 groups:
   - name: base
@@ -46,9 +52,9 @@ files:
       - .github/dependabot.yaml
 
   - name: dependabot-actions
-    template_name: dependabot-actions.yml
-    adoption_marker: repo-content-updater:dependabot-actions
+    template_name: dependabot.yml
     repo_path: .github/dependabot.yml
+    adoption_marker: repo-content-updater:dependabot-actions
     alternate_paths:
       - .github/dependabot.yaml
     requires_paths:
@@ -65,7 +71,7 @@ files:
 
 `files` is where every supported template must be listed.
 
-`default_files` lists files that are managed on every eligible repo unless the repo opts out with `!<name>` in its `managed-files` property. The default `dependabot-actions` only targets the `github-actions` ecosystem with a monthly schedule and groups all updates into one PR; it is only applied to repos whose `.github/workflows` directory contains at least one workflow file. Opting out of `dependabot` or `go-dependabot` also opts out of the default because they share a repo path. Default files are only added to non-archived, non-fork repos whose names do not contain "private" or end in "-dos".
+`default_files` lists files that are managed on every eligible repo unless the repo opts out with `!<name>` in its `managed-files` property. See above for detection, adoption and bundle rules.
 
 ### Malware verdict formatter (canonical vs templates)
 

@@ -38,6 +38,9 @@ func TestDependabotWithAllManifestsMatchesFullTemplate(t *testing.T) {
 		"package.json",
 		"Cargo.toml",
 		"Package.swift",
+		"Dockerfile",
+		"main.tf",
+		"App.csproj",
 	} {
 		writeDependabotTestFile(t, repoDir, manifest, "")
 	}
@@ -53,7 +56,7 @@ func TestDependabotWithAllManifestsMatchesFullTemplate(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("all-manifest repo changed the rendered template\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
-	if got, want := renderedDependabotEcosystems(t, got), "gomod,pip,github-actions,npm,cargo,swift"; got != want {
+	if got, want := renderedDependabotEcosystems(t, got), "gomod,pip,github-actions,npm,cargo,swift,docker,terraform,nuget"; got != want {
 		t.Fatalf("ecosystems = %q, want %q", got, want)
 	}
 }
@@ -448,5 +451,18 @@ func writeDependabotTestFile(t *testing.T, root, relative, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestListDirectoriesMatchesTemplate(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "templates", "dependabot.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ecosystem := range dependabotEcosystems {
+		rendersList := strings.Contains(string(raw), `directories: "{{ .`+ecosystem.directoriesVar+` }}"`)
+		if rendersList != ecosystem.listDirectories {
+			t.Errorf("%s: template renders a directories list = %v, listDirectories = %v", ecosystem.name, rendersList, ecosystem.listDirectories)
+		}
 	}
 }

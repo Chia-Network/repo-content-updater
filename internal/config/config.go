@@ -6,6 +6,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -38,10 +40,17 @@ type SelectedFile struct {
 	Origin FileOrigin
 }
 
+// DefaultBundle is one default_files root plus the companion files that are
+// installed with it. The root's adoption decision applies to every file.
+type DefaultBundle struct {
+	Root  string
+	Files []string
+}
+
 // ManagedFileSelection is the resolved managed-files set for one repo.
 type ManagedFileSelection struct {
 	Explicit []string
-	Defaults []string
+	Defaults []DefaultBundle
 }
 
 // Group is a defined group of template files to include at once
@@ -134,9 +143,8 @@ func (c *Config) resolveDefaultFiles() error {
 		claimed[name] = true
 	}
 
-	for _, name := range expanded {
-		file := c.GetFileInfo(name)
-		if file == nil || strings.TrimSpace(file.AdoptionMarker) == "" {
+	for _, name := range roots {
+		if strings.TrimSpace(c.GetFileInfo(name).AdoptionMarker) == "" {
 			return fmt.Errorf("default file %q must set a non-empty adoption_marker", name)
 		}
 	}
@@ -166,6 +174,10 @@ func (c *Config) validateRequiresPaths() error {
 	return nil
 }
 
+// adoptionMarkerPattern keeps markers to one plain comment token: they are
+// rendered into templates and matched as a whole line.
+var adoptionMarkerPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
+
 func (c *Config) validateAdoptionMarkers() error {
 	seen := map[string]string{}
 	for i := range c.Files {
@@ -173,6 +185,9 @@ func (c *Config) validateAdoptionMarkers() error {
 		marker := strings.TrimSpace(file.AdoptionMarker)
 		if marker == "" {
 			continue
+		}
+		if !adoptionMarkerPattern.MatchString(marker) {
+			return fmt.Errorf("adoption_marker %q for %q must use only letters, digits and . _ : / -", marker, file.Name)
 		}
 		if previous, ok := seen[marker]; ok && previous != file.Name {
 			return fmt.Errorf("adoption_marker %q is used by both %q and %q", marker, previous, file.Name)
@@ -303,17 +318,41 @@ func (c *Config) ResolveManagedFileSelection(repoName string, entries []string) 
 		explicitSet[name] = true
 	}
 
-	defaults := c.resolveSelectedFiles(repoName, c.DefaultFiles, optOuts)
+	return ManagedFileSelection{Explicit: explicit, Defaults: c.resolveDefaultBundles(repoName, explicitSet, optOuts)}
+}
 
-	selectedDefaults := make([]string, 0, len(defaults))
-	for _, name := range defaults {
-		if explicitSet[name] || c.sharesRepoPathWith(name, explicitSet) || c.sharesRepoPathWith(name, optOuts) {
+// resolveDefaultBundles expands each default root into its companion closure.
+// A bundle is dropped whole when any member is opted out or the root's repo
+// path is claimed by an explicit or opted-out file; members already selected
+// explicitly are left to the explicit selection.
+func (c *Config) resolveDefaultBundles(repoName string, explicitSet, optOuts map[string]bool) []DefaultBundle {
+	var bundles []DefaultBundle
+	seen := map[string]bool{}
+	for _, root := range c.DefaultFiles {
+		if explicitSet[root] || c.sharesRepoPathWith(root, explicitSet) || c.sharesRepoPathWith(root, optOuts) {
 			continue
 		}
-		selectedDefaults = append(selectedDefaults, name)
+		members, err := c.EnsureCompanionFiles([]string{root})
+		if err != nil {
+			log.Printf("Error resolving default %s for %s: %v\n", root, repoName, err)
+			continue
+		}
+		if slices.ContainsFunc(members, func(name string) bool { return optOuts[name] }) {
+			continue
+		}
+		bundle := DefaultBundle{Root: root}
+		for _, name := range members {
+			if seen[name] || explicitSet[name] || c.sharesRepoPathWith(name, explicitSet) {
+				continue
+			}
+			seen[name] = true
+			bundle.Files = append(bundle.Files, name)
+		}
+		if len(bundle.Files) > 0 {
+			bundles = append(bundles, bundle)
+		}
 	}
-
-	return ManagedFileSelection{Explicit: explicit, Defaults: selectedDefaults}
+	return bundles
 }
 
 func (c *Config) resolveSelectedFiles(repoName string, roots []string, optOuts map[string]bool) []string {

@@ -1,4 +1,8 @@
-# Managed by repo-content-updater
+# This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back
+# inline with the upstream template, unless you add !dependency-cursor-review to the repo's managed-files property
+# {{- if .ADOPTION_MARKER }}
+# {{ .ADOPTION_MARKER }}
+# {{- end }}
 # Dependency Cursor Review workflow
 #
 # Three jobs, three runners. The agent job is the only one that runs `agent`,
@@ -148,6 +152,7 @@ jobs:
         shell: bash
         env:
           PR_BASE_SHA: ${{`{{ steps.target_pr.outputs.base_sha }}`}}
+          DCR_FETCH_TOKEN: ${{`{{ github.token }}`}}
           VERSION_RANGE_FROM_BODY: ${{`{{ steps.dependabot_context.outputs.version_range_from_body }}`}}
           MALWARE_WARN_ONLY: >-
             {{ .DEPENDABOT_CURSOR_MALWARE_WARN_ONLY }}

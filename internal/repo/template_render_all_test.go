@@ -21,14 +21,11 @@ func TestDefaultFileTemplatesContainManagedMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expanded, err := cfg.EnsureCompanionFiles(cfg.DefaultFiles)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(expanded) == 0 {
+	if len(cfg.DefaultFiles) == 0 {
 		t.Fatal("config.yaml has no default files")
 	}
-	for _, name := range expanded {
+	// Only default roots carry adoption markers; companions follow their root.
+	for _, name := range cfg.DefaultFiles {
 		file := cfg.GetFileInfo(name)
 		if file == nil {
 			t.Fatalf("default file %q is missing from files", name)
@@ -40,7 +37,7 @@ func TestDefaultFileTemplatesContainManagedMarker(t *testing.T) {
 		if !strings.Contains(strings.ToLower(string(raw)), managedFileMarker) {
 			t.Errorf("%s (%s) does not contain %q", name, file.TemplateName, managedFileMarker)
 		}
-		rendered, err := ProcessTemplate(raw, cfg.Variables, nil)
+		rendered, err := ProcessTemplate(raw, withAdoptionMarker(cfg.Variables, file.AdoptionMarker), nil)
 		if err != nil {
 			t.Fatalf("%s (%s) does not render: %v", name, file.TemplateName, err)
 		}
@@ -55,10 +52,14 @@ func TestDefaultFileTemplatesContainManagedMarker(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, name := range expanded {
-			file := cfg.GetFileInfo(name)
-			markerLine := "# " + file.AdoptionMarker
-			if containsTrimmedLine(string(raw), markerLine) {
+		// Explicit selections render without ADOPTION_MARKER and must stay unmarked.
+		rendered, err := ProcessTemplate(raw, cfg.Variables, nil)
+		if err != nil {
+			t.Fatalf("%s does not render: %v", templateName, err)
+		}
+		for _, name := range cfg.DefaultFiles {
+			markerLine := "# " + cfg.GetFileInfo(name).AdoptionMarker
+			if containsTrimmedLine(string(rendered), markerLine) {
 				t.Errorf("%s must not contain adoption marker line %q", templateName, markerLine)
 			}
 		}

@@ -6,6 +6,7 @@ to_tag are set. Anything else makes the group inconclusive.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -338,20 +339,50 @@ def _verify_commit(rev: str) -> str:
     return proc.stdout.strip()
 
 
-def _fetch_commit(sha: str) -> str:
+# The workflow passes a read-only token here because checkout runs with
+# persist-credentials: false. main() removes it from the environment so no
+# child process inherits it.
+FETCH_AUTH_VARIABLE = "DCR_FETCH_TOKEN"
+
+
+def _fetch_env(token: str) -> dict[str, str]:
+    """Environment for one authenticated fetch.
+
+    The Basic auth header goes in through GIT_CONFIG_* variables, the same
+    one-time header the trusted checkout action uses, so the token is never
+    in argv or in the persisted git config.
+    """
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if not token:
+        return env
+    try:
+        index = int(env.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        index = 0
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    env[f"GIT_CONFIG_KEY_{index}"] = "http.extraheader"
+    env[f"GIT_CONFIG_VALUE_{index}"] = f"AUTHORIZATION: basic {basic}"
+    env["GIT_CONFIG_COUNT"] = str(index + 1)
+    return env
+
+
+def _fetch_commit(sha: str, token: str = "") -> str:
     found = _verify_commit(sha)
     if found:
         return found
+    # Output is discarded rather than logged.
     subprocess.run(
         ["git", "fetch", "--no-tags", "--depth=1", "origin", sha],
         check=False,
         capture_output=True,
         text=True,
+        env=_fetch_env(token),
     )
     return _verify_commit(sha)
 
 
-def _base_commit() -> str | None:
+def _base_commit(token: str = "") -> str | None:
     """Resolved base commit, '' when a named base cannot be read, None when unnamed."""
     if not Path(".git").is_dir():
         return None
@@ -359,7 +390,7 @@ def _base_commit() -> str | None:
     if sha:
         if not re.fullmatch(r"[0-9a-fA-F]{7,64}", sha):
             return ""
-        return _fetch_commit(sha)
+        return _fetch_commit(sha, token)
     ref = os.environ.get("GITHUB_BASE_REF", "").strip()
     if not ref:
         return None
@@ -372,7 +403,7 @@ def _base_commit() -> str | None:
 _TRANSITIVE_LOCKS = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock"})
 
 
-def manifest_gaps(updates: list[dict]) -> list[dict]:
+def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
     """Direct manifest bumps missing from the parsed list.
 
     An unreadable base ref, when one was named, is itself unresolved.
@@ -383,10 +414,11 @@ def manifest_gaps(updates: list[dict]) -> list[dict]:
 
     An opaque lockfile cannot name a package, so it is not a gap. Unlisted
     names in a npm or Yarn lock are transitive residue when every listed
-    name in that lock moved to its listed version. Both stay inputs to the
+    name in that lock moved to its listed version and each unlisted entry
+    was bumped, added or removed as a registry tarball. Both stay inputs to the
     review instead of uncovered dependencies.
     """
-    base = _base_commit()
+    base = _base_commit(token)
     if base is None:
         return []
     if not base:
@@ -566,6 +598,7 @@ def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
 
 
 def main() -> None:
+    fetch_token = os.environ.pop(FETCH_AUTH_VARIABLE, "")
     scan_script = Path(__file__).resolve().parent / "upstream_malware_scan.sh"
     updates = _load_updates(Path("dependency_updates.json"))
     if updates and not _has_upstream_link(updates):
@@ -574,7 +607,7 @@ def main() -> None:
         _write_report(report, summary)
         _emit(report, summary)
         return
-    gaps = manifest_gaps(updates)
+    gaps = manifest_gaps(updates, fetch_token)
     work = Path(".dcr-dependency-scans").resolve()
     if work.exists():
         shutil.rmtree(work)

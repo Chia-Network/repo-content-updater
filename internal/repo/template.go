@@ -22,10 +22,11 @@ func ProcessTemplate(templateContent []byte, defaultVars map[string]string, over
 	return processTemplate(templateContent, mergeTemplateVars(defaultVars, overrides))
 }
 
-// CURRENT_YEAR is fixed in every merge, and Dependabot flags are computed
-// rather than configured, so neither may be replaced by an override.
+// CURRENT_YEAR is fixed in every merge, and Dependabot flags and the adoption
+// marker are computed rather than configured, so none may be replaced by an
+// override.
 var notOverridableTemplateVars = func() map[string]bool {
-	vars := map[string]bool{"CURRENT_YEAR": true}
+	vars := map[string]bool{"CURRENT_YEAR": true, adoptionMarkerVar: true}
 	for _, ecosystem := range dependabotEcosystems {
 		vars[ecosystem.enabledVar] = true
 	}
