@@ -78,13 +78,6 @@ def _clean(name: str, repo: str) -> dict:
 
 
 class DependencyUpdateCoverageTest(unittest.TestCase):
-    def test_manifest_loader_returns_the_diff_and_versions_modules(self) -> None:
-        diff, versions = coverage._load_manifest_modules()
-        self.assertIs(diff, coverage._diff)
-        self.assertIs(versions, coverage._versions)
-        self.assertTrue(callable(diff._manifest_kind))
-        self.assertTrue(callable(versions._exact_body))
-
     def test_every_conclusive_scan_covers_the_group(self) -> None:
         first = _clean("lodash", "lodash/lodash")
         second = _clean("semver", "npm/node-semver")
@@ -149,6 +142,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             saved = os.environ.get("GITHUB_OUTPUT")
             os.chdir(root)
             os.environ["GITHUB_OUTPUT"] = str(output)
+            os.environ["DCR_OUT"] = str(root)
             try:
                 with (
                     patch.object(coverage, "manifest_gaps", return_value=[]),
@@ -157,6 +151,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                     coverage.main()
             finally:
                 os.chdir(previous)
+                os.environ.pop("DCR_OUT", None)
                 if saved is None:
                     os.environ.pop("GITHUB_OUTPUT", None)
                 else:
@@ -197,11 +192,13 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             previous_output = os.environ.get("GITHUB_OUTPUT")
             os.chdir(root)
             os.environ["GITHUB_OUTPUT"] = str(output)
+            os.environ["DCR_OUT"] = str(root)
             try:
                 with patch.object(coverage, "_clone", no_clone):
                     coverage.main()
             finally:
                 os.chdir(previous)
+                os.environ.pop("DCR_OUT", None)
                 if previous_output is None:
                     os.environ.pop("GITHUB_OUTPUT", None)
                 else:
@@ -336,6 +333,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 key: os.environ.get(key)
                 for key in (
                     "GITHUB_OUTPUT",
+                    "DCR_OUT",
                     "PACKAGE_NAME",
                     "FROM_VERSION",
                     "TO_VERSION",
@@ -345,6 +343,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             }
             os.chdir(root)
             os.environ["GITHUB_OUTPUT"] = str(output)
+            os.environ["DCR_OUT"] = str(root)
             os.environ["PACKAGE_NAME"] = "lodash"
             os.environ["FROM_VERSION"] = "4.17.20"
             os.environ["TO_VERSION"] = "4.17.21"
@@ -455,11 +454,13 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             saved = os.environ.get("GITHUB_OUTPUT")
             os.chdir(root)
             os.environ["GITHUB_OUTPUT"] = str(output)
+            os.environ["DCR_OUT"] = str(root)
             try:
                 with patch.object(coverage, "_scan_one", lambda *_args, **_kwargs: child):
                     coverage.main()
             finally:
                 os.chdir(previous)
+                os.environ.pop("DCR_OUT", None)
                 if saved is None:
                     os.environ.pop("GITHUB_OUTPUT", None)
                 else:
@@ -626,10 +627,12 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             saved = os.environ.get("GITHUB_OUTPUT")
             os.chdir(root)
             os.environ["GITHUB_OUTPUT"] = str(output)
+            os.environ["DCR_OUT"] = str(root)
             try:
                 coverage.main()
             finally:
                 os.chdir(previous)
+                os.environ.pop("DCR_OUT", None)
                 if saved is None:
                     os.environ.pop("GITHUB_OUTPUT", None)
                 else:
@@ -733,7 +736,7 @@ class AuthenticatedBaseFetchTest(unittest.TestCase):
             raise RuntimeError("stop")
 
         with (
-            patch.dict(os.environ, {coverage.FETCH_AUTH_VARIABLE: "tok"}),
+            patch.dict(os.environ, {coverage.FETCH_AUTH_VARIABLE: "tok", "DCR_OUT": "unused"}),
             patch.object(coverage, "_load_updates", return_value=[]),
             patch.object(coverage, "manifest_gaps", side_effect=fake_gaps),
             self.assertRaises(RuntimeError),

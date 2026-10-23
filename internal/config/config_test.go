@@ -38,7 +38,7 @@ func TestConfigIsValid(t *testing.T) {
 		assert.Equal(t, len(group.Templates), len(files))
 	}
 
-	dcrGroup, err := cfg.ExpandGroup("dependency-cursor-review")
+	dcrGroup, err := cfg.ExpandManagedFileEntries([]string{"group:dependency-cursor-review"})
 	assert.Nil(t, err)
 	for _, required := range []string{
 		"malware-verdict-formatter",
@@ -55,9 +55,6 @@ func TestConfigIsValid(t *testing.T) {
 		"upstream-malware-scan-findings",
 		"upstream-release-checkout",
 		"dependency-cursor-review-dependabot-context",
-		"trusted-formatter-loader",
-		"isolated-module-exec",
-		"formatter-runtime-bundle",
 	} {
 		assert.Contains(t, dcrGroup, required)
 	}

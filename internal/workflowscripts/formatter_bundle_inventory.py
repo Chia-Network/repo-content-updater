@@ -1,11 +1,9 @@
-"""Repo-authoring inventory (sync + manifest generation; not consumer runtime)."""
+"""Repo-authoring inventory (template sync + companion golden; not consumer runtime)."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path, PurePosixPath
-
-from formatter_runtime_bundle import FORMATTER_RUNTIME_FILENAMES
 
 _DCR_WORKFLOW = "dependency-cursor-review"
 _MANAGED_FILE_ENTRY = re.compile(
@@ -21,37 +19,12 @@ _DCR_COMPANION_BLOCK = re.compile(
     r"((?:      - .+\n)+)",
     re.MULTILINE,
 )
-_DCR_GROUP_TEMPLATES = re.compile(
-    rf"- name: {_DCR_WORKFLOW}\n(?:.*\n)*?    templates:\n((?:      - .+\n)+)",
-    re.MULTILINE,
-)
-
-# Repo-content-updater authoring mirror only (not consumer trusted checkout).
-AUTHORING_ONLY_SYNC_CANONICAL_TO_TEMPLATE: tuple[tuple[str, str], ...] = (
-    ("formatter_bundle_inventory.py", "formatter-bundle-inventory.py"),
-)
-
-_SYNC_EMIT_ONLY_TEMPLATES: frozenset[str] = frozenset(
-    {"dependency-cursor-review-trusted-scripts.paths"}
-)
 
 # `.github/scripts/__init__.py` cannot live in this directory: unittest would
 # treat workflowscripts as a package. Sync maps the template to this canonical file.
 _CANONICAL_FILENAME_BY_TEMPLATE: dict[str, str] = {
     "github-scripts-init.py": "github_scripts_init.py",
 }
-
-_TRUSTED_MANIFEST_ONLY_REPO_PATHS: tuple[str, ...] = (
-    ".github/scripts/dependency-cursor-review-trusted-scripts.paths",
-)
-
-
-def _parse_yaml_name_list(block: str) -> tuple[str, ...]:
-    return tuple(
-        line.strip().removeprefix("- ").strip()
-        for line in block.splitlines()
-        if line.strip()
-    )
 
 
 def managed_file_index(config_text: str) -> dict[str, tuple[str, str]]:
@@ -66,103 +39,27 @@ def parse_dcr_companion_files(config_text: str) -> tuple[str, ...]:
     block = _DCR_COMPANION_BLOCK.search(config_text)
     if block is None:
         raise ValueError(f"missing {_DCR_WORKFLOW} companion_files in config.yaml")
-    return _parse_yaml_name_list(block.group(1))
+    return tuple(line.strip().removeprefix("- ").strip() for line in block.group(1).splitlines() if line.strip())
 
 
-def parse_dcr_expanded_managed_names(config_text: str) -> tuple[str, ...]:
-    """ExpandManagedFileEntries order: workflow + companion_files."""
-    return (_DCR_WORKFLOW, *parse_dcr_companion_files(config_text))
-
-
-def parse_dcr_group_templates(config_text: str) -> tuple[str, ...]:
-    block = _DCR_GROUP_TEMPLATES.search(config_text)
-    if block is None:
-        raise ValueError(f"missing group {_DCR_WORKFLOW} templates in config.yaml")
-    return _parse_yaml_name_list(block.group(1))
-
-
-def consumer_sync_canonical_to_template(
-    config_text: str,
-) -> tuple[tuple[str, str], ...]:
+def sync_canonical_to_template(config_text: str) -> tuple[tuple[str, str], ...]:
     """Derive (canonical filename, template_name) from all files[] script entries.
 
     Entries are returned in config.yaml order. Every files[] entry whose repo_path
-    lives under `.github/scripts/` is consumer-synced, except emit-only templates.
+    lives under `.github/scripts/` is synced from this directory.
     """
     pairs: list[tuple[str, str]] = []
-    for _name, (template_name, repo_path) in managed_file_index(config_text).items():
+    for template_name, repo_path in managed_file_index(config_text).values():
         if not repo_path.startswith(".github/scripts/"):
             continue
-        if template_name in _SYNC_EMIT_ONLY_TEMPLATES:
-            continue
-        canonical = _CANONICAL_FILENAME_BY_TEMPLATE.get(
-            template_name, PurePosixPath(repo_path).name
-        )
+        canonical = _CANONICAL_FILENAME_BY_TEMPLATE.get(template_name, PurePosixPath(repo_path).name)
         pairs.append((canonical, template_name))
     return tuple(pairs)
 
 
-def sync_canonical_to_template(config_text: str) -> tuple[tuple[str, str], ...]:
-    return (
-        *consumer_sync_canonical_to_template(config_text),
-        *AUTHORING_ONLY_SYNC_CANONICAL_TO_TEMPLATE,
-    )
-
-
-def trusted_dcr_script_repo_paths(config_text: str) -> tuple[str, ...]:
-    """Consumer trusted-git-path-checkout manifest (.github/scripts/* only)."""
-    companion_names = parse_dcr_companion_files(config_text)
-    name_to_path = {
-        name: repo_path
-        for name, _template, repo_path in _MANAGED_FILE_ENTRY.findall(config_text)
-    }
-    ordered: list[str] = []
-    seen: set[str] = set()
-
-    def _append(path: str) -> None:
-        if path in seen:
-            return
-        seen.add(path)
-        ordered.append(path)
-
-    for path in _TRUSTED_MANIFEST_ONLY_REPO_PATHS:
-        _append(path)
-    for name in companion_names:
-        path = name_to_path.get(name)
-        if path and path.startswith(".github/scripts/"):
-            _append(path)
-    return tuple(ordered)
-
-
-def managed_formatter_sync_pairs(config_text: str) -> tuple[tuple[str, str], ...]:
-    """Template name, canonical filename (consumer sync face)."""
-    return tuple(
-        (template, canonical)
-        for canonical, template in consumer_sync_canonical_to_template(config_text)
-    )
-
-
 def write_dcr_companion_golden(repo_root: Path) -> None:
+    """ExpandManagedFileEntries order: workflow + companion_files."""
     config_text = (repo_root / "config.yaml").read_text(encoding="utf-8")
-    names = parse_dcr_expanded_managed_names(config_text)
+    names = (_DCR_WORKFLOW, *parse_dcr_companion_files(config_text))
     path = repo_root / "internal" / "config" / "dcr_managed_companion_names.golden"
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(names) + "\n", encoding="utf-8")
-
-
-def validate_config_companion_ordering(config_text: str) -> None:
-    companions = parse_dcr_companion_files(config_text)
-    group_templates = parse_dcr_group_templates(config_text)
-    expected_group = (_DCR_WORKFLOW, *companions)
-    if group_templates != expected_group:
-        raise ValueError(
-            "groups.dependency-cursor-review.templates must equal "
-            "[dependency-cursor-review] + files.companion_files"
-        )
-    synced = {canonical for canonical, _ in consumer_sync_canonical_to_template(config_text)}
-    missing_runtime = set(FORMATTER_RUNTIME_FILENAMES) - synced
-    if missing_runtime:
-        raise ValueError(
-            "config companions missing runtime bundle files: "
-            f"{sorted(missing_runtime)}"
-        )

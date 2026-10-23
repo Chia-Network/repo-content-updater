@@ -175,9 +175,10 @@ async function resolve(eventName, pr, options = {}) {
 async function withWorkspace(fn) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dcr-'));
   const previous = process.cwd();
-  const keys = ['PR_TITLE', 'PR_BODY', 'PR_NUMBER', 'REVIEW_MARKER'];
+  const keys = ['PR_TITLE', 'PR_BODY', 'PR_NUMBER', 'REVIEW_MARKER', 'DCR_OUT'];
   const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   process.chdir(directory);
+  process.env.DCR_OUT = directory;
   try {
     await fn(directory);
   } finally {
@@ -383,8 +384,6 @@ test('the same diff skips and a different diff or an old marker does not', async
       commentsFor: () => [botComment(marker)],
     });
     const reviewedSha = 'a'.repeat(40);
-    assert.equal(same.core.outputs.review_marker, '');
-    assert.equal(same.core.outputs.already_reviewed, 'false');
     assert.equal(same.core.outputs.reviewed_shas, reviewedSha);
     assert.equal(skipApplies(same.core.outputs.reviewed_shas.split(','), reviewedSha), true);
     assert.equal(skipApplies(same.core.outputs.reviewed_shas.split(','), 'b'.repeat(40)), false);
@@ -394,7 +393,6 @@ test('the same diff skips and a different diff or an old marker does not', async
       diff: prDiff(repo),
       commentsFor: () => [botComment(marker)],
     });
-    assert.equal(changed.core.outputs.already_reviewed, 'false');
     assert.equal(changed.core.outputs.reviewed_shas, '');
 
     const quoted = await resolve('pull_request', pr, {
@@ -409,7 +407,6 @@ test('the same diff skips and a different diff or an old marker does not', async
         },
       ],
     });
-    assert.equal(quoted.core.outputs.already_reviewed, 'false');
     assert.equal(quoted.core.outputs.reviewed_shas, '');
 
     const legacy = await resolve('pull_request', pr, {
@@ -424,7 +421,6 @@ test('the same diff skips and a different diff or an old marker does not', async
         },
       ],
     });
-    assert.equal(legacy.core.outputs.already_reviewed, 'false');
     assert.equal(legacy.core.outputs.reviewed_shas, '');
 
     const patchOnly = `<!-- cursor-dependabot-review patch-id:${patchIdFromDiff(diff)} -->`;
@@ -516,8 +512,8 @@ test('a non-web-flow committer, unverified commit, or other author fails open', 
   ];
   for (const commits of cases) {
     const { core } = await resolve('pull_request', pr, { commits, diff, commentsFor: () => [] });
-    assert.equal(core.outputs.review_marker, '');
-    assert.equal(core.outputs.already_reviewed, 'false');
+    assert.equal(core.outputs.patch_id, '');
+    assert.equal(core.outputs.reviewed_shas, '');
   }
 });
 
@@ -534,8 +530,8 @@ test('pagination sees a bad commit past the first page', async () => {
     github.calls.some((call) => call[0] === 'paginate' && call[1] === github.rest.pulls.listCommits),
     true,
   );
-  assert.equal(core.outputs.review_marker, '');
-  assert.equal(core.outputs.already_reviewed, 'false');
+  assert.equal(core.outputs.patch_id, '');
+  assert.equal(core.outputs.reviewed_shas, '');
 });
 
 test('an empty commit list, an API error, an empty diff, or too many commits fails open', async () => {
@@ -543,22 +539,22 @@ test('an empty commit list, an API error, an empty diff, or too many commits fai
   const good = { commits: [dependabotCommit()], commentsFor: () => [] };
 
   const empty = await resolve('pull_request', pr, { ...good, commits: [] });
-  assert.equal(empty.core.outputs.review_marker, '');
+  assert.equal(empty.core.outputs.patch_id, '');
 
   const failed = await resolve('pull_request', pr, { ...good, commitListError: new Error('rate limit') });
-  assert.equal(failed.core.outputs.review_marker, '');
+  assert.equal(failed.core.outputs.patch_id, '');
   assert.match(failed.core.warnings.join('\n'), /rate limit/);
 
   const tooMany = Array.from({ length: MAX_PR_COMMITS + 1 }, () => dependabotCommit());
   const bounded = await resolve('pull_request', pr, { ...good, commits: tooMany });
-  assert.equal(bounded.core.outputs.review_marker, '');
+  assert.equal(bounded.core.outputs.patch_id, '');
 
   const noDiff = await resolve('pull_request', pr, { ...good, diff: '' });
-  assert.equal(noDiff.core.outputs.review_marker, '');
+  assert.equal(noDiff.core.outputs.patch_id, '');
 
   const refused = await resolve('pull_request', pr, { ...good, diffError: new Error('diff too large') });
-  assert.equal(refused.core.outputs.review_marker, '');
-  assert.equal(refused.core.outputs.already_reviewed, 'false');
+  assert.equal(refused.core.outputs.patch_id, '');
+  assert.equal(refused.core.outputs.reviewed_shas, '');
   assert.match(refused.core.warnings.join('\n'), /diff too large/);
 });
 
@@ -640,7 +636,7 @@ test('a new pull request is reviewed even for a diff reviewed elsewhere', async 
       diff: prDiff(repo),
       commentsFor: (number) => (number === 42 ? [botComment(marker)] : []),
     });
-    assert.equal(core.outputs.already_reviewed, 'false');
+    assert.equal(core.outputs.reviewed_shas, '');
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
@@ -660,7 +656,7 @@ test('a forged marker does not suppress the review', async () => {
       diff: prDiff(repo),
       commentsFor: () => [{ id: 7, user: { login: 'mallory' }, body: marker, created_at: '2026-01-01T00:00:00Z' }],
     });
-    assert.equal(forged.core.outputs.already_reviewed, 'false');
+    assert.equal(forged.core.outputs.reviewed_shas, '');
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
@@ -685,8 +681,8 @@ test('Renovate and workflow_dispatch still review when a marker exists', async (
       base: { sha: 'c'.repeat(40) },
     };
     const reno = await resolve('pull_request', renovate, { commentsFor: () => [botComment(marker)] });
-    assert.equal(reno.core.outputs.already_reviewed, 'false');
-    assert.equal(reno.core.outputs.review_marker, '');
+    assert.equal(reno.core.outputs.reviewed_shas, '');
+    assert.equal(reno.core.outputs.patch_id, '');
     assert.equal(reno.core.outputs.base_sha, 'c'.repeat(40));
     assert.equal(
       reno.github.calls.some((call) => call[0] === 'listComments'),
@@ -699,8 +695,7 @@ test('Renovate and workflow_dispatch still review when a marker exists', async (
       commentsFor: () => [botComment(marker)],
       inputs: { pr_number: '42' },
     });
-    assert.equal(dispatched.core.outputs.already_reviewed, 'false');
-    assert.equal(dispatched.core.outputs.review_marker, '');
+    assert.equal(dispatched.core.outputs.reviewed_shas, '');
     assert.equal(dispatched.core.outputs.base_sha, 'c'.repeat(40));
     const missing = dependabotPr('Bump lodash');
     delete missing.base;
@@ -730,7 +725,7 @@ test('comment listing failure runs the review instead of skipping it', async () 
       diff: prDiff(repo),
       listError: new Error('rate limit'),
     });
-    assert.equal(core.outputs.already_reviewed, 'false');
+    assert.equal(core.outputs.reviewed_shas, '');
     assert.equal(core.failed, '');
     assert.match(core.warnings.join('\n'), /rate limit/);
   } finally {
@@ -934,7 +929,7 @@ test('trusted scripts survive a workspace wipe', () => {
     ]) {
       fs.copyFileSync(path.join(__dirname, name), path.join(scripts, name));
     }
-    const dest = path.join(runner, 'trusted-dcr-helper');
+    const dest = path.join(runner, 'trusted-dcr-scripts');
     fs.cpSync(scripts, dest, { recursive: true });
     fs.rmSync(workspace, { recursive: true, force: true });
     assert.equal(fs.existsSync(workspace), false);

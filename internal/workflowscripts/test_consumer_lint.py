@@ -27,8 +27,8 @@ import unittest
 from pathlib import Path
 
 from formatter_bundle_inventory import (
-    consumer_sync_canonical_to_template,
     managed_file_index,
+    sync_canonical_to_template,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -62,10 +62,7 @@ def _shellcheck_binaries() -> list[str]:
 def _consumer_script_payloads() -> list[tuple[str, bytes]]:
     """Repo-relative `.github/scripts` paths and the canonical bytes synced there."""
     config_text = _CONFIG.read_text(encoding="utf-8")
-    canonical_by_template = {
-        template: canonical
-        for canonical, template in consumer_sync_canonical_to_template(config_text)
-    }
+    canonical_by_template = {template: canonical for canonical, template in sync_canonical_to_template(config_text)}
     payloads: list[tuple[str, bytes]] = []
     for _name, (template_name, repo_path) in managed_file_index(config_text).items():
         if not repo_path.startswith(".github/scripts/"):
@@ -111,12 +108,8 @@ class ConsumerLintTest(unittest.TestCase):
         is checked, not only the two review entry points. Shell shebangs stay.
         """
         payloads = _consumer_script_payloads()
-        python_payloads = [
-            (repo_path, data) for repo_path, data in payloads if repo_path.endswith(".py")
-        ]
-        shell_payloads = [
-            (repo_path, data) for repo_path, data in payloads if repo_path.endswith(".sh")
-        ]
+        python_payloads = [(repo_path, data) for repo_path, data in payloads if repo_path.endswith(".py")]
+        shell_payloads = [(repo_path, data) for repo_path, data in payloads if repo_path.endswith(".sh")]
         self.assertGreater(len(python_payloads), 0)
         self.assertGreater(len(shell_payloads), 0)
         for repo_path, data in python_payloads:
@@ -144,10 +137,7 @@ class ConsumerLintTest(unittest.TestCase):
             init.chmod(0o644)
             script = scripts / "shebang_not_executable.py"
             script.write_text(
-                "#!/usr/bin/env python3\n"
-                '"""Synthetic shebang script."""\n'
-                "\n"
-                "from __future__ import annotations\n",
+                '#!/usr/bin/env python3\n"""Synthetic shebang script."""\n\nfrom __future__ import annotations\n',
                 encoding="utf-8",
             )
             script.chmod(0o644)
