@@ -82,6 +82,15 @@ class VersionOperatorTest(unittest.TestCase):
         ):
             self.assertFalse(version_manifest._in_range(spec, version), (spec, version))
 
+    def test_shared_range_bump_requires_the_listed_locked_version(self) -> None:
+        listed = {"tool": {("1.0.0", "1.3.0")}}
+        self.assertFalse(
+            version_manifest._reached_listed_version("tool", "^1.0.0", "^1.2.0", listed, locked={"1.2.0"})
+        )
+        self.assertTrue(
+            version_manifest._reached_listed_version("tool", "^1.0.0", "^1.2.0", listed, locked={"1.3.0"})
+        )
+
     def test_dependabot_mode_takes_any_multi_part_version_without_an_operator(self) -> None:
         for token in ("2024.1", "24.2", "1.2.3.4", "v1.2", "V2024.2", "1.2.3-rc.1"):
             self.assertEqual(version_manifest._exact_body(token, mode="dependabot"), token.lstrip("vV"), token)
@@ -408,6 +417,39 @@ class LockWitnessTest(unittest.TestCase):
                     item["package_name"] for item in _gaps_at(root, base, [_update("lodash", "4.17.20", "4.17.21")])
                 }
                 self.assertEqual(gaps, set() if witnessed else {"package.json"}, descriptor)
+
+    def test_v1_nested_copy_does_not_witness_its_parent_under_a_caret_bump(self) -> None:
+        def lock(nested: str) -> str:
+            return (
+                json.dumps(
+                    {
+                        "lockfileVersion": 1,
+                        "dependencies": {
+                            "foo": {
+                                "version": "1.0.0",
+                                "dependencies": {
+                                    "bar": {
+                                        "version": "2.0.0",
+                                        "dependencies": {"foo": {"version": nested}},
+                                    }
+                                },
+                            }
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        witnesses = npm_manifest._json_witnesses(lock("1.3.0"))
+        self.assertEqual(witnesses.get("foo"), frozenset({"1.0.0"}))
+        self.assertNotIn("1.3.0", witnesses.get("foo", frozenset()))
+        old_spec = json.dumps({"dependencies": {"foo": "^1.0.0"}})
+        new_spec = json.dumps({"dependencies": {"foo": "^1.3.0"}})
+        updates = [_update("foo", "1.0.0", "1.3.0")]
+        self.assertFalse(manifest._lock_covers_listed("json", old_spec, new_spec, updates, {"foo"}, witnesses))
+        self.assertTrue(
+            manifest._lock_covers_listed("json", old_spec, new_spec, updates, {"foo"}, {"foo": frozenset({"1.3.0"})})
+        )
 
 
 class GoAndYarnLockTest(unittest.TestCase):

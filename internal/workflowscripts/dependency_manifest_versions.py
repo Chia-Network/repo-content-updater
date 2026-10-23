@@ -129,11 +129,12 @@ def _reached_listed_version(
     if not old or not new or old == new:
         return False
     if old[:1] in {"^", "~"} and new[:1] == old[:1]:
-        new_body = _exact_body(new[1:], mode=mode)
-        if not new_body or new_body not in locked:
-            return False
         return any(
-            _exact_body(frm) and _exact_body(to) and _in_range(old, frm) and _in_range(new, to)
+            _exact_body(frm)
+            and _exact_body(to)
+            and _exact_body(to) in locked
+            and _in_range(old, frm)
+            and _in_range(new, to)
             for frm, to in listed.get(name, ())
         )
     old_body, new_body = _exact_body(old, mode=mode), _exact_body(new, mode=mode)
