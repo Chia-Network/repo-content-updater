@@ -325,9 +325,30 @@ function reviewedShasForPatch(comments, patchId) {
   return shas;
 }
 
-function skipApplies(reviewedShas, resolvedSha) {
-  if (typeof resolvedSha !== 'string' || !/^[0-9a-f]{40}$/.test(resolvedSha)) return false;
+/**
+ * The one skip rule, for single and grouped pull requests alike. reviewedShas
+ * come from reviewedShasForPatch(comments, patchId). Skip only when this
+ * patch-id and this resolved commit form a valid marker and a bot marker for
+ * that patch-id names that commit. Anything else reviews again.
+ */
+function skipApplies(reviewedShas, patchId, resolvedSha) {
+  if (!reviewMarkerFromPatchId(patchId, resolvedSha)) return false;
   return Array.isArray(reviewedShas) && reviewedShas.includes(resolvedSha);
+}
+
+/**
+ * The scan job's bind_review step. Inputs are that step's env values: the
+ * patch-id, the comma-joined reviewed SHAs and the resolved release commit.
+ * Returns the step outputs.
+ */
+function bindReviewOutputs({ PATCH_ID, REVIEWED_SHAS, RESOLVED_TO }) {
+  const patchId = PATCH_ID || '';
+  const resolved = RESOLVED_TO || '';
+  const reviewed = (REVIEWED_SHAS || '').split(',').filter(Boolean);
+  return {
+    review_marker: reviewMarkerFromPatchId(patchId, resolved),
+    already_reviewed: skipApplies(reviewed, patchId, resolved) ? 'true' : 'false',
+  };
 }
 
 function versionTextCameFromBody(title, body) {
@@ -394,6 +415,7 @@ module.exports.patchIdFromDiff = patchIdFromDiff;
 module.exports.reviewMarkerFromPatchId = reviewMarkerFromPatchId;
 module.exports.reviewedShasForPatch = reviewedShasForPatch;
 module.exports.skipApplies = skipApplies;
+module.exports.bindReviewOutputs = bindReviewOutputs;
 module.exports.versionTextCameFromBody = versionTextCameFromBody;
 module.exports.isActionsBotMarkerComment = isActionsBotMarkerComment;
 module.exports.LEGACY_REVIEW_MARKER = LEGACY_REVIEW_MARKER;

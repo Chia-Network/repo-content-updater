@@ -212,14 +212,10 @@ jobs:
           RESOLVED_TO: ${{`{{ steps.malware_scan.outputs.resolved_to }}`}}
         with:
           script: |
-            const {
-              reviewMarkerFromPatchId,
-              skipApplies,
-            } = require(`${process.env.RUNNER_TEMP}/trusted-dcr-scripts/dependency-cursor-review-dependabot-context.js`);
-            const resolved = process.env.RESOLVED_TO || '';
-            const reviewed = (process.env.REVIEWED_SHAS || '').split(',').filter(Boolean);
-            core.setOutput('review_marker', reviewMarkerFromPatchId(process.env.PATCH_ID || '', resolved));
-            core.setOutput('already_reviewed', skipApplies(reviewed, resolved) ? 'true' : 'false');
+            const { bindReviewOutputs } = require(`${process.env.RUNNER_TEMP}/trusted-dcr-scripts/dependency-cursor-review-dependabot-context.js`);
+            for (const [name, value] of Object.entries(bindReviewOutputs(process.env))) {
+              core.setOutput(name, value);
+            }
 
   dependency-review-agent:
     needs: dependency-review-scan
