@@ -146,7 +146,7 @@ func TestExpandLeavesUnmarkedTemplates(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := expandYAMLSafeActions(string(raw))
-		rewritten := name == "dependabot.yml" || name == "dependency-review.yml"
+		rewritten := name == "dependabot.yml" || name == "dependency-review.yml" || name == "dependency-cursor-review.yml"
 		if rewritten {
 			if got == string(raw) {
 				t.Errorf("%s: expected YAML-safe actions to expand", name)

@@ -30,3 +30,22 @@ func TestProcessTemplateOverrides(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, []byte(fmt.Sprintf("%d 1", time.Now().Year())), result)
 }
+
+// TestProcessTemplateLeavesDirectoryPinsAsWritten keeps Dependabot directory
+// handling out of the generic template merge: only the Dependabot template
+// turns a bare pin into a directories list.
+func TestProcessTemplateLeavesDirectoryPinsAsWritten(t *testing.T) {
+	template := []byte(`{{ .DEPENDABOT_GOMOD_DIRECTORY }}`)
+	pin := map[string]string{"DEPENDABOT_GOMOD_DIRECTORY": "/svc"}
+	result, err := repo.ProcessTemplate(template, pin, nil)
+	assert.Nil(t, err)
+	assert.Equal(t, "/svc", string(result))
+
+	result, err = repo.ProcessNamedTemplate("other.yml", template, nil, pin)
+	assert.Nil(t, err)
+	assert.Equal(t, "/svc", string(result))
+
+	result, err = repo.ProcessNamedTemplate("dependabot.yml", template, nil, pin)
+	assert.Nil(t, err)
+	assert.Equal(t, `["/svc"]`, string(result))
+}

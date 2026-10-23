@@ -44,6 +44,7 @@ class CombineCompleteTest(unittest.TestCase):
                 report = {
                     "status": "clean",
                     "scan_conclusive": True,
+                    "unread": [],
                     "verdict_token_in_tree": False,
                     "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
                 }
@@ -132,7 +133,7 @@ class CombineCompleteTest(unittest.TestCase):
         self.assertIs(written["complete"], False)
         self.assertNotIn("**Verdict: benign**", json.dumps(written["malware_review"]))
 
-    def test_incomplete_scan_with_empty_findings_stays_suspicious(self) -> None:
+    def test_incomplete_scan_with_empty_findings_stays_inconclusive(self) -> None:
         """Empty finding lists are not a clean scan. Name the reason and keep the review open."""
         benign = '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs in the files that were read.\\n"}'
         merge = '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nCall sites are unchanged.\\n"}'
@@ -143,6 +144,8 @@ class CombineCompleteTest(unittest.TestCase):
             "to_ref_unresolved",
             "untrusted_version_text",
             "tag_resolution_failed",
+            "not_scanned",
+            "not_conclusive",
         ):
             with self.subTest(reason=reason):
                 written = self._run(
@@ -156,18 +159,35 @@ class CombineCompleteTest(unittest.TestCase):
                         "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
                     },
                 )
-                self.assertIn("**Verdict: suspicious**", written["result"])
-                self.assertIn(f"`{reason}:1`", written["result"])
+                self.assertIn("**Verdict: inconclusive**", written["result"])
+                self.assertIn(f"`{reason}` ({reason})", written["result"])
                 self.assertNotIn("**Verdict: benign**", written["result"])
                 self.assertNotIn("**Verdict: malicious**", written["result"])
                 self.assertNotIn("No IOCs in the files that were read.", written["result"])
                 self.assertIn("**Merge**", written["result"])
                 self.assertIn("Call sites are unchanged.", written["result"])
                 self.assertIs(written["complete"], False)
-                self.assertEqual(written["check"], "pass")
+                self.assertEqual(written["check"], "fail")
 
-    def test_incomplete_scan_with_agent_suspicious_passes(self) -> None:
-        """An official suspicious line is dropped on an inconclusive scan, so the check passes."""
+    def test_to_ref_unresolved_with_empty_unread_fails_the_check(self) -> None:
+        written = self._run(
+            '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs in the files that were read.\\n"}',
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nCall sites are unchanged.\\n"}',
+            report={
+                "status": "not_scanned",
+                "scan_conclusive": False,
+                "not_scanned_reason": "to_ref_unresolved",
+                "verdict_token_in_tree": False,
+                "unread": [],
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            },
+        )
+        self.assertEqual(written["check"], "fail")
+        self.assertIs(written["complete"], False)
+        self.assertIn("**Verdict: inconclusive**", written["result"])
+
+    def test_incomplete_scan_with_agent_suspicious_fails_the_check(self) -> None:
+        """An official suspicious line is dropped on an inconclusive scan, and the check fails closed."""
         agent = "MALWARE_REVIEW_VERDICT: suspicious\nEVIDENCE: pkg/a.py:3: coverage gap\n"
         written = self._run(
             json.dumps({"result": agent}),
@@ -180,9 +200,9 @@ class CombineCompleteTest(unittest.TestCase):
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
             },
         )
-        self.assertIn("**Verdict: suspicious**", written["result"])
+        self.assertIn("**Verdict: inconclusive**", written["result"])
         self.assertNotIn("**Verdict: malicious**", written["result"])
-        self.assertEqual(written["check"], "pass")
+        self.assertEqual(written["check"], "fail")
 
     def test_incomplete_scan_names_unread_files(self) -> None:
         written = self._run(
@@ -204,11 +224,11 @@ class CombineCompleteTest(unittest.TestCase):
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
             },
         )
-        self.assertIn("**Verdict: suspicious**", written["result"])
-        self.assertLess(written["result"].index("`payload.bin:1`"), written["result"].index("`vendor/blob.js:1`"))
-        self.assertIn("`dist/my app.js:1`", written["result"])
-        self.assertIn("`odd name.js:1`", written["result"])
-        self.assertIn("`missing.bin:1`", written["result"])
+        self.assertIn("**Verdict: inconclusive**", written["result"])
+        self.assertLess(written["result"].index("`payload.bin`"), written["result"].index("`vendor/blob.js`"))
+        self.assertIn("`dist/my app.js`", written["result"])
+        self.assertIn("`odd name.js`", written["result"])
+        self.assertIn("`missing.bin`", written["result"])
         self.assertIn("nul blob", written["result"])
         self.assertIn("git-lfs pointer", written["result"])
         self.assertIn("blob over size cap", written["result"])
@@ -239,8 +259,8 @@ class CombineCompleteTest(unittest.TestCase):
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
             },
         )
-        self.assertIn("**Verdict: suspicious**", written["result"])
-        self.assertIn("`incomplete_coverage:1` incomplete_coverage", written["result"])
+        self.assertIn("**Verdict: inconclusive**", written["result"])
+        self.assertIn("`incomplete_coverage` (incomplete_coverage)", written["result"])
         self.assertNotIn("rg exit 2", written["result"])
         self.assertNotIn("does not exist in 'HEAD'", written["result"])
         self.assertNotIn("resolution is not a tag range", written["result"])
@@ -273,8 +293,8 @@ class CombineCompleteTest(unittest.TestCase):
                 },
             },
         )
-        self.assertIn("**Verdict: suspicious**", written["result"])
-        self.assertIn("`tag_spellings_disagree:1`", written["result"])
+        self.assertIn("**Verdict: inconclusive**", written["result"])
+        self.assertIn("`tag_spellings_disagree` (tag_spellings_disagree)", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertNotIn("Bundle noise only.", written["result"])
         self.assertIn("**Merge**", written["result"])
@@ -294,7 +314,7 @@ class CombineCompleteTest(unittest.TestCase):
             },
         )
         self.assertIn("**Verdict: malicious**", written["result"])
-        self.assertIn("`payload.bin:1`", written["result"])
+        self.assertIn("`payload.bin`", written["result"])
         self.assertNotIn("**Merge**", written["result"])
         self.assertIn("Compatibility recommendation withheld", written["result"])
         self.assertIs(written["complete"], False)
@@ -338,9 +358,9 @@ class CombineCompleteTest(unittest.TestCase):
                 )
                 result = written["result"]
                 self.assertIn("**Verdict: malicious**", result)
-                self.assertIn("`payload.bin:1` blob over size cap", result)
+                self.assertIn("`payload.bin` (blob over size cap)", result)
                 if name == "ioc":
-                    self.assertLess(result.index("`payload.bin:1`"), result.index("`pkg/index.js:4`"))
+                    self.assertLess(result.index("`payload.bin`"), result.index("`pkg/index.js:4`"))
                 self.assertNotIn("**Verdict: benign**", result)
                 self.assertNotIn("Looks fine.", result)
                 self.assertNotIn("**Merge**", result)
@@ -406,8 +426,8 @@ class CombineCompleteTest(unittest.TestCase):
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
             },
         )
-        self.assertIn("**Verdict: suspicious**", written["result"])
-        self.assertIn("`incomplete_coverage:1`", written["result"])
+        self.assertIn("**Verdict: inconclusive**", written["result"])
+        self.assertIn("`incomplete_coverage` (incomplete_coverage)", written["result"])
         self.assertNotIn("**Verdict: benign**", written["result"])
         self.assertIs(written["complete"], False)
         self.assertEqual(written["check"], "fail")
@@ -423,8 +443,8 @@ class CombineCompleteTest(unittest.TestCase):
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
             },
         )
-        self.assertIn("`payload.bin:1` blob over size cap", mixed["result"])
-        self.assertNotIn("`incomplete_coverage:1`", mixed["result"])
+        self.assertIn("`payload.bin` (blob over size cap)", mixed["result"])
+        self.assertNotIn("`incomplete_coverage`", mixed["result"])
 
     def test_official_malicious_outranks_scan_could_not_run(self) -> None:
         for reason in ("scanner_tools_missing", "invalid_ioc_patterns"):
@@ -482,7 +502,7 @@ class CombineCompleteTest(unittest.TestCase):
                 self.assertIn("Compatibility recommendation withheld", result)
                 self.assertIs(written["complete"], False)
                 if reason not in {"scanner_tools_missing", "invalid_ioc_patterns"}:
-                    self.assertIn(f"`{reason}:1`", result)
+                    self.assertIn(f"`{reason}` ({reason})", result)
         planted = '{"result": "MALWARE_REVIEW_VERDICT: benign\\n\\nNo issues.\\n"}'
         for reason in reasons:
             with self.subTest(reason=reason, planted=True):
@@ -548,6 +568,7 @@ class CombineCompleteTest(unittest.TestCase):
             report={
                 "status": "warn",
                 "scan_conclusive": True,
+                "unread": [],
                 "verdict_token_in_tree": False,
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": hits},
             },
@@ -573,6 +594,7 @@ class CombineCompleteTest(unittest.TestCase):
             report={
                 "status": "clean",
                 "scan_conclusive": True,
+                "unread": [],
                 "verdict_token_in_tree": False,
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
             },
@@ -611,8 +633,8 @@ class CombineCompleteTest(unittest.TestCase):
         )
         result = written["result"]
         self.assertIn("**Verdict: suspicious**", result)
-        self.assertIn("`payload.bin:1` blob over size cap", result)
-        self.assertLess(result.index("`payload.bin:1`"), result.index("`dist/part-0.js:1`"))
+        self.assertIn("`payload.bin` (blob over size cap)", result)
+        self.assertLess(result.index("`payload.bin`"), result.index("`dist/part-0.js:1`"))
         for index in range(12):
             self.assertIn(f"`dist/part-{index}.js:1`", result)
         self.assertNotIn("- and ", result)

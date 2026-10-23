@@ -1,7 +1,10 @@
 package config_test
 
 import (
+	"bytes"
+	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -114,6 +117,338 @@ func TestEnsureCompanionFilesPairsWorkflowWithFormatter(t *testing.T) {
 	assert.Equal(t, expected, legacyFinalized)
 }
 
+func TestResolveManagedFileSelection(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	t.Run("defaults are added to every repo", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", nil)
+		assert.Empty(t, selection.Explicit)
+		cursorBundle, err := cfg.EnsureCompanionFiles([]string{"dependency-cursor-review"})
+		assert.Nil(t, err)
+		assert.Equal(t, append([]string{"dependabot-actions"}, cursorBundle...), defaultNames(selection))
+		if assert.Len(t, selection.Defaults, 2) {
+			assert.Equal(t, config.DefaultBundle{Root: "dependabot-actions", Files: []string{"dependabot-actions"}}, selection.Defaults[0])
+			assert.Equal(t, config.DefaultBundle{Root: "dependency-cursor-review", Files: cursorBundle}, selection.Defaults[1])
+		}
+	})
+
+	t.Run("opting out of a review companion drops the whole review bundle", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!malware-verdict-formatter"})
+		assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
+	})
+
+	t.Run("default resolves to the manifest-aware dependabot template", func(t *testing.T) {
+		assert.Equal(t, []string{"dependabot-actions", "dependency-cursor-review"}, cfg.DefaultFiles)
+		file := cfg.GetFileInfo("dependabot-actions")
+		if assert.NotNil(t, file) {
+			assert.Equal(t, "dependabot.yml", file.TemplateName)
+			assert.Equal(t, ".github/dependabot.yml", file.RepoPath)
+			assert.Equal(t, []string{".github/dependabot.yaml"}, file.AlternatePaths)
+			assert.Equal(t, []string{".github/workflows"}, file.RequiresPaths)
+		}
+	})
+
+	for _, optOut := range []string{"!dependabot", "!go-dependabot", "!dependabot-actions"} {
+		t.Run(optOut+" removes the dependabot default and keeps the review bundle", func(t *testing.T) {
+			selection := cfg.ResolveManagedFileSelection("repo", []string{optOut})
+			assert.Empty(t, selection.Explicit)
+			names := defaultNames(selection)
+			assert.NotContains(t, names, "dependabot-actions")
+			assert.Contains(t, names, "dependency-cursor-review")
+		})
+	}
+
+	for _, optOut := range []string{"!dependency-cursor-review", "!dependabot-cursor-review"} {
+		t.Run(optOut+" removes the review bundle and keeps the dependabot default", func(t *testing.T) {
+			selection := cfg.ResolveManagedFileSelection("repo", []string{optOut})
+			assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
+		})
+	}
+
+	t.Run("opt-out removes an explicitly selected file", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"group:base", "!dependabot", "!dependency-cursor-review"})
+		assert.NotContains(t, selection.Explicit, "dependabot")
+		assert.Contains(t, selection.Explicit, "dep-review")
+		assert.Empty(t, selection.Defaults)
+	})
+
+	t.Run("opt-out removes an explicit file and its companions", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-cursor-review", "!dependency-cursor-review", "!dependabot"})
+		assert.Empty(t, selection.Explicit)
+		assert.Empty(t, selection.Defaults)
+	})
+
+	t.Run("explicit review suppresses the review bundle", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-cursor-review"})
+		assert.Contains(t, selection.Explicit, "upstream-release-checkout")
+		assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
+	})
+
+	t.Run("an explicit companion stays explicit inside the review bundle", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"upstream-release-checkout"})
+		assert.Equal(t, []string{"upstream-release-checkout"}, selection.Explicit)
+		names := defaultNames(selection)
+		assert.Contains(t, names, "dependency-cursor-review")
+		assert.NotContains(t, names, "upstream-release-checkout")
+	})
+
+	t.Run("opt-out of a required companion is rejected", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-cursor-review", "!malware-verdict-formatter"})
+		assert.Contains(t, selection.Explicit, "dependency-cursor-review")
+		assert.Contains(t, selection.Explicit, "malware-verdict-formatter")
+	})
+
+	t.Run("go-dependabot suppresses the default via its shared repo path", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"go-dependabot"})
+		assert.Equal(t, []string{"go-dependabot"}, selection.Explicit)
+		assert.NotContains(t, defaultNames(selection), "dependabot-actions")
+	})
+
+	t.Run("explicit dependabot suppresses the default via its shared repo path", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependabot"})
+		assert.Equal(t, []string{"dependabot"}, selection.Explicit)
+		assert.NotContains(t, defaultNames(selection), "dependabot-actions")
+	})
+}
+
+func TestResolveManagedFileSelectionDropsSelectionWithUnknownCompanion(t *testing.T) {
+	cfg := loadSelectionTestConfig(t, `
+files:
+  - name: workflow
+    template_name: workflow.yml
+    repo_path: .github/workflows/workflow.yml
+    companion_files:
+      - does-not-exist
+`)
+
+	selection := cfg.ResolveManagedFileSelection("repo", []string{"workflow"})
+	assert.Empty(t, selection.Explicit)
+}
+
+func TestResolveManagedFileSelectionDefaultCompanions(t *testing.T) {
+	cfg := loadSelectionTestConfig(t, `
+default_files:
+  - workflow
+files:
+  - name: workflow
+    template_name: workflow.yml
+    repo_path: .github/workflows/workflow.yml
+    companion_files:
+      - script
+    adoption_marker: test:workflow
+  - name: script
+    template_name: script.sh
+    repo_path: .github/scripts/script.sh
+`)
+
+	t.Run("default includes companions", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", nil)
+		assert.Equal(t, []string{"workflow", "script"}, defaultNames(selection))
+	})
+
+	t.Run("opt-out of a default companion drops the bundle", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!script"})
+		assert.Empty(t, selection.Defaults)
+	})
+
+	t.Run("opt-out of a default root removes its companions", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!workflow"})
+		assert.Empty(t, selection.Defaults)
+	})
+}
+
+func defaultNames(selection config.ManagedFileSelection) []string {
+	var names []string
+	for _, bundle := range selection.Defaults {
+		names = append(names, bundle.Files...)
+	}
+	return names
+}
+
+func loadSelectionTestConfig(t *testing.T, contents string) *config.Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(contents), 0o644)
+	assert.Nil(t, err)
+	cfg, err := config.LoadConfig(path)
+	assert.Nil(t, err)
+	return cfg
+}
+
+func TestUnknownManagedFileLogIncludesRepo(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	}()
+
+	selection := cfg.ResolveManagedFileSelection("example-repo", []string{"does-not-exist"})
+	assert.Empty(t, selection.Explicit)
+	assert.Contains(t, logs.String(), "does-not-exist")
+	assert.Contains(t, logs.String(), "example-repo")
+}
+
+func TestLoadConfigRejectsUnknownDefaultFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+default_files:
+  - does-not-exist
+files:
+  - name: dependabot
+    template_name: dependabot.yml
+    repo_path: .github/dependabot.yml
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "does-not-exist")
+}
+
+func TestLoadConfigRejectsDefaultPathCollision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+default_files:
+  - first
+  - second
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/dependabot.yml
+  - name: second
+    template_name: second.yml
+    repo_path: .github/dependabot.yml
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "same repo path")
+}
+
+func TestLoadConfigRejectsDefaultFileWithoutAdoptionMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+default_files:
+  - first
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "adoption_marker")
+	assert.ErrorContains(t, err, "first")
+}
+
+func TestLoadConfigRejectsInvalidRequiresPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		required string
+		wantErr  string
+	}{
+		{name: "parent traversal", required: "../outside", wantErr: "must not contain '..'"},
+		{name: "nested parent traversal", required: ".github/../outside", wantErr: "must not contain '..'"},
+		{name: "absolute", required: "/etc/passwd", wantErr: "must be relative"},
+		{name: "empty", required: `""`, wantErr: "empty entry"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			err := os.WriteFile(path, []byte(`
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+    requires_paths:
+      - `+tt.required+`
+`), 0o644)
+			assert.Nil(t, err)
+
+			_, err = config.LoadConfig(path)
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestLoadConfigRejectsDuplicateAdoptionMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+    adoption_marker: shared-marker
+  - name: second
+    template_name: second.yml
+    repo_path: .github/second.yml
+    adoption_marker: shared-marker
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "adoption_marker")
+	assert.ErrorContains(t, err, "shared-marker")
+}
+
+func TestLoadConfigRejectsPreviousAdoptionMarkerCollision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+    adoption_marker: current-marker
+  - name: second
+    template_name: second.yml
+    repo_path: .github/second.yml
+    adoption_marker: other-marker
+    previous_adoption_markers:
+      - current-marker
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "adoption_marker")
+	assert.ErrorContains(t, err, "current-marker")
+}
+
+// TestLoadConfigNamesThePreviousMarkerInACollision reports a collision with
+// the field each marker came from, so a clash with a previous marker is not
+// reported as two current adoption markers.
+func TestLoadConfigNamesThePreviousMarkerInACollision(t *testing.T) {
+	for name, tt := range map[string]struct{ first, second, want string }{
+		"current collides with an earlier previous marker": {
+			first:  "adoption_marker: first-marker\n    previous_adoption_markers: [old-marker]",
+			second: "adoption_marker: old-marker",
+			want:   `adoption_marker "old-marker" of "second" is already the previous_adoption_marker of "first"`,
+		},
+		"previous collides with an earlier current marker": {
+			first:  "adoption_marker: old-marker",
+			second: "adoption_marker: second-marker\n    previous_adoption_markers: [old-marker]",
+			want:   `previous_adoption_marker "old-marker" of "second" is already the adoption_marker of "first"`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			body := "files:\n" +
+				"  - name: first\n    template_name: first.yml\n    repo_path: .github/first.yml\n    " + tt.first + "\n" +
+				"  - name: second\n    template_name: second.yml\n    repo_path: .github/second.yml\n    " + tt.second + "\n"
+			assert.Nil(t, os.WriteFile(path, []byte(body), 0o644))
+			_, err := config.LoadConfig(path)
+			assert.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
 func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
@@ -123,7 +458,7 @@ func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
 		".github/dependabot.yaml",
 	} {
 		canonical, ok := cfg.ResolveManagedFileName(sharedPath)
-		assert.False(t, ok, "path %q must not resolve when shared by dependabot and go-dependabot", sharedPath)
+		assert.False(t, ok, "path %q must not resolve when shared by dependabot, go-dependabot, and dependabot-actions", sharedPath)
 		assert.Empty(t, canonical)
 	}
 
@@ -135,7 +470,28 @@ func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "go-dependabot", goCanonical)
 
+	actionsCanonical, ok := cfg.ResolveManagedFileName("dependabot-actions")
+	assert.True(t, ok)
+	assert.Equal(t, "dependabot-actions", actionsCanonical)
+
 	expanded, err := cfg.ExpandManagedFileEntries([]string{".github/dependabot.yml"})
 	assert.Nil(t, err)
 	assert.Empty(t, expanded)
+}
+
+func TestLoadConfigRejectsMultilineAdoptionMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+default_files:
+  - first
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+    adoption_marker: "ok\nversion: 9"
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "adoption_marker")
 }

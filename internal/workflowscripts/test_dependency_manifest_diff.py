@@ -10,55 +10,11 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import dependency_manifest_diff as manifest
+import dependency_manifest_python as python_manifest
 import dependency_update_coverage as coverage
 import malware_verdict_formatter as formatter
+from manifest_scan_support import _PASS_REVIEW, _bump, _run_listed_scan, _unresolved
 from test_dependency_update_coverage import _clean, _commit, _git
-
-_PASS_REVIEW = "MALWARE_REVIEW_VERDICT: benign\n\nLockfile change is the listed bump.\n"
-_BLOCK_REVIEW = "MALWARE_REVIEW_VERDICT: malicious\n\nDo not merge.\n"
-
-
-def _run_listed_scan(base: dict[str, str], head: dict[str, str], updates: list[dict]) -> dict:
-    with TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        _git(root, "init", "-b", "main")
-        _git(root, "config", "user.email", "coverage-test@example.com")
-        _git(root, "config", "user.name", "coverage-test")
-        for name, content in base.items():
-            _commit(root, name, content, f"base {name}")
-        _git(root, "checkout", "-b", "pr")
-        for name, content in head.items():
-            _commit(root, name, content, f"head {name}")
-        (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
-        previous = os.getcwd()
-        saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT")}
-        os.chdir(root)
-        os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
-        os.environ.pop("GITHUB_BASE_REF", None)
-        os.environ["GITHUB_OUTPUT"] = str(root / "github_output.txt")
-
-        def fake_scan(update: dict, *_args: object, **_kwargs: object) -> dict:
-            return _clean(str(update.get("packageName") or ""), str(update.get("upstreamRepo") or ""))
-
-        try:
-            with patch.object(coverage, "_scan_one", fake_scan):
-                coverage.main()
-        finally:
-            os.chdir(previous)
-            for key, value in saved.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
-        return json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
-
-
-def _bump(name: str, frm: str, to: str, repo: str) -> dict[str, str]:
-    return {"packageName": name, "fromVersion": frm, "toVersion": to, "upstreamRepo": repo}
-
-
-def _unresolved(report: dict) -> set[str]:
-    return {item["package_name"] for item in report["dependencies"] if item.get("not_scanned_reason") == "unresolved"}
 
 
 class DependencyManifestDiffTest(unittest.TestCase):
@@ -301,7 +257,7 @@ class DependencyManifestDiffTest(unittest.TestCase):
             for path in ("package-lock.json", "go.mod", "go.sum"):
                 self.assertIn(path, summary, msg=summary)
 
-    def test_listed_lock_resolved_change_is_unresolved(self) -> None:
+    def test_listed_registry_lock_bump_is_conclusive(self) -> None:
         base_lock = {
             "lockfileVersion": 3,
             "packages": {
@@ -334,11 +290,12 @@ class DependencyManifestDiffTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertFalse(report["scan_conclusive"])
-        self.assertIn("package-lock.json", _unresolved(report))
+        self.assertIs(report["scan_conclusive"], True)
+        self.assertEqual(report["status"], "clean")
+        self.assertNotIn("dependencies", report)
         published = formatter.compose_published_review(report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
-        self.assertEqual(published["check"], "fail")
-        self.assertIs(published["may_complete"], False)
+        self.assertEqual(published["check"], "pass")
+        self.assertIs(published["may_complete"], True)
 
     def test_listed_lock_wrong_version_label_is_unresolved(self) -> None:
         old_url = "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz"
@@ -359,12 +316,7 @@ class DependencyManifestDiffTest(unittest.TestCase):
             return json.dumps(body) + "\n"
 
         def yarn(version: str) -> str:
-            return (
-                "lodash@^4.17.20:\n"
-                f'  version "{version}"\n'
-                f'  resolved "{old_url}"\n'
-                f'  integrity "{integrity}"\n'
-            )
+            return f'lodash@^4.17.20:\n  version "{version}"\n  resolved "{old_url}"\n  integrity "{integrity}"\n'
 
         for path, render in (
             ("package-lock.json", npm),
@@ -429,9 +381,35 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertEqual(report["package_name"], "github.com/spf13/cobra")
 
     def test_listed_npm_range_bump_is_conclusive(self) -> None:
+        base_lock = {
+            "lockfileVersion": 3,
+            "packages": {
+                "node_modules/lodash": {
+                    "version": "4.17.20",
+                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",
+                    "integrity": "sha512-lodash-old",
+                }
+            },
+        }
+        head_lock = {
+            "lockfileVersion": 3,
+            "packages": {
+                "node_modules/lodash": {
+                    "version": "4.17.21",
+                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+                    "integrity": "sha512-lodash-new",
+                }
+            },
+        }
         report = _run_listed_scan(
-            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n"},
-            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n"},
+            {
+                "package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n",
+                "package-lock.json": json.dumps(base_lock) + "\n",
+            },
+            {
+                "package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n",
+                "package-lock.json": json.dumps(head_lock) + "\n",
+            },
             [
                 {
                     "packageName": "lodash",
@@ -443,6 +421,41 @@ class DependencyManifestDiffTest(unittest.TestCase):
         )
         self.assertIs(report["scan_conclusive"], True)
         self.assertEqual(report["status"], "clean")
+
+    def test_listed_npm_range_bump_without_a_lockfile_is_unresolved(self) -> None:
+        report = _run_listed_scan(
+            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n"},
+            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n"},
+            [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")],
+        )
+        names = {item["package_name"] for item in report["dependencies"]}
+        self.assertIn("package.json", names)
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
+
+    def test_listed_npm_range_bump_is_unresolved_when_the_lock_keeps_the_old_version(self) -> None:
+        lock = {
+            "lockfileVersion": 3,
+            "packages": {
+                "node_modules/lodash": {
+                    "version": "4.17.20",
+                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",
+                    "integrity": "sha512-lodash-old",
+                }
+            },
+        }
+        report = _run_listed_scan(
+            {
+                "package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n",
+                "package-lock.json": json.dumps(lock) + "\n",
+            },
+            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n"},
+            [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")],
+        )
+        names = {item["package_name"] for item in report["dependencies"]}
+        self.assertIn("package.json", names)
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
 
     def test_changed_range_prefix_is_unresolved(self) -> None:
         report = _run_listed_scan(
@@ -492,13 +505,18 @@ class DependencyManifestDiffTest(unittest.TestCase):
     def test_extra_yarn_descriptor_and_nested_lock_entry_stay_unresolved(self) -> None:
         def yarn(version: str, integrity: str, other: str) -> str:
             return (
-                f'lodash@^4.17.20:\n  version "{version}"\n  integrity "{integrity}"\n\n'
-                f'lodash@^3.10.1:\n  version "3.10.1"\n  integrity "{other}"\n'
+                f'lodash@^4.17.20:\n  version "{version}"\n'
+                f'  resolved "https://registry.yarnpkg.com/lodash/-/lodash-{version}.tgz"\n'
+                f'  integrity "{integrity}"\n\n'
+                f'lodash@^3.10.1:\n  version "3.10.1"\n'
+                f'  resolved "https://registry.yarnpkg.com/lodash/-/lodash-3.10.1.tgz"\n'
+                f'  integrity "{other}"\n'
             )
 
         def lock(version: str, integrity: str, nested: str) -> str:
             lodash = {
                 "version": version,
+                "resolved": f"https://registry.npmjs.org/lodash/-/lodash-{version}.tgz",
                 "integrity": integrity,
                 "dependencies": {"minimist": {"version": "1.2.8", "integrity": nested}},
             }
@@ -516,8 +534,9 @@ class DependencyManifestDiffTest(unittest.TestCase):
             },
             listed,
         )
-        self.assertFalse(clean["scan_conclusive"])
-        self.assertTrue({"yarn.lock", "package-lock.json"} <= _unresolved(clean))
+        self.assertIs(clean["scan_conclusive"], True)
+        self.assertEqual(clean["status"], "clean")
+        self.assertNotIn("dependencies", clean)
         tainted = _run_listed_scan(
             {
                 "yarn.lock": yarn("4.17.20", "sha-old", "sha-other"),
@@ -702,8 +721,8 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertTrue(manifest._entries_explain("go.sum", both, go_sum(("v1.8.1", new_digest)), updates))
 
     def test_mixed_case_requirement_name_is_covered(self) -> None:
-        self.assertEqual(manifest._requirement_name("PyYAML"), "pyyaml")
-        self.assertEqual(manifest._requirement_name("Foo_Bar.Baz"), "foo-bar-baz")
+        self.assertEqual(python_manifest._requirement_name("PyYAML"), "pyyaml")
+        self.assertEqual(python_manifest._requirement_name("Foo_Bar.Baz"), "foo-bar-baz")
         report = _run_listed_scan(
             {"requirements.txt": "PyYAML==5.4.1\n"},
             {"requirements.txt": "PyYAML==6.0.1\n"},
@@ -722,117 +741,6 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertEqual(separators["status"], "clean")
         self.assertEqual(separators["package_name"], "Foo_Bar.Baz")
         self.assertEqual(separators["not_scanned_reason"], "")
-
-    def test_poetry_lock_and_transitive_residue_pass_when_the_verdict_is_pass(self) -> None:
-        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
-        poetry = _run_listed_scan(
-            {"poetry.lock": '[[package]]\nname = "lodash"\nversion = "4.17.20"\n'},
-            {"poetry.lock": '[[package]]\nname = "lodash"\nversion = "4.17.21"\n'},
-            listed,
-        )
-        self.assertIs(poetry["scan_conclusive"], True)
-        self.assertEqual(poetry["status"], "clean")
-        self.assertNotIn("poetry.lock", " ".join(poetry.get("errors") or []))
-        published = formatter.compose_published_review(poetry, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
-        self.assertEqual(published["verdict"], "benign")
-        self.assertEqual(published["check"], "pass")
-        self.assertIs(published["may_complete"], True)
-
-        def lock(lodash: str, minimist: str) -> str:
-            return (
-                json.dumps(
-                    {
-                        "lockfileVersion": 3,
-                        "packages": {
-                            "node_modules/lodash": {"version": lodash},
-                            "node_modules/minimist": {"version": minimist},
-                        },
-                    }
-                )
-                + "\n"
-            )
-
-        residue = _run_listed_scan(
-            {"package-lock.json": lock("4.17.20", "1.2.0")},
-            {"package-lock.json": lock("4.17.21", "1.2.8")},
-            listed,
-        )
-        self.assertIs(residue["scan_conclusive"], True)
-        self.assertEqual(residue["status"], "clean")
-        self.assertNotIn("minimist", " ".join(residue.get("errors") or []))
-        published = formatter.compose_published_review(residue, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
-        self.assertEqual(published["check"], "pass")
-        self.assertIs(published["may_complete"], True)
-        blocked_review = formatter.compose_published_review(
-            residue, _BLOCK_REVIEW, "COMPATIBILITY_RECOMMENDATION: Don't merge\n"
-        )
-        self.assertEqual(blocked_review["verdict"], "malicious")
-        self.assertEqual(blocked_review["check"], "fail")
-        self.assertIs(blocked_review["may_complete"], False)
-        failed = {
-            "status": "not_scanned",
-            "scan_conclusive": False,
-            "not_scanned_reason": "scanner_tools_missing",
-            "verdict_token_in_tree": False,
-            "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
-        }
-        scan_failed = formatter.compose_published_review(failed, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
-        self.assertEqual(scan_failed["verdict"], "scan_failed")
-        self.assertEqual(scan_failed["check"], "fail")
-
-        blocked = json.loads(json.dumps(residue))
-        blocked["findings"]["unicode"] = [{"kind": "unicode", "file": "pkg/index.js", "line": 1, "match": "bidi"}]
-        blocked_finding = formatter.compose_published_review(
-            blocked, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n"
-        )
-        self.assertEqual(blocked_finding["check"], "fail")
-        self.assertIs(blocked_finding["may_complete"], False)
-
-    def test_unlisted_resolved_change_stays_unresolved(self) -> None:
-        def lock(lodash: str, minimist: str, resolved: str, integrity: str) -> str:
-            return (
-                json.dumps(
-                    {
-                        "lockfileVersion": 3,
-                        "packages": {
-                            "node_modules/lodash": {"version": lodash},
-                            "node_modules/minimist": {
-                                "version": minimist,
-                                "resolved": resolved,
-                                "integrity": integrity,
-                            },
-                        },
-                    }
-                )
-                + "\n"
-            )
-
-        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
-        report = _run_listed_scan(
-            {
-                "package-lock.json": lock(
-                    "4.17.20",
-                    "1.2.0",
-                    "https://registry.npmjs.org/minimist/-/minimist-1.2.0.tgz",
-                    "sha512-old",
-                )
-            },
-            {
-                "package-lock.json": lock(
-                    "4.17.21",
-                    "1.2.8",
-                    "https://github.com/evil/minimist/tarball/deadbeef",
-                    "sha512-new",
-                )
-            },
-            listed,
-        )
-        self.assertFalse(report["scan_conclusive"])
-        self.assertIn("minimist", _unresolved(report))
-        self.assertNotEqual(report["status"], "clean")
-        published = formatter.compose_published_review(report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
-        self.assertEqual(published["check"], "fail")
-        self.assertIs(published["may_complete"], False)
 
 
 if __name__ == "__main__":

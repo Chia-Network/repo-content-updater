@@ -1,5 +1,8 @@
 # This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back
-# inline with the upstream template, unless you remove the dependabot managed file property from the repo
+# inline with the upstream template, unless you add !dependabot to the repo's managed-files property
+# {{- if .ADOPTION_MARKER }}
+# {{ .ADOPTION_MARKER }}
+# {{- end }}
 
 version: 2
 registries:
@@ -10,8 +13,9 @@ registries:
     type: python-index
     url: https://download.chia.net/simple/
 updates:
+  # {{- if ne .DEPENDABOT_GOMOD_ENABLED "0" }}
   - package-ecosystem: "gomod"
-    directory: "{{ .DEPENDABOT_GOMOD_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_GOMOD_DIRECTORY }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -30,13 +34,16 @@ updates:
         patterns:
           - "*"
     # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_PIP_ENABLED "0" }}
 
   - package-ecosystem: "pip"
     registries:
       - chia-pypi
       - chia-downloads
     insecure-external-code-execution: allow
-    directory: "{{ .DEPENDABOT_PIP_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_PIP_DIRECTORY }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -55,6 +62,9 @@ updates:
         patterns:
           - "*"
     # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_ACTIONS_ENABLED "0" }}
 
   - package-ecosystem: "github-actions"
     directories: "{{ .DEPENDABOT_ACTIONS_DIRECTORIES }}"
@@ -76,9 +86,12 @@ updates:
         patterns:
           - "*"
     # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_NPM_ENABLED "0" }}
 
   - package-ecosystem: "npm"
-    directory: "{{ .DEPENDABOT_NPM_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_NPM_DIRECTORY }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -97,9 +110,12 @@ updates:
         patterns:
           - "*"
     # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_CARGO_ENABLED "0" }}
 
   - package-ecosystem: cargo
-    directory: "{{ .DEPENDABOT_CARGO_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_CARGO_DIRECTORY }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -111,15 +127,19 @@ updates:
       - dependencies
       - rust
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_CARGO_GROUP_UPDATES "1" }}
     groups:
       global:
         patterns:
           - "*"
     # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_SWIFT_ENABLED "0" }}
 
   - package-ecosystem: swift
-    directory: "{{ .DEPENDABOT_SWIFT_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_SWIFT_DIRECTORY }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -127,9 +147,83 @@ updates:
       default-days: 7
     open-pull-requests-limit: "{{ .DEPENDABOT_SWIFT_PULL_REQUEST_LIMIT }}"
     rebase-strategy: "{{ .DEPENDABOT_SWIFT_REBASE_STRATEGY }}"
+    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_SWIFT_GROUP_UPDATES "1" }}
     groups:
       global:
         patterns:
           - "*"
+    # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_DOCKER_ENABLED "0" }}
+
+  - package-ecosystem: docker
+    directories: "{{ .DEPENDABOT_DOCKER_DIRECTORIES }}"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: "{{ .DEPENDABOT_DOCKER_PULL_REQUEST_LIMIT }}"
+    rebase-strategy: "{{ .DEPENDABOT_DOCKER_REBASE_STRATEGY }}"
+    labels:
+      - dependencies
+      - docker
+      - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
+    # {{- if eq .DEPENDABOT_DOCKER_GROUP_UPDATES "1" }}
+    groups:
+      global:
+        patterns:
+          - "*"
+    # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_TERRAFORM_ENABLED "0" }}
+
+  - package-ecosystem: terraform
+    directories: "{{ .DEPENDABOT_TERRAFORM_DIRECTORIES }}"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: "{{ .DEPENDABOT_TERRAFORM_PULL_REQUEST_LIMIT }}"
+    rebase-strategy: "{{ .DEPENDABOT_TERRAFORM_REBASE_STRATEGY }}"
+    labels:
+      - dependencies
+      - terraform
+      - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
+    # {{- if eq .DEPENDABOT_TERRAFORM_GROUP_UPDATES "1" }}
+    groups:
+      global:
+        patterns:
+          - "*"
+    # {{- end }}
+    # {{- end }}
+
+  # {{- if ne .DEPENDABOT_NUGET_ENABLED "0" }}
+
+  - package-ecosystem: nuget
+    directories: "{{ .DEPENDABOT_NUGET_DIRECTORIES }}"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: "{{ .DEPENDABOT_NUGET_PULL_REQUEST_LIMIT }}"
+    rebase-strategy: "{{ .DEPENDABOT_NUGET_REBASE_STRATEGY }}"
+    labels:
+      - dependencies
+      - dotnet
+      - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
+    # {{- if eq .DEPENDABOT_NUGET_GROUP_UPDATES "1" }}
+    groups:
+      global:
+        patterns:
+          - "*"
+    # {{- end }}
     # {{- end }}

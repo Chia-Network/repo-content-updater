@@ -487,7 +487,7 @@ test('release note versions are marked only when they supply a missing version',
   const same = '`1.2.3` -> `1.2.3`\nhttps://github.com/example/example';
   const filled = parseDependencyUpdate(renovate, same);
   assert.equal(filled.fromVersion, '1.2.3');
-  assert.equal(filled.toVersion, '1.2.3');
+  assert.equal(filled.toVersion, 'v1.2.3');
   assert.equal(versionTextCameFromBody(renovate, same), true);
 
   const open = 'Update dependency example to v1.2.3';

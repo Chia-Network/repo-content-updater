@@ -13,7 +13,12 @@ _MANAGED_FILE_ENTRY = re.compile(
     re.MULTILINE,
 )
 _DCR_COMPANION_BLOCK = re.compile(
-    rf"- name: {_DCR_WORKFLOW}\n(?:.*\n)*?    companion_files:\n((?:      - .+\n)+)",
+    rf"- name: {_DCR_WORKFLOW}\n"
+    r"    template_name: [^\n]+\n"
+    r"    repo_path: [^\n]+\n"
+    r"(?:    [^\n]*\n)*?"
+    r"    companion_files:\n"
+    r"((?:      - .+\n)+)",
     re.MULTILINE,
 )
 _DCR_GROUP_TEMPLATES = re.compile(
@@ -79,15 +84,13 @@ def parse_dcr_group_templates(config_text: str) -> tuple[str, ...]:
 def consumer_sync_canonical_to_template(
     config_text: str,
 ) -> tuple[tuple[str, str], ...]:
-    """Derive (canonical filename, template_name) from config companions + files[]."""
-    companions = parse_dcr_companion_files(config_text)
-    index = managed_file_index(config_text)
+    """Derive (canonical filename, template_name) from all files[] script entries.
+
+    Entries are returned in config.yaml order. Every files[] entry whose repo_path
+    lives under `.github/scripts/` is consumer-synced, except emit-only templates.
+    """
     pairs: list[tuple[str, str]] = []
-    for name in companions:
-        entry = index.get(name)
-        if entry is None:
-            continue
-        template_name, repo_path = entry
+    for _name, (template_name, repo_path) in managed_file_index(config_text).items():
         if not repo_path.startswith(".github/scripts/"):
             continue
         if template_name in _SYNC_EMIT_ONLY_TEMPLATES:

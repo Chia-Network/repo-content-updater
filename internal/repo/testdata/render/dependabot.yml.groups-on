@@ -1,5 +1,5 @@
 # This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back
-# inline with the upstream template, unless you remove the dependabot managed file property from the repo
+# inline with the upstream template, unless you add !dependabot to the repo's managed-files property
 
 version: 2
 registries:
@@ -11,7 +11,7 @@ registries:
     url: https://download.chia.net/simple/
 updates:
   - package-ecosystem: "gomod"
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -34,7 +34,7 @@ updates:
       - chia-pypi
       - chia-downloads
     insecure-external-code-execution: allow
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -72,7 +72,7 @@ updates:
           - "*"
 
   - package-ecosystem: "npm"
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -91,7 +91,7 @@ updates:
           - "*"
 
   - package-ecosystem: cargo
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -103,13 +103,14 @@ updates:
       - dependencies
       - rust
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:
           - "*"
 
   - package-ecosystem: swift
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -117,6 +118,64 @@ updates:
       default-days: 7
     open-pull-requests-limit: 10
     rebase-strategy: auto
+    reviewers: ["cameroncooper", "emlowe"]
+    groups:
+      global:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directories: ["/"]
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    rebase-strategy: auto
+    labels:
+      - dependencies
+      - docker
+      - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
+    groups:
+      global:
+        patterns:
+          - "*"
+
+  - package-ecosystem: terraform
+    directories: ["/"]
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    rebase-strategy: auto
+    labels:
+      - dependencies
+      - terraform
+      - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
+    groups:
+      global:
+        patterns:
+          - "*"
+
+  - package-ecosystem: nuget
+    directories: ["/"]
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    rebase-strategy: auto
+    labels:
+      - dependencies
+      - dotnet
+      - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:

@@ -16,9 +16,11 @@ import (
 	"github.com/chia-network/repo-content-updater/internal/config"
 )
 
-type repoFilesEntry struct {
-	files []string
-	props CustomProperties
+type repoCheck struct {
+	name      string
+	repo      *github.Repository
+	selection config.ManagedFileSelection
+	props     CustomProperties
 }
 
 // FileModeForContent is 0755 for shebang scripts so consumer linters that
@@ -45,92 +47,133 @@ func writeManagedContent(repoPath string, content []byte) error {
 	return os.Chmod(repoPath, mode)
 }
 
-// ManagedFiles updates all managed files in the org with current versions
+// ManagedFiles updates all managed files in the org with current versions.
+// The repository listing defines which repos are considered; custom properties
+// provide the explicit selections for those repos.
 func (c *Content) ManagedFiles(cfg *config.Config, onlyRepo string) error {
-	reposToCheck := map[string]repoFilesEntry{}
-
-	opts := &github.ListOptions{
-		Page:    0,
-		PerPage: 100,
-	}
-	for {
-		opts.Page++
-		result, resp, err := ghDo(func() ([]*github.RepoCustomPropertyValue, *github.Response, error) {
-			return c.githubClient.Organizations.ListCustomPropertyValues(context.TODO(), c.githubOrg, opts)
-		})
-		if err != nil {
-			return err
-		}
-
-		for _, repo := range result {
-			if onlyRepo != "" && !strings.EqualFold(repo.RepositoryName, onlyRepo) {
-				continue
-			}
-			entry := reposToCheck[repo.RepositoryName]
-			for _, property := range repo.Properties {
-				if property.PropertyName == "managed-files" && property.Value != nil {
-					rawEntries := strings.Split(*property.Value, ",")
-					seen := map[string]bool{}
-					var finalFiles []string
-					for _, rawEntry := range rawEntries {
-						rawEntry = strings.TrimSpace(rawEntry)
-						if rawEntry == "" {
-							continue
-						}
-						expanded, err := cfg.ExpandManagedFileEntries([]string{rawEntry})
-						if err != nil {
-							log.Printf(
-								"Error expanding managed-files entry %q for %s: %s\n",
-								rawEntry,
-								repo.RepositoryName,
-								err.Error(),
-							)
-							continue
-						}
-						for _, file := range expanded {
-							if seen[file] {
-								continue
-							}
-							seen[file] = true
-							finalFiles = append(finalFiles, file)
-						}
-					}
-
-					finalFiles, err = cfg.EnsureCompanionFiles(finalFiles)
-					if err != nil {
-						log.Printf(
-							"Error ensuring companion files for %s: %s\n",
-							repo.RepositoryName,
-							err.Error(),
-						)
-						continue
-					}
-
-					entry.files = finalFiles
-				}
-			}
-			entry.props = parseCustomProperties(repo.Properties)
-			reposToCheck[repo.RepositoryName] = entry
-		}
-
-		if resp.NextPage == 0 {
-			break
-		}
+	properties, err := c.loadRepoProperties(onlyRepo)
+	if err != nil {
+		return err
 	}
 
-	for repo, entry := range reposToCheck {
-		if entry.files == nil {
+	repositories, err := c.repoUniverse(onlyRepo)
+	if err != nil {
+		log.Printf(
+			"Error listing repositories for %s; continuing with explicit selections only: %s\n",
+			c.githubOrg,
+			err,
+		)
+		repositories = nil
+	}
+
+	for _, check := range repoChecks(cfg, onlyRepo, repositories, properties) {
+		files := filesForRepo(check.selection, check.repo)
+		if len(files.Explicit) == 0 && len(files.Defaults) == 0 {
 			continue
 		}
-		log.Printf("Need to check %s\n", repo)
-		err := c.CheckFiles(repo, entry.files, cfg, entry.props)
-		if err != nil {
-			log.Printf("Error updating %s: %s\n", repo, err.Error())
-			continue
+		log.Printf("Need to check %s\n", check.name)
+		if err := c.checkSelectedFiles(check.name, files, cfg, check.props); err != nil {
+			log.Printf("Error updating %s: %s\n", check.name, err.Error())
 		}
 	}
 
 	return nil
+}
+
+func (c *Content) repoUniverse(onlyRepo string) ([]*github.Repository, error) {
+	if onlyRepo != "" {
+		repo, _, err := ghDo(func() (*github.Repository, *github.Response, error) {
+			return c.githubClient.Repositories.Get(context.TODO(), c.githubOrg, onlyRepo)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return []*github.Repository{repo}, nil
+	}
+	return c.listOrgRepositories()
+}
+
+func repoChecks(
+	cfg *config.Config,
+	onlyRepo string,
+	repositories []*github.Repository,
+	properties map[string]repoPropertyEntry,
+) []repoCheck {
+	if repositories != nil {
+		checks := make([]repoCheck, 0, len(repositories))
+		for _, repo := range repositories {
+			name := repo.GetName()
+			if onlyRepo != "" && !strings.EqualFold(name, onlyRepo) {
+				continue
+			}
+			property := properties[strings.ToLower(name)]
+			checks = append(checks, repoCheck{
+				name:      name,
+				repo:      repo,
+				selection: cfg.ResolveManagedFileSelection(name, property.managedFiles),
+				props:     property.props,
+			})
+		}
+		return checks
+	}
+
+	checks := make([]repoCheck, 0, len(properties))
+	for key, property := range properties {
+		if onlyRepo != "" && key != strings.ToLower(onlyRepo) {
+			continue
+		}
+		checks = append(checks, repoCheck{
+			name:      property.name,
+			selection: cfg.ResolveManagedFileSelection(property.name, property.managedFiles),
+			props:     property.props,
+		})
+	}
+	return checks
+}
+
+func (c *Content) listOrgRepositories() ([]*github.Repository, error) {
+	repos := make([]*github.Repository, 0)
+	opts := &github.RepositoryListByOrgOptions{
+		ListOptions: github.ListOptions{
+			Page:    0,
+			PerPage: 100,
+		},
+	}
+	for {
+		opts.Page++
+		page, resp, err := ghDo(func() ([]*github.Repository, *github.Response, error) {
+			return c.githubClient.Repositories.ListByOrg(context.TODO(), c.githubOrg, opts)
+		})
+		if err != nil {
+			return nil, err
+		}
+		repos = append(repos, page...)
+		if resp.NextPage == 0 {
+			break
+		}
+	}
+	return repos, nil
+}
+
+// defaultFilesEligible reports whether a repo may receive default files. Nil
+// metadata, archived repos, forks, names containing "private", and names
+// ending in "-dos" are ineligible.
+func defaultFilesEligible(repo *github.Repository) bool {
+	if repo == nil || repo.GetArchived() || repo.GetFork() {
+		return false
+	}
+	name := strings.ToLower(repo.GetName())
+	return !strings.Contains(name, "private") && !strings.HasSuffix(name, "-dos")
+}
+
+// filesForRepo applies default-file eligibility to a repo. Explicit selections
+// are always kept; default bundles are only kept when defaultFilesEligible is
+// true.
+func filesForRepo(selection config.ManagedFileSelection, repo *github.Repository) config.ManagedFileSelection {
+	if !defaultFilesEligible(repo) {
+		selection.Defaults = nil
+	}
+	return selection
 }
 
 // CheckFiles checks all the files for updates in the repo
@@ -151,6 +194,10 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 		return fmt.Errorf("error ensuring companion files for %s: %w", repoName, err)
 	}
 
+	return c.checkSelectedFiles(repoName, config.ManagedFileSelection{Explicit: files}, cfg, props)
+}
+
+func (c *Content) checkSelectedFiles(repoName string, selection config.ManagedFileSelection, cfg *config.Config, props CustomProperties) error {
 	defer removeDirIfExists(repoDir(repoName))
 
 	r, w, err := c.cloneRepo(repoName)
@@ -188,65 +235,27 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 	}
 
 	hadChanges := false
-	for _, file := range files {
-		log.Printf(" - Checking %s\n", file)
-
-		fileinfo := cfg.GetFileInfo(file)
-		if fileinfo == nil {
-			log.Printf("unknown file %s. Skipping...", file)
-			continue
-		}
-
-		for _, form := range fileinfo.AlternatePaths {
-			// Ignoring errors since these alternate file names may not exist
-			removePath := fmt.Sprintf("%s/%s", repoDir(repoName), form)
-			_ = os.Remove(removePath)
-			_, _ = w.Add(form)
-		}
-
-		tmplContent, err := os.ReadFile(path.Join(c.templates, fileinfo.TemplateName))
-		if err != nil {
+	err = c.applySelection(repoName, selection, cfg, repoConfig, func(file string, repoPaths []string) error {
+		if _, err := w.Add(repoPaths[0]); err != nil {
 			return err
 		}
-		content, err := ProcessTemplate(tmplContent, cfg.Variables, repoConfig.VarOverrides)
-		if err != nil {
-			return err
+		for _, removed := range repoPaths[1:] {
+			// An alternate path that never existed has nothing to stage.
+			_, _ = w.Add(removed)
 		}
-
-		repoPath := fmt.Sprintf("%s/%s", repoDir(repoName), fileinfo.RepoPath)
-		if err := writeManagedContent(repoPath, content); err != nil {
-			return err
-		}
-
-		// Stage the changes
-		_, err = w.Add(fileinfo.RepoPath)
-		if err != nil {
-			return err
-		}
-
 		status, err := w.Status()
-		if err != nil {
+		if err != nil || status.IsClean() {
 			return err
-		}
-
-		if status.IsClean() {
-			continue
 		}
 		hadChanges = true
-
-		var message string
+		message := fmt.Sprintf("Update %s", file)
 		if repoConfig.CommitPrefix != nil {
-			// Dereference the pointer to get the string value
 			message = fmt.Sprintf("%s Update %s", *repoConfig.CommitPrefix, file)
-		} else {
-			// Handle the case where PrTargetBranch is nil
-			// For example, use a default message or branch name
-			message = fmt.Sprintf("Update %s", file)
 		}
-		err = c.commit(w, repoName, message)
-		if err != nil {
-			return err
-		}
+		return c.commit(w, repoName, message)
+	})
+	if err != nil {
+		return err
 	}
 
 	var DefaultBranch string
@@ -266,4 +275,125 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 	}
 
 	return nil
+}
+
+// stageFunc stages one written managed file. repoPaths starts with the file's
+// repo_path, followed by alternate paths that were removed.
+type stageFunc func(file string, repoPaths []string) error
+
+// applySelection writes a repo's managed files into its checkout without
+// touching GitHub: explicit files, then the files of every adoptable default
+// bundle. stage runs after each file is written.
+func (c *Content) applySelection(repoName string, selection config.ManagedFileSelection, cfg *config.Config, repoConfig Config, stage stageFunc) error {
+	defaults, err := adoptableDefaults(repoName, selection.Defaults, cfg)
+	if err != nil {
+		return err
+	}
+	files := make([]config.SelectedFile, 0, len(selection.Explicit)+len(defaults))
+	for _, name := range selection.Explicit {
+		files = append(files, config.SelectedFile{Name: name, Origin: config.OriginExplicit})
+	}
+	files = append(files, defaults...)
+
+	// Render and confine every file before touching the checkout, so a path
+	// problem in any file leaves the whole checkout unchanged.
+	type plannedWrite struct {
+		name     string
+		fileinfo *config.File
+		content  []byte
+	}
+	planned := make([]plannedWrite, 0, len(files))
+	for _, selected := range files {
+		log.Printf(" - Checking %s\n", selected.Name)
+		fileinfo := cfg.GetFileInfo(selected.Name)
+		if fileinfo == nil {
+			log.Printf("unknown file %s. Skipping...", selected.Name)
+			continue
+		}
+		content, err := c.renderManagedFile(repoName, selected, fileinfo, cfg, repoConfig)
+		if errors.Is(err, errSkipManagedFile) {
+			log.Printf("Skipping %s for %s: %v\n", selected.Name, repoName, err)
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for _, repoRelPath := range managedPaths(fileinfo) {
+			if _, err := confinedPath(repoDir(repoName), repoRelPath); err != nil {
+				return err
+			}
+		}
+		planned = append(planned, plannedWrite{name: selected.Name, fileinfo: fileinfo, content: content})
+	}
+
+	for _, write := range planned {
+		if err := removeConfined(repoDir(repoName), write.fileinfo.AlternatePaths); err != nil {
+			return err
+		}
+		repoPath, err := managedWritePath(repoDir(repoName), write.fileinfo.RepoPath)
+		if err != nil {
+			return err
+		}
+		if err := writeManagedContent(repoPath, write.content); err != nil {
+			return err
+		}
+		if err := stage(write.name, managedPaths(write.fileinfo)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// errSkipManagedFile marks a file that is not written this run, so the
+// existing copy stays as it is; the wrapping error says why.
+var errSkipManagedFile = errors.New("keeping the existing file")
+
+// renderManagedFile renders fileinfo's template for repoName and finishes it
+// with postRenderForFile. When the template inputs cannot be derived, an
+// explicit file renders from the fallback inputs and a default file is
+// skipped with an error wrapping errSkipManagedFile, so an adopted file stays
+// as it is.
+func (c *Content) renderManagedFile(repoName string, selected config.SelectedFile, fileinfo *config.File, cfg *config.Config, repoConfig Config) ([]byte, error) {
+	tmplContent, err := os.ReadFile(path.Join(c.templates, fileinfo.TemplateName))
+	if err != nil {
+		return nil, err
+	}
+
+	templateVars, templateOverrides, err := templateInputsForFile(fileinfo, repoName, cfg, repoConfig)
+	if err != nil {
+		if selected.Origin == config.OriginDefault {
+			return nil, fmt.Errorf("%w: template inputs failed: %w", errSkipManagedFile, err)
+		}
+		log.Printf("Template inputs for %s in %s failed; rendering the full template: %v\n", selected.Name, repoName, err)
+	}
+
+	content, err := ProcessTemplate(tmplContent, templateVars, templateOverrides)
+	if err != nil {
+		return nil, err
+	}
+	return postRenderForFile(repoDir(repoName), selected, fileinfo, content)
+}
+
+// templateInputsForFile keeps template-specific variable derivation out of the
+// managed-file loop. Dependabot flags are detected from the cloned repo, so
+// its overrides are already merged into the returned variables.
+func templateInputsForFile(fileinfo *config.File, repoName string, cfg *config.Config, repoConfig Config) (map[string]string, map[string]string, error) {
+	vars, overrides := cfg.Variables, repoConfig.VarOverrides
+	var err error
+	if fileinfo.TemplateName == dependabotTemplateName {
+		vars, err = DependabotVarsForRepo(repoDir(repoName), cfg.Variables, repoConfig.VarOverrides)
+		overrides = nil
+	}
+	return withAdoptionMarker(vars, fileinfo.AdoptionMarker), overrides, err
+}
+
+// postRenderForFile finishes rendered template output for fileinfo, the
+// counterpart of templateInputsForFile. Only the Dependabot file is changed
+// (see postRenderDependabot); a default that must keep its existing file
+// returns an error wrapping errSkipManagedFile.
+func postRenderForFile(dir string, selected config.SelectedFile, fileinfo *config.File, rendered []byte) ([]byte, error) {
+	if fileinfo.TemplateName != dependabotTemplateName {
+		return rendered, nil
+	}
+	return postRenderDependabot(dir, selected.Origin == config.OriginDefault, fileinfo, rendered)
 }

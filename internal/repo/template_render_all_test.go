@@ -4,10 +4,67 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/chia-network/repo-content-updater/internal/config"
 )
+
+// TestDefaultFileTemplatesContainManagedMarker keeps default templates carrying
+// the generic managed marker and their own adoption marker line.
+func TestDefaultFileTemplatesContainManagedMarker(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(filepath.Join(root, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.DefaultFiles) == 0 {
+		t.Fatal("config.yaml has no default files")
+	}
+	// Only default roots carry adoption markers; companions follow their root.
+	for _, name := range cfg.DefaultFiles {
+		file := cfg.GetFileInfo(name)
+		if file == nil {
+			t.Fatalf("default file %q is missing from files", name)
+		}
+		raw, err := os.ReadFile(filepath.Join(root, "templates", file.TemplateName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.ToLower(string(raw)), managedFileMarker) {
+			t.Errorf("%s (%s) does not contain %q", name, file.TemplateName, managedFileMarker)
+		}
+		rendered, err := ProcessTemplate(raw, withAdoptionMarker(cfg.Variables, file.AdoptionMarker), nil)
+		if err != nil {
+			t.Fatalf("%s (%s) does not render: %v", name, file.TemplateName, err)
+		}
+		markerLine := "# " + file.AdoptionMarker
+		if !containsTrimmedLine(string(rendered), markerLine) {
+			t.Errorf("%s (%s) does not contain adoption marker line %q", name, file.TemplateName, markerLine)
+		}
+	}
+
+	for _, templateName := range []string{"dependabot.yml", "go-dependabot.yml"} {
+		raw, err := os.ReadFile(filepath.Join(root, "templates", templateName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Explicit selections render without ADOPTION_MARKER and must stay unmarked.
+		rendered, err := ProcessTemplate(raw, cfg.Variables, nil)
+		if err != nil {
+			t.Fatalf("%s does not render: %v", templateName, err)
+		}
+		for _, name := range cfg.DefaultFiles {
+			markerLine := "# " + cfg.GetFileInfo(name).AdoptionMarker
+			if containsTrimmedLine(string(rendered), markerLine) {
+				t.Errorf("%s must not contain adoption marker line %q", templateName, markerLine)
+			}
+		}
+	}
+}
 
 // TestAllTemplatesRender syncs formatter mirrors, then renders every file in
 // templates/ through ProcessTemplate with the config.yaml variables. That is
