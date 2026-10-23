@@ -6,6 +6,7 @@ import json
 import os
 import re
 import secrets
+import tempfile
 from pathlib import Path
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
@@ -235,6 +236,14 @@ Keep it concise and actionable.
 """.strip()
 
 
+def _publish_text(path: Path, text: str) -> None:
+    """Replace the entry at path with a new file, so a link there is replaced, not followed."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.replace(tmp, path)
+
+
 def main() -> None:
     base = _base_context(secrets.token_hex(16), _prompt_fields())
     malware_context = f"""
@@ -267,8 +276,8 @@ Do not include intermediate reasoning or self-talk.
 Keep it concise and actionable.
 """.strip()
 
-    Path("cursor_prompt_malware.txt").write_text(malware_prompt, encoding="utf-8")
-    Path("cursor_prompt_compatibility.txt").write_text(compatibility_prompt, encoding="utf-8")
+    _publish_text(Path("cursor_prompt_malware.txt"), malware_prompt)
+    _publish_text(Path("cursor_prompt_compatibility.txt"), compatibility_prompt)
 
 
 if __name__ == "__main__":

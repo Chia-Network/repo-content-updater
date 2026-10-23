@@ -14,6 +14,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -537,9 +538,25 @@ def _has_upstream_link(updates: list[dict]) -> bool:
     return any(_REPO_RE.fullmatch(str(item.get("upstreamRepo") or "")) for item in updates)
 
 
+def publish_text(path: Path, text: str) -> None:
+    """Replace the entry at path with a new file, so a link there is replaced, not followed."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.replace(tmp, path)
+
+
+def remove_entry(path: Path) -> None:
+    """Remove the entry at path; a link is unlinked, never followed."""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
 def _write_report(report: dict, summary: str) -> None:
-    Path("malware_scan_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    Path("malware_scan_summary.md").write_text(summary, encoding="utf-8")
+    publish_text(Path("malware_scan_report.json"), json.dumps(report, indent=2) + "\n")
+    publish_text(Path("malware_scan_summary.md"), summary)
 
 
 def _clone(repo: str, dest: Path) -> bool:
@@ -557,7 +574,7 @@ def _clone(repo: str, dest: Path) -> bool:
 def _scan_one(update: dict, dest: Path, scan_script: Path) -> dict:
     if not scannable(update):
         return uncovered(update, "unresolved")
-    dest = dest.resolve()
+    dest = dest.absolute()
     checkout = dest / ".upstream-dependency"
     if not _clone(str(update["upstreamRepo"]), checkout):
         return uncovered(update, "unresolved")
@@ -640,9 +657,8 @@ def _emit(report: dict, summary: str) -> None:
 
 def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
     target = agent_target(records)
-    kept = Path.cwd() / ".upstream-dependency"
-    if kept.exists():
-        shutil.rmtree(kept)
+    kept = Path(".upstream-dependency")
+    remove_entry(kept)
     if target is None:
         return
     for record, dest in scans:
@@ -665,9 +681,8 @@ def main() -> None:
         _emit(report, summary)
         return
     gaps = manifest_gaps(updates, fetch_token)
-    work = Path(".dcr-dependency-scans").resolve()
-    if work.exists():
-        shutil.rmtree(work)
+    work = Path(".dcr-dependency-scans")
+    remove_entry(work)
     work.mkdir()
     records: list[dict] = list(gaps)
     scans: list[tuple[dict, Path]] = []
