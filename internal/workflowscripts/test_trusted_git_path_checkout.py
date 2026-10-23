@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -93,7 +94,9 @@ class TrustedGitPathCheckoutTest(unittest.TestCase):
             self.assertEqual(push.returncode, 0, push.stderr)
             script.write_text("echo pr-head\n", encoding="utf-8")
 
-            proc = _run_action(work, PATHS_MANIFEST="trusted.paths", CHECKOUT_PATH="", CHECKOUT_PATHS="", CHECKOUT_DEST="")
+            proc = _run_action(
+                work, PATHS_MANIFEST="trusted.paths", CHECKOUT_PATH="", CHECKOUT_PATHS="", CHECKOUT_DEST=""
+            )
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("empty or whitespace-only", proc.stdout + proc.stderr)
             self.assertEqual(script.read_text(encoding="utf-8"), "echo pr-head\n")
@@ -123,6 +126,33 @@ class TrustedGitPathCheckoutTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertEqual(script.read_text(encoding="utf-8"), "echo pr-head\n")
             self.assertEqual((dest / "scripts" / "scan.sh").read_text(encoding="utf-8"), "echo trusted\n")
+
+    def test_symlinked_parent_directory_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            work = _init_origin_checkout(root)
+            script = work / "scripts" / "scan.sh"
+            script.parent.mkdir()
+            script.write_text("echo trusted\n", encoding="utf-8")
+            _git(work, "add", "scripts/scan.sh")
+            self.assertEqual(_git(work, "commit", "-m", "trusted").returncode, 0)
+            self.assertEqual(_git(work, "push", "origin", "main").returncode, 0)
+
+            outside = root / "outside"
+            outside.mkdir()
+            shutil.rmtree(work / "scripts")
+            os.symlink(outside, work / "scripts")
+
+            proc = _run_action(
+                work,
+                PATHS_MANIFEST="",
+                CHECKOUT_PATH="scripts/scan.sh",
+                CHECKOUT_PATHS="",
+                CHECKOUT_DEST="",
+            )
+            self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("symlinked path component", proc.stdout + proc.stderr)
+            self.assertFalse((outside / "scan.sh").exists())
 
 
 if __name__ == "__main__":

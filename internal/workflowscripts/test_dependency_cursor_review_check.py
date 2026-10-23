@@ -84,6 +84,26 @@ class PublishedCheckTest(unittest.TestCase):
         self.assertEqual(shaped["check"], "fail")
         self.assertIs(shaped["complete"], False)
 
+    def test_combine_reads_malicious_line_in_final_message(self) -> None:
+        malware = json.dumps(
+            {
+                "result": "Reviewed the update.\n",
+                "final_message": "Reviewed the update.\n\nMALWARE_REVIEW_VERDICT: malicious\n",
+            }
+        )
+        written = self._run(
+            malware,
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nFine.\\n"}',
+            report={
+                "status": "clean",
+                "scan_conclusive": True,
+                "verdict_token_in_tree": False,
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            },
+        )
+        self.assertIn("**Verdict: malicious**", written["result"])
+        self.assertEqual(written["check"], "fail")
+
     def _enforce(
         self,
         report: object,
@@ -91,6 +111,7 @@ class PublishedCheckTest(unittest.TestCase):
         digest: str | None = None,
         drop_report: bool = False,
         stored: str | None = None,
+        malware: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -101,6 +122,8 @@ class PublishedCheckTest(unittest.TestCase):
             stored_path = root / "cursor_output.json"
             if stored is not None:
                 stored_path.write_text(stored, encoding="utf-8")
+            if malware is not None:
+                (root / "cursor_output_malware.json").write_text(malware, encoding="utf-8")
             env = os.environ.copy()
             env["DCR_SCAN_REPORT"] = str(report_path)
             env["DCR_MALWARE_JSON"] = str(root / "cursor_output_malware.json")
@@ -160,6 +183,24 @@ class PublishedCheckTest(unittest.TestCase):
         mismatch = self._enforce(clean, digest=hashlib.sha256(b"other").hexdigest())
         self.assertNotEqual(mismatch.returncode, 0)
         self.assertIn("digest mismatch", mismatch.stderr)
+
+    def test_enforce_keeps_malicious_final_message_without_official_parse(self) -> None:
+        clean = {
+            "status": "clean",
+            "scan_conclusive": True,
+            "unread": [],
+            "verdict_token_in_tree": False,
+            "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+        }
+        malware = json.dumps(
+            {
+                "result": "Benign summary only.\n",
+                "final_message": "MALWARE_REVIEW_VERDICT: malicious\n\nThe final message escalated.\n",
+            }
+        )
+        failed = self._enforce(clean, malware=malware, stored='{"check": "pass"}')
+        self.assertNotEqual(failed.returncode, 0, msg=failed.stderr or failed.stdout)
+        self.assertIn("did not pass", failed.stderr)
 
 
 if __name__ == "__main__":

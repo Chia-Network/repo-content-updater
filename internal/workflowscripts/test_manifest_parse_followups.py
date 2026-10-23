@@ -59,6 +59,38 @@ class VersionOperatorTest(unittest.TestCase):
         self.assertFalse(version_manifest._reached_listed_version("lodash", "1", "2", listed, mode="spec"))
         self.assertFalse(version_manifest._reached_listed_version("lodash", "1.2", "1.3", listed, mode="spec"))
 
+    def test_caret_and_tilde_ranges_use_npm_membership(self) -> None:
+        for spec, version in (
+            ("^1.0.0", "1.5.0"),
+            ("^0.2.3", "0.2.9"),
+            ("^0.0.3", "0.0.3"),
+            ("^0", "0.9.9"),
+            ("^0.0", "0.0.9"),
+            ("~1.2.3", "1.2.9"),
+            ("~1", "1.9.0"),
+        ):
+            self.assertTrue(version_manifest._in_range(spec, version), (spec, version))
+        for spec, version in (
+            ("^1.0.0", "2.0.0"),
+            ("^0.2.3", "0.3.0"),
+            ("^0.0.3", "0.0.4"),
+            ("^0", "1.0.0"),
+            ("^0.0", "0.1.0"),
+            ("~1.2.3", "1.3.0"),
+            ("~1", "2.0.0"),
+            ("1.5.0", "1.5.0"),
+        ):
+            self.assertFalse(version_manifest._in_range(spec, version), (spec, version))
+
+    def test_shared_range_bump_requires_the_listed_locked_version(self) -> None:
+        listed = {"tool": {("1.0.0", "1.3.0")}}
+        self.assertFalse(
+            version_manifest._reached_listed_version("tool", "^1.0.0", "^1.2.0", listed, locked={"1.2.0"})
+        )
+        self.assertTrue(
+            version_manifest._reached_listed_version("tool", "^1.0.0", "^1.2.0", listed, locked={"1.3.0"})
+        )
+
     def test_dependabot_mode_takes_any_multi_part_version_without_an_operator(self) -> None:
         for token in ("2024.1", "24.2", "1.2.3.4", "v1.2", "V2024.2", "1.2.3-rc.1"):
             self.assertEqual(version_manifest._exact_body(token, mode="dependabot"), token.lstrip("vV"), token)
@@ -386,6 +418,39 @@ class LockWitnessTest(unittest.TestCase):
                 }
                 self.assertEqual(gaps, set() if witnessed else {"package.json"}, descriptor)
 
+    def test_v1_nested_copy_does_not_witness_its_parent_under_a_caret_bump(self) -> None:
+        def lock(nested: str) -> str:
+            return (
+                json.dumps(
+                    {
+                        "lockfileVersion": 1,
+                        "dependencies": {
+                            "foo": {
+                                "version": "1.0.0",
+                                "dependencies": {
+                                    "bar": {
+                                        "version": "2.0.0",
+                                        "dependencies": {"foo": {"version": nested}},
+                                    }
+                                },
+                            }
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        witnesses = npm_manifest._json_witnesses(lock("1.3.0"))
+        self.assertEqual(witnesses.get("foo"), frozenset({"1.0.0"}))
+        self.assertNotIn("1.3.0", witnesses.get("foo", frozenset()))
+        old_spec = json.dumps({"dependencies": {"foo": "^1.0.0"}})
+        new_spec = json.dumps({"dependencies": {"foo": "^1.3.0"}})
+        updates = [_update("foo", "1.0.0", "1.3.0")]
+        self.assertFalse(manifest._lock_covers_listed("json", old_spec, new_spec, updates, {"foo"}, witnesses))
+        self.assertTrue(
+            manifest._lock_covers_listed("json", old_spec, new_spec, updates, {"foo"}, {"foo": frozenset({"1.3.0"})})
+        )
+
 
 class GoAndYarnLockTest(unittest.TestCase):
     def test_go_mod_new_indirect_module_is_a_gap(self) -> None:
@@ -435,6 +500,18 @@ class RenamedManifestTest(unittest.TestCase):
 
 
 class ScannableTest(unittest.TestCase):
+    def test_pep_440_pre_post_and_dev_releases_are_exact(self) -> None:
+        def update(frm: str, to: str) -> dict:
+            return {"packageName": "p", "fromVersion": frm, "toVersion": to, "upstreamRepo": "o/r"}
+
+        for version in ("1.2.3rc1", "1.2.3a1", "1.2.3.post1", "1.2.3.dev0", "1.2.3rc1.post1.dev0"):
+            self.assertEqual(version_manifest._exact_body(version), version)
+            self.assertEqual(version_manifest._exact_body(f"=={version}"), version)
+            self.assertEqual(version_manifest._exact_body(version, mode="spec"), version)
+            self.assertEqual(version_manifest._exact_body(version, mode="dependabot"), version)
+        for frm, to in (("1.2.3rc1", "1.2.3"), ("1.2.3", "1.2.3.post1"), ("1.2.3.dev0", "1.2.3.post1")):
+            self.assertTrue(coverage.scannable(update(frm, to)), (frm, to))
+
     def test_only_exact_versions_with_a_github_repository_are_scannable(self) -> None:
         def update(frm: str, to: str, repo: str = "o/r") -> dict:
             return {"packageName": "p", "fromVersion": frm, "toVersion": to, "upstreamRepo": repo}

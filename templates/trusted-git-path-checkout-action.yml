@@ -68,6 +68,32 @@ runs:
           esac
         }
 
+        # Refuse an existing symlink at the target or any ancestor inside the workspace.
+        reject_symlink_path() {
+          local path="$1"
+          local workspace="${GITHUB_WORKSPACE:-$PWD}"
+          local current
+          case "$path" in
+          /*)
+            case "$path" in
+            "${workspace%/}"/*) ;;
+            *) return 0 ;;
+            esac
+            ;;
+          esac
+          current="$path"
+          while :; do
+            if [ -L "$current" ]; then
+              echo "Trusted checkout refused symlinked path component: ${current}"
+              exit 1
+            fi
+            case "$current" in
+            . | / | "${workspace%/}") break ;;
+            esac
+            current="$(dirname "$current")"
+          done
+        }
+
         checkout_targets=()
         if [ -n "${PATHS_MANIFEST//[[:space:]]/}" ]; then
           manifest_file="$(mktemp)"
@@ -107,21 +133,27 @@ runs:
         fi
 
         if [ -n "${CHECKOUT_DEST//[[:space:]]/}" ]; then
+          for script in "${checkout_targets[@]}"; do
+            reject_symlink_path "${CHECKOUT_DEST}/${script}"
+          done
           mkdir -p "${CHECKOUT_DEST}"
           git archive "FETCH_HEAD" -- "${checkout_targets[@]}" | tar -x -C "${CHECKOUT_DEST}"
           for script in "${checkout_targets[@]}"; do
-            if [ ! -f "${CHECKOUT_DEST}/${script}" ]; then
+            if [ -L "${CHECKOUT_DEST}/${script}" ] || [ ! -f "${CHECKOUT_DEST}/${script}" ]; then
               echo "Trusted file missing on origin/${default_branch} at ${script}."
               exit 1
             fi
           done
         else
           for script in "${checkout_targets[@]}"; do
+            reject_symlink_path "${script}"
+          done
+          for script in "${checkout_targets[@]}"; do
             mkdir -p "$(dirname "${script}")"
           done
           git checkout "FETCH_HEAD" -- "${checkout_targets[@]}"
           for script in "${checkout_targets[@]}"; do
-            if [ ! -f "$script" ]; then
+            if [ -L "$script" ] || [ ! -f "$script" ]; then
               echo "Trusted file missing on origin/${default_branch} at ${script}."
               exit 1
             fi

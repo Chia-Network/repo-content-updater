@@ -162,3 +162,17 @@ test('a release-note table does not invent packages or clear the update', () => 
   );
 });
 
+test('a table row without a package URL uses the Bumps repository', () => {
+  const body = [
+    '| Package | From | To |',
+    '| --- | --- | --- |',
+    '| prefarm-alert | `1.0.0` | `1.0.1` |',
+    '',
+    'Bumps [prefarm-alert](https://github.com/Chia-Network/prefarm-alert) from 1.0.0 to 1.0.1.',
+  ].join('\n');
+  const parsed = parseDependencyUpdate('Bump prefarm-alert from 1.0.0 to 1.0.1', body);
+  assert.deepEqual(
+    parsed.updates.map((item) => [item.packageName, item.fromVersion, item.toVersion, item.upstreamRepo]),
+    [['prefarm-alert', '1.0.0', '1.0.1', 'Chia-Network/prefarm-alert']],
+  );
+});

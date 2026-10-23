@@ -235,7 +235,7 @@ def _enforce_published_check() -> None:
         report,
         _optional_analysis("DCR_MALWARE_JSON"),
         _optional_final_message("DCR_COMPAT_JSON") or _optional_analysis("DCR_COMPAT_JSON"),
-        agent_final_text=_optional_final_message("DCR_MALWARE_JSON"),
+        agent_final_text=_optional_final_message("DCR_MALWARE_JSON") or _optional_analysis("DCR_MALWARE_JSON"),
     )
     if published.get("check") != "pass":
         _fail_closed("Dependency review did not pass.")

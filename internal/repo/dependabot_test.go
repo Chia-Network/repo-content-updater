@@ -356,7 +356,7 @@ func TestDependabotActionsDetection(t *testing.T) {
 		{
 			name:        "action yml matched by glob",
 			files:       []string{filepath.Join(".github", "actions", "build", "action.yml")},
-			directories: `["/", ".github/actions/*"]`,
+			directories: `["/", "/.github/actions/*"]`,
 			want:        "1",
 		},
 		{
@@ -374,7 +374,7 @@ func TestDependabotActionsDetection(t *testing.T) {
 		{
 			name:        "any yaml in non-root globbed directory",
 			files:       []string{filepath.Join(".github", "actions", "build", "ci.yaml")},
-			directories: `[".github/actions/*"]`,
+			directories: `["/.github/actions/*"]`,
 			want:        "1",
 		},
 		{
@@ -386,7 +386,7 @@ func TestDependabotActionsDetection(t *testing.T) {
 		{
 			name:        "no workflow or action manifests",
 			files:       []string{filepath.Join(".github", "workflows", "README.md")},
-			directories: `["/", ".github/actions/*"]`,
+			directories: `["/", "/.github/actions/*"]`,
 			want:        "0",
 		},
 	} {

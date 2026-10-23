@@ -47,14 +47,14 @@ def _take_specs(block: object, parts: dict[str, dict[str, object]], section: str
             continue
         if not isinstance(spec, dict) or not spec.get("version"):
             continue
-        nested = {
-            key: spec.pop(key) for key in ("dependencies", "optionalDependencies") if isinstance(spec.get(key), dict)
-        }
+        # Lockfile v1 nests transitive copies under the parent; each becomes its own package entry.
+        for key in ("dependencies", "optionalDependencies"):
+            nested = spec.pop(key, None)
+            _take_specs(nested, parts, f"{section}>{name}")
+            if nested:
+                spec[key] = nested
         specs.append((section, spec))
-        if nested:
-            block[name] = nested
-        else:
-            del block[name]
+        del block[name]
 
 
 def _json_blocks(blob: dict[str, object], name: str) -> list[tuple[str, str]]:
@@ -146,7 +146,7 @@ def _json_witnesses(text: str) -> dict[str, frozenset[str]]:
         return {}
     found: dict[str, frozenset[str]] = {}
     for name, blob in split[0].items():
-        records = [spec for _section, spec in blob.get("specs") or () if isinstance(spec, dict)]
+        records = [spec for section, spec in blob.get("specs") or () if isinstance(spec, dict) and ">" not in section]
         records += [meta for path, meta in blob.get("locks") or () if path == _LOCK_PREFIX + name]
         versions = {str(record.get("version") or "") for record in records} - {""}
         if versions:

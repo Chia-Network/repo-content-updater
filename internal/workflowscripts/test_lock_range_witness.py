@@ -10,14 +10,14 @@ import dependency_manifest_diff as manifest
 _REG = "https://registry.npmjs.org"
 
 
-def _lock(left_pad: str, dep: str) -> str:
+def _lock(left_pad: str, dep: str, spec: str = "") -> str:
     return json.dumps(
         {
             "name": "app",
             "lockfileVersion": 3,
             "requires": True,
             "packages": {
-                "": {"name": "app", "dependencies": {"left-pad": f"^{left_pad}"}},
+                "": {"name": "app", "dependencies": {"left-pad": spec or f"^{left_pad}"}},
                 "node_modules/left-pad": {
                     "version": left_pad,
                     "resolved": f"{_REG}/left-pad/-/left-pad-{left_pad}.tgz",
@@ -49,6 +49,22 @@ class LockRangeWitnessTest(unittest.TestCase):
         names = manifest._changed_names("json", old, new)
         locked = {"left-pad": frozenset({"1.2.9"})}
         self.assertFalse(manifest._lock_covers_listed("json", old, new, _UPDATES, names, locked))
+
+    def test_from_version_inside_the_old_range_is_explained(self) -> None:
+        old = _lock("1.5.0", "1.0.0", spec="^1.0.0")
+        new = _lock("2.0.0", "1.0.1", spec="^2.0.0")
+        names = manifest._changed_names("json", old, new)
+        updates = [
+            {
+                "packageName": "left-pad",
+                "fromVersion": "1.5.0",
+                "toVersion": "2.0.0",
+                "upstreamRepo": "x/left-pad",
+            }
+        ]
+        self.assertTrue(
+            manifest._lock_covers_listed("json", old, new, updates, names, {"left-pad": frozenset({"2.0.0"})})
+        )
 
 
 if __name__ == "__main__":

@@ -314,7 +314,7 @@ func TestThisRepoDependabotScansTemplates(t *testing.T) {
 	if strings.Join(fromOverride, "\n") != strings.Join(fromRendered, "\n") {
 		t.Fatalf("override %q renders differently from .github/dependabot.yml %q", fromOverride, fromRendered)
 	}
-	if strings.Join(fromRendered, "\n") != "/\n.github/actions/*\n/templates" {
+	if strings.Join(fromRendered, "\n") != "/\n/.github/actions/*\n/templates" {
 		t.Fatalf("directories = %#v", fromRendered)
 	}
 }
@@ -351,7 +351,7 @@ func templateRenderCases(t *testing.T) []templateRenderCase {
 		return out
 	}
 	custom := clone(base)
-	custom["DEPENDABOT_ACTIONS_DIRECTORIES"] = `["/", ".github/actions/*", "/templates"]`
+	custom["DEPENDABOT_ACTIONS_DIRECTORIES"] = `["/", "/.github/actions/*", "/templates"]`
 	custom["DEPENDABOT_GOMOD_PULL_REQUEST_LIMIT"] = "3"
 	custom["DEPENDABOT_GOMOD_REVIEWERS"] = `["alice"]`
 	custom["DEPENDENCY_REVIEW_ALLOW_DEPENDENCIES_LICENSES"] = "pkg:pypi/example"
@@ -552,4 +552,23 @@ func actionUsesLines(src string) []string {
 		found = append(found, uses)
 	}
 	return found
+}
+
+func TestDependabotActionDirectoriesAreRepositoryRooted(t *testing.T) {
+	snapshots, err := filepath.Glob(filepath.Join("testdata", "render", "dependabot.yml.*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshots = append(snapshots, filepath.Join("..", "..", ".github", "dependabot.yml"))
+	for _, path := range snapshots {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, dir := range githubActionsDirectories(t, raw) {
+			if !strings.HasPrefix(dir, "/") {
+				t.Errorf("%s: github-actions directory %q must start with /", path, dir)
+			}
+		}
+	}
 }
