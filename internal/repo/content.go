@@ -42,6 +42,16 @@ func NewContent(templates, githubOrg, committerName, committerEmail, reviewTeam,
 	}, nil
 }
 
+func (c *Content) repoMetadata(repoName string) (*github.Repository, error) {
+	repo, _, err := ghDo(func() (*github.Repository, *github.Response, error) {
+		return c.githubClient.Repositories.Get(context.TODO(), c.githubOrg, repoName)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error getting repo info for %s: %w", repoName, err)
+	}
+	return repo, nil
+}
+
 func repoDir(repoName string) string {
 	return fmt.Sprintf("clones/%s", repoName)
 }
