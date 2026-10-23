@@ -216,10 +216,11 @@ jobs:
               reviewMarkerFromPatchId,
               skipApplies,
             } = require(`${process.env.RUNNER_TEMP}/trusted-dcr-scripts/dependency-cursor-review-dependabot-context.js`);
+            const patchId = process.env.PATCH_ID || '';
             const resolved = process.env.RESOLVED_TO || '';
             const reviewed = (process.env.REVIEWED_SHAS || '').split(',').filter(Boolean);
-            core.setOutput('review_marker', reviewMarkerFromPatchId(process.env.PATCH_ID || '', resolved));
-            core.setOutput('already_reviewed', skipApplies(reviewed, resolved) ? 'true' : 'false');
+            core.setOutput('review_marker', reviewMarkerFromPatchId(patchId, resolved));
+            core.setOutput('already_reviewed', skipApplies(reviewed, patchId, resolved) ? 'true' : 'false');
 
   dependency-review-agent:
     needs: dependency-review-scan

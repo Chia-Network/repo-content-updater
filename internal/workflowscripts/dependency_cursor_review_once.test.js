@@ -385,8 +385,14 @@ test('the same diff skips and a different diff or an old marker does not', async
     });
     const reviewedSha = 'a'.repeat(40);
     assert.equal(same.core.outputs.reviewed_shas, reviewedSha);
-    assert.equal(skipApplies(same.core.outputs.reviewed_shas.split(','), reviewedSha), true);
-    assert.equal(skipApplies(same.core.outputs.reviewed_shas.split(','), 'b'.repeat(40)), false);
+    assert.equal(
+      skipApplies(same.core.outputs.reviewed_shas.split(','), same.core.outputs.patch_id, reviewedSha),
+      true,
+    );
+    assert.equal(
+      skipApplies(same.core.outputs.reviewed_shas.split(','), same.core.outputs.patch_id, 'b'.repeat(40)),
+      false,
+    );
 
     const changed = await resolve('pull_request', pr, {
       commits: [dependabotCommit()],
@@ -430,7 +436,7 @@ test('the same diff skips and a different diff or an old marker does not', async
       commentsFor: () => [botComment(patchOnly)],
     });
     assert.equal(unmarked.core.outputs.reviewed_shas, '');
-    assert.equal(skipApplies([], 'a'.repeat(40)), false);
+    assert.equal(skipApplies([], patchIdFromDiff(diff), 'a'.repeat(40)), false);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
@@ -463,8 +469,8 @@ test('a rebased pull request with a moved tag is not already reviewed', async ()
     });
     const reviewed = core.outputs.reviewed_shas.split(',').filter(Boolean);
     assert.deepEqual(reviewed, [previous]);
-    assert.equal(skipApplies(reviewed, previous), true);
-    assert.equal(skipApplies(reviewed, moved), false);
+    assert.equal(skipApplies(reviewed, core.outputs.patch_id, previous), true);
+    assert.equal(skipApplies(reviewed, core.outputs.patch_id, moved), false);
     assert.equal(reviewedShasForPatch([{ user: { login: 'mallory' }, body: marker }], patchIdFromDiff(diff)).length, 0);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });

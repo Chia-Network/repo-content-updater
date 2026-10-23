@@ -47,7 +47,6 @@ def uncovered(update: dict, reason: str) -> dict:
     name = _label(update)
     return {
         "status": "not_scanned",
-        "warn_only": True,
         "scan_conclusive": False,
         "not_scanned_reason": reason,
         "verdict_token_in_tree": False,
@@ -187,6 +186,12 @@ def _unread_items(records: list[dict]) -> list[dict]:
     return found
 
 
+def _warn_only(records: list[dict]) -> bool:
+    """The MALWARE_WARN_ONLY policy each scan recorded. Strict when no scan ran or the records disagree."""
+    recorded = [record["warn_only"] for record in records if "warn_only" in record]
+    return bool(recorded) and all(value is True for value in recorded)
+
+
 def aggregate(records: list[dict]) -> dict:
     """Covered only when every record was scanned conclusively."""
     target = agent_target(records)
@@ -214,14 +219,10 @@ def aggregate(records: list[dict]) -> dict:
             changed.append(f"{name}:{path}")
 
     conclusive = all(_covered(record) for record in records)
-    any_findings = any(findings.values())
-    warn_only = all(record.get("warn_only") is not False for record in records)
     warned = any(record.get("status") == "warn" or record.get("verdict_token_in_tree") is True for record in records)
     if any(record.get("status") == "fail" for record in records):
         status = "fail"
-    elif any_findings:
-        status = "warn" if warn_only else "fail"
-    elif warned:
+    elif warned or any(findings.values()):
         status = "warn"
     elif not conclusive:
         status = "not_scanned"
@@ -232,7 +233,7 @@ def aggregate(records: list[dict]) -> dict:
     return _stamp(
         {
             "status": status,
-            "warn_only": warn_only,
+            "warn_only": _warn_only(records),
             "scan_conclusive": conclusive,
             "not_scanned_reason": "" if conclusive else "incomplete_coverage",
             "verdict_token_in_tree": any(record.get("verdict_token_in_tree") is True for record in records),

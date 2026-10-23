@@ -325,8 +325,14 @@ function reviewedShasForPatch(comments, patchId) {
   return shas;
 }
 
-function skipApplies(reviewedShas, resolvedSha) {
-  if (typeof resolvedSha !== 'string' || !/^[0-9a-f]{40}$/.test(resolvedSha)) return false;
+/**
+ * The one skip rule, for single and grouped pull requests alike. reviewedShas
+ * come from reviewedShasForPatch(comments, patchId). Skip only when this
+ * patch-id and this resolved commit form a valid marker and a bot marker for
+ * that patch-id names that commit. Anything else reviews again.
+ */
+function skipApplies(reviewedShas, patchId, resolvedSha) {
+  if (!reviewMarkerFromPatchId(patchId, resolvedSha)) return false;
   return Array.isArray(reviewedShas) && reviewedShas.includes(resolvedSha);
 }
 
