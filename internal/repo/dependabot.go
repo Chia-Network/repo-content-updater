@@ -139,13 +139,24 @@ var dependabotEcosystems = []dependabotEcosystem{
 
 var errNoDependabotEcosystems = errors.New("no Dependabot ecosystems detected")
 
+// templateVarsFor merges the variables of the template file templateName. The
+// Dependabot template renders directories as lists, so a bare directory pin
+// becomes a one-item list there (see withDirectoryLists).
+func templateVarsFor(templateName string, defaultVars map[string]string, overrides map[string]string) map[string]string {
+	data := mergeTemplateVars(defaultVars, overrides)
+	if templateName == dependabotTemplateName {
+		data = withDirectoryLists(data)
+	}
+	return data
+}
+
 // DependabotVarsForRepo merges the template variables and adds Dependabot
 // ecosystem flags from manifests in the target repo. If detection fails, the
 // merged variables without flags are returned with the error, so callers fall
 // back to the full historical template output. Directories of discovered
 // ecosystems come from the tree unless overrides pins them.
 func DependabotVarsForRepo(repoDir string, defaultVars map[string]string, overrides map[string]string) (map[string]string, error) {
-	data := mergeTemplateVars(defaultVars, overrides)
+	data := templateVarsFor(dependabotTemplateName, defaultVars, overrides)
 	detectInput := copyTemplateVars(data)
 	for _, ecosystem := range dependabotEcosystems {
 		if _, pinned := overrides[ecosystem.directoriesVar]; ecosystem.discover && !pinned {
@@ -186,7 +197,6 @@ func DependabotEcosystemVars(repoDir string, vars map[string]string) (map[string
 		return nil, fmt.Errorf("inspect repository %s: not a directory", repoDir)
 	}
 
-	vars = copyTemplateVars(vars)
 	out := copyTemplateVars(vars)
 	var unpinned []dependabotEcosystem
 	for _, ecosystem := range dependabotEcosystems {

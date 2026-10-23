@@ -24,14 +24,15 @@ _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
 def scannable(update: dict) -> bool:
     """An explicit GitHub repository and an exact destination version. An empty from stays inconclusive.
 
-    A range, wildcard or tag name could resolve to a tree other than the one installed.
+    Both versions are read in the "dependabot" mode: a range, wildcard, tag
+    name, operator or bare major could resolve to a tree other than the one installed.
     """
     repo = str(update.get("upstreamRepo") or "")
     from_version = str(update.get("fromVersion") or "")
     to_version = str(update.get("toVersion") or "")
-    if not _REPO_RE.fullmatch(repo) or not _versions._exact_body(to_version):
+    if not _REPO_RE.fullmatch(repo) or not _versions._exact_body(to_version, mode="dependabot"):
         return False
-    return not from_version or bool(_versions._exact_body(from_version))
+    return not from_version or bool(_versions._exact_body(from_version, mode="dependabot"))
 
 
 def _label(update: dict) -> str:
@@ -301,8 +302,8 @@ _MANIFEST_GRAMMARS = (
 )
 
 
-def _load_manifest_diff():
-    """Load the manifest grammar beside this file under python3 -I.
+def _load_manifest_modules():
+    """Load the manifest grammars beside this file under python3 -I; return the diff and version modules.
 
     The cold-start spine is the only bootstrap. It path-filters the sibling,
     so this script never imports it and never puts the scripts directory on sys.path.
@@ -311,15 +312,14 @@ def _load_manifest_diff():
     cold = runpy.run_path(str(script_dir / "trusted_formatter_loader_cold_start.py"))
     cold["resolve_loader_for_dir"](script_dir)
     scrub = sys.modules["scripts_dir_path_scrub"]
-    for name in _MANIFEST_GRAMMARS:
-        scrub.bootstrap_module_from_scripts_dir(script_dir, f"{name}.py", name)
-    return scrub.bootstrap_module_from_scripts_dir(
-        script_dir, "dependency_manifest_diff.py", "dependency_manifest_diff"
-    )
+    loaded = {
+        name: scrub.bootstrap_module_from_scripts_dir(script_dir, f"{name}.py", name)
+        for name in (*_MANIFEST_GRAMMARS, "dependency_manifest_diff")
+    }
+    return loaded["dependency_manifest_diff"], loaded["dependency_manifest_versions"]
 
 
-_diff = _load_manifest_diff()
-_versions = sys.modules["dependency_manifest_versions"]
+_diff, _versions = _load_manifest_modules()
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
 
 
@@ -391,18 +391,16 @@ def _fetch_commit(sha: str, token: str = "") -> str:
     return _verify_commit(sha)
 
 
-def _base_commit(token: str = "") -> str | None:
-    """Resolved base commit, '' when a named base cannot be read, None when unnamed."""
+def _base_commit(token: str = "") -> str:
+    """Resolved base commit, or '' when no base is named or the named one cannot be read."""
     if not Path(".git").exists():
-        return None
+        return ""
     sha = os.environ.get("PR_BASE_SHA", "").strip()
     if sha:
         if not re.fullmatch(r"[0-9a-fA-F]{7,64}", sha):
             return ""
         return _fetch_commit(sha, token)
     ref = os.environ.get("GITHUB_BASE_REF", "").strip()
-    if not ref:
-        return None
     if not _BASE_REF_RE.fullmatch(ref):
         return ""
     return _verify_commit(ref) or _verify_commit(f"origin/{ref}") or ""
@@ -436,18 +434,20 @@ def _changed_paths(base: str) -> list[tuple[str, str, str]] | None:
 _RANGE_WITNESS_LOCKS = (("package-lock.json", "json"), ("npm-shrinkwrap.json", "json"), ("yarn.lock", "yarn"))
 
 
-def _head_locked_versions(manifest_path: str) -> dict[str, frozenset[str]]:
-    """Versions the npm or Yarn locks beside manifest_path in HEAD resolve each package to.
+def _head_locked_versions(path: str) -> dict[str, frozenset[str]]:
+    """Versions the npm or Yarn locks beside a package.json or lockfile path in HEAD resolve each spec to.
 
-    Only the top-level `node_modules/<name>` copy witnesses a range, so a
-    nested or workspace bump is never confirmed.
+    A lockfile is beside itself, so the root specs a lock records are
+    witnessed by that lock in HEAD. Only the top-level `node_modules/<name>`
+    copy or the Yarn stanza for the exact spec witnesses a range, so a nested,
+    workspace or other-range copy never confirms a bump.
     """
-    if Path(manifest_path).name != "package.json":
+    if Path(path).name not in {"package.json", *_diff.TRANSITIVE_LOCK_NAMES}:
         return {}
     found: dict[str, frozenset[str]] = {}
     for lock_name, kind in _RANGE_WITNESS_LOCKS:
-        lock_path = str(Path(manifest_path).with_name(lock_name))
-        for name, versions in _diff._locked_versions(kind, _git_text("HEAD", lock_path), top_level=True).items():
+        lock_path = str(Path(path).with_name(lock_name))
+        for name, versions in _diff._locked_versions(kind, _git_text("HEAD", lock_path)).items():
             found[name] = found.get(name, frozenset()) | versions
     return found
 
@@ -455,26 +455,26 @@ def _head_locked_versions(manifest_path: str) -> dict[str, frozenset[str]]:
 def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
     """Direct manifest bumps missing from the parsed list.
 
-    An unreadable base ref, when one was named, is itself unresolved; no
-    named base ref is no gap at all. An entry is explained only when its
-    package moved to the listed version. Anything else in the file stays
-    unresolved under the path. A listed package with that path as its name
-    does not hide the path. A dependency with more than one unexplained entry
-    is named as well.
+    A base that is unnamed or unreadable is itself unresolved: the workflow
+    only runs this for a pull request, so a missing base never means "no
+    changes". An entry is explained only when its package moved to the
+    listed version. Anything else in the file stays unresolved under the
+    path. A listed package with that path as its name does not hide the
+    path. A dependency with more than one unexplained entry is named as well.
 
     An opaque lockfile, a deleted path, and any changed path this grammar does
     not parse are unresolved under their path; a changed path that is a
-    manifest we have no parser for (a workflow, Dockerfile, Cargo.toml, *.tf
-    or Package.swift) is reported as `unparsed_manifest`. A shared `^` or `~`
-    package.json bump is explained only when a top-level lockfile beside it in
-    HEAD resolves the package to the listed version. Unlisted names in a npm
+    manifest we have no parser for (see _diff._unparsed_manifest: a workflow,
+    composite action, Dockerfile, Cargo, Swift, Terraform or NuGet file) is
+    reported as `unparsed_manifest`. A shared `^` or `~`
+    package.json bump is explained only when a lockfile beside it in HEAD
+    resolves the new spec to the listed version: the top-level npm copy, or
+    the Yarn stanza for that exact descriptor. Unlisted names in a npm
     or Yarn lock are transitive residue when every listed name in that lock
     moved to its listed version and each unlisted entry was bumped, added or
     removed as a registry tarball.
     """
     base = _base_commit(token)
-    if base is None:
-        return []
     if not base:
         return [uncovered({"packageName": "manifest-diff"}, "unresolved")]
     listed = {str(item.get("packageName") or "").strip() for item in updates}
@@ -490,16 +490,14 @@ def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
                 gaps.append(uncovered({"packageName": label}, "unresolved"))
             continue
         if not kind or kind == "opaque":
+            reason = "unparsed_manifest" if _diff._unparsed_manifest(path) else "unresolved"
             for label in dict.fromkeys((old_path, path)):
-                gaps.append(uncovered({"packageName": label}, "unparsed_manifest"))
+                gaps.append(uncovered({"packageName": label}, reason))
             continue
         before = _git_text(base, old_path)
         after = _git_text("HEAD", path)
         names = _diff._changed_names(kind, before, after)
         locked = _head_locked_versions(path)
-        if Path(path).name in _diff.TRANSITIVE_LOCK_NAMES:
-            for name, versions in _diff._locked_versions(kind, after).items():
-                locked[name] = locked.get(name, frozenset()) | versions
         explained = names is not None and _diff._entries_explain(kind, before, after, updates, locked)
         file_unresolved = names is None or (before != after and not explained)
         if (

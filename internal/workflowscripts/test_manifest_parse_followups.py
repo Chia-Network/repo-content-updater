@@ -49,14 +49,21 @@ class VersionOperatorTest(unittest.TestCase):
         self.assertEqual(version_manifest._exact_body("v1.2.3-xyz"), "1.2.3-xyz")
         self.assertEqual(version_manifest._exact_body("1.2.3+build.x"), "1.2.3+build.x")
 
-    def test_npm_bare_major_and_minor_are_not_exact(self) -> None:
-        for token in ("1", "1.2", "v1", "v1.2", "1.2.3.4"):
-            self.assertEqual(version_manifest._exact_body(token, npm=True), "", token)
-        self.assertEqual(version_manifest._exact_body("1.2.3", npm=True), "1.2.3")
-        self.assertEqual(version_manifest._exact_body("1.2.3-rc.1", npm=True), "1.2.3-rc.1")
+    def test_spec_mode_rejects_bare_major_minor_and_python_operators(self) -> None:
+        for token in ("1", "1.2", "v1", "v1.2", "1.2.3.4", "==1.2.3", "===1.2.3", "vv1.2.3"):
+            self.assertEqual(version_manifest._exact_body(token, mode="spec"), "", token)
+        self.assertEqual(version_manifest._exact_body("1.2.3", mode="spec"), "1.2.3")
+        self.assertEqual(version_manifest._exact_body("V1.2.3", mode="spec"), "1.2.3")
+        self.assertEqual(version_manifest._exact_body("1.2.3-rc.1", mode="spec"), "1.2.3-rc.1")
         listed = {"lodash": {("1.0.0", "2.0.0")}}
-        self.assertFalse(version_manifest._reached_listed_version("lodash", "1", "2", listed, npm=True))
-        self.assertFalse(version_manifest._reached_listed_version("lodash", "1.2", "1.3", listed, npm=True))
+        self.assertFalse(version_manifest._reached_listed_version("lodash", "1", "2", listed, mode="spec"))
+        self.assertFalse(version_manifest._reached_listed_version("lodash", "1.2", "1.3", listed, mode="spec"))
+
+    def test_dependabot_mode_takes_any_multi_part_version_without_an_operator(self) -> None:
+        for token in ("2024.1", "24.2", "1.2.3.4", "v1.2", "V2024.2", "1.2.3-rc.1"):
+            self.assertEqual(version_manifest._exact_body(token, mode="dependabot"), token.lstrip("vV"), token)
+        for token in ("1", "v4", "==1.2.3", "===1.2.3", "^1.2.3", "~1.2.3", ">=1.2", "~=1.2", "1.x", "1.X", "1.*", "*"):
+            self.assertEqual(version_manifest._exact_body(token, mode="dependabot"), "", token)
 
 
 class PythonManifestTest(unittest.TestCase):
@@ -159,11 +166,14 @@ class ChangedPathGapTest(unittest.TestCase):
             gaps = {item["package_name"] for item in _gaps_at(root, base, [_update("requests", "2.31.0", "2.32.0")])}
             self.assertEqual(gaps, {"poetry.lock", ".github/workflows/ci.yml"})
 
-    def test_unnamed_base_has_no_gaps(self) -> None:
+    def test_unnamed_base_is_an_unresolved_gap(self) -> None:
         with TemporaryDirectory() as tmp:
             root, _base = self._repo(tmp)
             gaps = _gaps_at(root, None, [_update("requests", "2.31.0", "2.32.0")])
-            self.assertEqual(gaps, [])
+            self.assertEqual(
+                [(item["package_name"], item["not_scanned_reason"]) for item in gaps],
+                [("manifest-diff", "unresolved")],
+            )
 
     def test_unreadable_named_base_is_a_gap(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -211,6 +221,59 @@ class ChangedPathGapTest(unittest.TestCase):
             self.assertEqual(
                 [(item["package_name"], item["not_scanned_reason"]) for item in gaps],
                 [(".github/workflows/ci.yml", "unparsed_manifest")],
+            )
+
+    def test_unparsed_manifest_recognizes_nuget_actions_swift_and_terraform_locks(self) -> None:
+        for path in (
+            "src/App.csproj",
+            "packages.config",
+            "Directory.Packages.props",
+            "action.yml",
+            ".github/actions/setup/action.yaml",
+            "Package.resolved",
+            "infra/.terraform.lock.hcl",
+        ):
+            self.assertTrue(manifest._unparsed_manifest(path), path)
+        for path in ("README.md", "action.json", "src/App.cs", "config.yml"):
+            self.assertFalse(manifest._unparsed_manifest(path), path)
+
+    def test_only_real_manifests_are_unparsed_everything_else_unresolved(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            _git_repo(root)
+            for path in (
+                "README.md",
+                "src/lib.go",
+                "poetry.lock",
+                "Cargo.toml",
+                "Dockerfile",
+                "main.tf",
+                "Package.swift",
+            ):
+                _commit(root, path, f"base {path}\n", f"base {path}")
+            base = _git(root, "rev-parse", "HEAD")
+            for path in (
+                "README.md",
+                "src/lib.go",
+                "poetry.lock",
+                "Cargo.toml",
+                "Dockerfile",
+                "main.tf",
+                "Package.swift",
+            ):
+                _commit(root, path, f"changed {path}\n", f"change {path}")
+            gaps = {item["package_name"]: item["not_scanned_reason"] for item in _gaps_at(root, base, [])}
+            self.assertEqual(
+                gaps,
+                {
+                    "README.md": "unresolved",
+                    "src/lib.go": "unresolved",
+                    "poetry.lock": "unresolved",
+                    "Cargo.toml": "unparsed_manifest",
+                    "Dockerfile": "unparsed_manifest",
+                    "main.tf": "unparsed_manifest",
+                    "Package.swift": "unparsed_manifest",
+                },
             )
 
     def test_type_change_and_rename_off_a_manifest_are_gaps(self) -> None:
@@ -269,33 +332,59 @@ class PackageJsonSectionsTest(unittest.TestCase):
         self.assertEqual(manifest._multi_entry_names("json", old, new, []), {"left-pad"})
 
 
-class LockWitnessTest(unittest.TestCase):
-    def test_top_level_lock_name_rejects_nested_and_workspace_copies(self) -> None:
-        self.assertEqual(npm_manifest._top_level_lock_name("node_modules/lodash"), "lodash")
-        self.assertEqual(npm_manifest._top_level_lock_name("node_modules/@scope/pkg"), "@scope/pkg")
-        self.assertEqual(npm_manifest._top_level_lock_name("node_modules/a/node_modules/b"), "")
-        self.assertEqual(npm_manifest._top_level_lock_name("packages/gui/node_modules/b"), "")
-        self.assertEqual(npm_manifest._top_level_lock_name(""), "")
+def _npm_lock(spec: str, top: str, nested: str) -> str:
+    def meta(version: str) -> dict:
+        return {"version": version, "resolved": f"https://registry.npmjs.org/lodash/-/lodash-{version}.tgz"}
 
-    def test_locked_versions_top_level_filters_nested_copies(self) -> None:
-        lock = json.dumps(
-            {
-                "lockfileVersion": 3,
-                "packages": {
-                    "": {"name": "root", "dependencies": {"lodash": "^4.0.0"}},
-                    "node_modules/lodash": {"version": "4.17.21"},
-                    "node_modules/a/node_modules/lodash": {"version": "3.0.0"},
-                },
-            }
-        )
+    packages = {
+        "": {"name": "root", "dependencies": {"lodash": spec}},
+        "node_modules/lodash": meta(top),
+        "node_modules/a/node_modules/lodash": meta(nested),
+    }
+    return json.dumps({"lockfileVersion": 3, "packages": packages}) + "\n"
+
+
+def _yarn_stanza(descriptor: str, version: str) -> str:
+    return f'{descriptor}:\n  version "{version}"\n'
+
+
+class LockWitnessTest(unittest.TestCase):
+    def test_locked_versions_keep_only_the_top_level_npm_copy(self) -> None:
+        lock = _npm_lock("^4.0.0", "4.17.21", "3.0.0")
+        self.assertEqual(manifest._locked_versions("json", lock), {"lodash": frozenset({"4.17.21"})})
+        legacy = json.dumps({"lockfileVersion": 1, "dependencies": {"lodash": {"version": "4.17.21"}}})
+        self.assertEqual(manifest._locked_versions("json", legacy), {"lodash": frozenset({"4.17.21"})})
+
+    def test_locked_versions_key_yarn_stanzas_by_descriptor(self) -> None:
+        lock = '"lodash@^4.0.0", lodash@^4.17.0:\n  version "4.17.21"\n'
         self.assertEqual(
-            manifest._locked_versions("json", lock, top_level=True),
-            {"lodash": frozenset({"4.17.21"})},
+            manifest._locked_versions("yarn", lock),
+            {"lodash@^4.0.0": frozenset({"4.17.21"}), "lodash@^4.17.0": frozenset({"4.17.21"})},
         )
-        self.assertEqual(
-            manifest._locked_versions("json", lock),
-            {"lodash": frozenset({"4.17.21", "3.0.0"})},
-        )
+
+    def test_nested_copy_does_not_witness_a_changed_lockfile(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            _git_repo(root)
+            _commit(root, "package-lock.json", _npm_lock("^4.17.20", "4.17.20", "4.17.20"), "base")
+            base = _git(root, "rev-parse", "HEAD")
+            _commit(root, "package-lock.json", _npm_lock("^4.17.21", "4.17.20", "4.17.21"), "nested only")
+            gaps = _gaps_at(root, base, [_update("lodash", "4.17.20", "4.17.21")])
+            self.assertIn("package-lock.json", {item["package_name"] for item in gaps}, msg=gaps)
+
+    def test_only_the_new_spec_yarn_stanza_witnesses_a_range_bump(self) -> None:
+        for descriptor, witnessed in (("lodash@^4.0.0", False), ("lodash@^4.17.21", True)):
+            with TemporaryDirectory() as tmp:
+                root = Path(tmp) / "repo"
+                _git_repo(root)
+                _commit(root, "yarn.lock", _yarn_stanza(descriptor, "4.17.21"), "lock")
+                _commit(root, "package.json", json.dumps({"dependencies": {"lodash": "^4.17.20"}}), "base")
+                base = _git(root, "rev-parse", "HEAD")
+                _commit(root, "package.json", json.dumps({"dependencies": {"lodash": "^4.17.21"}}), "caret bump")
+                gaps = {
+                    item["package_name"] for item in _gaps_at(root, base, [_update("lodash", "4.17.20", "4.17.21")])
+                }
+                self.assertEqual(gaps, set() if witnessed else {"package.json"}, descriptor)
 
 
 class GoAndYarnLockTest(unittest.TestCase):
@@ -350,24 +439,32 @@ class ScannableTest(unittest.TestCase):
         def update(frm: str, to: str, repo: str = "o/r") -> dict:
             return {"packageName": "p", "fromVersion": frm, "toVersion": to, "upstreamRepo": repo}
 
-        for frm, to in (("1.0", "1.1"), ("v1.0", "V1.1"), ("", "1.1"), ("1.0", "1.2.3-xyz")):
+        for frm, to in (
+            ("1.2.3", "1.2.4"),
+            ("v1.2.3", "V1.2.4"),
+            ("", "1.2.4"),
+            ("1.2.3", "1.2.4-rc.1"),
+            ("2024.1", "2024.2"),
+            ("24.1", "24.2"),
+            ("1.2.3.4", "1.2.3.5"),
+        ):
             self.assertTrue(coverage.scannable(update(frm, to)), (frm, to))
         for frm, to in (
-            (">=1.0", "1.1"),
-            ("1.0", ">=1.1"),
-            ("1.0", "^1.1"),
-            ("1.0", "~=1.1"),
-            ("1.0", "1.*"),
-            ("1.0", "1.x"),
-            ("1.0", "1.2.x"),
-            ("1.0", "latest"),
+            (">=1.2.3", "1.2.4"),
+            ("1.2.3", ">=1.2.4"),
+            ("1.2.3", "^1.2.4"),
+            ("1.2.3", "~=1.2.4"),
+            ("1.2.3", "1.*"),
+            ("1.2.3", "1.x"),
+            ("1.2.3", "1.2.x"),
+            ("1.2.3", "latest"),
+            ("1", "1.2.4"),
+            ("v4", "v5"),
+            ("1.2.3", "==1.2.4"),
+            ("1.2.3", "===1.2.4"),
         ):
             self.assertFalse(coverage.scannable(update(frm, to)), (frm, to))
-        self.assertFalse(coverage.scannable(update("1.0", "1.1", "")))
-
-    def test_scannable_uses_the_canonical_exact_version(self) -> None:
-        # `==` is stripped by the manifest grammar's one exact-pin definition.
-        self.assertTrue(coverage.scannable({"packageName": "p", "fromVersion": "1.0", "toVersion": "==1.2.3", "upstreamRepo": "o/r"}))
+        self.assertFalse(coverage.scannable(update("1.2.3", "1.2.4", "")))
 
 
 if __name__ == "__main__":

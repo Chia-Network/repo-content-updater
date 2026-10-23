@@ -16,16 +16,23 @@ from dependency_manifest_go import _go_mod_parts, _go_sum_explained, _go_sum_par
 from dependency_manifest_npm import (
     _fold_residue,
     _json_parts,
+    _json_witnesses,
     _payloads_match,
     _registry_block,
-    _top_level_lock_name,
     _yarn_parts,
+    _yarn_witnesses,
 )
 from dependency_manifest_python import _PYTHON_MANIFESTS, _req_parts, _requirement_name
 from dependency_manifest_versions import _reached_listed_version
 
 # npm and Yarn locks whose unlisted names may be registry tarball residue once every listed bump is explained.
 TRANSITIVE_LOCK_NAMES = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock"})
+# Versions a lock resolves a dependency to, keyed by package name for npm and
+# by `name@range` descriptor for Yarn. The forms differ because the locks do:
+# a lockfile v1 records no root spec, so npm can only witness the top-level
+# copy of a name, while Yarn records one stanza per descriptor. They never
+# collide: an npm name has no `@` past its scope, a descriptor always does.
+Witnesses = dict[str, frozenset[str]]
 _OPAQUE_LOCKS = {
     "pnpm-lock.yaml",
     "Cargo.lock",
@@ -38,7 +45,7 @@ _OPAQUE_LOCKS = {
 
 def _manifest_kind(path: str) -> str:
     name = Path(path).name
-    lowered = "/" + path.replace("\\", "/")
+    posix = "/" + path.replace("\\", "/")
     if name in {"package.json", "package-lock.json", "npm-shrinkwrap.json"}:
         return "json"
     if name == "go.mod":
@@ -51,9 +58,43 @@ def _manifest_kind(path: str) -> str:
         return "opaque"
     if name in _PYTHON_MANIFESTS:
         return "requirements"
-    if (name.startswith("requirements") or "/requirements/" in lowered) and name.endswith(".txt"):
+    if (name.startswith("requirements") or "/requirements/" in posix) and name.endswith(".txt"):
         return "requirements"
     return ""
+
+
+# Manifests and locks Dependabot bumps that this grammar has no parser for:
+# Cargo, Docker, Swift (Package.swift, Package.resolved), Terraform, NuGet and
+# composite actions (action.yml, action.yaml).
+_UNPARSED_MANIFEST_NAMES = frozenset(
+    {
+        "Cargo.toml",
+        "Dockerfile",
+        "Package.swift",
+        "Package.resolved",
+        ".terraform.lock.hcl",
+        "packages.config",
+        "Directory.Packages.props",
+        "action.yml",
+        "action.yaml",
+    }
+)
+_UNPARSED_MANIFEST_SUFFIXES = (".tf", ".csproj", ".fsproj", ".vbproj")
+
+
+def _unparsed_manifest(path: str) -> bool:
+    """True when `path` is a manifest Dependabot bumps but this grammar has no parser for.
+
+    A workflow, a composite action, a Dockerfile, Cargo.toml, a Swift package
+    or its Package.resolved, *.tf or .terraform.lock.hcl, and a NuGet project,
+    packages.config or Directory.Packages.props are real manifests; anything
+    else this grammar does not parse is not a manifest.
+    """
+    name = Path(path).name
+    if name in _UNPARSED_MANIFEST_NAMES or name.startswith("Dockerfile.") or name.endswith(_UNPARSED_MANIFEST_SUFFIXES):
+        return True
+    posix = "/" + path.replace("\\", "/")
+    return "/.github/workflows/" in posix and name.endswith((".yml", ".yaml"))
 
 
 def _canonical_package_name(kind: str, name: str) -> str:
@@ -115,9 +156,9 @@ def _blocks_explain(
     old_blocks: list[tuple[str, str]],
     new_blocks: list[tuple[str, str]],
     listed: dict[str, set[tuple[str, str]]],
+    locked: Witnesses,
     *,
     keyed: bool,
-    locked: frozenset[str] = frozenset(),
 ) -> bool:
     old_left = list(old_blocks)
     new_left = list(new_blocks)
@@ -145,11 +186,11 @@ def _name_explained(
     old_blocks: list[tuple[str, str]],
     new_blocks: list[tuple[str, str]],
     listed: dict[str, set[tuple[str, str]]],
-    locked: frozenset[str] = frozenset(),
+    locked: Witnesses,
 ) -> bool:
     if kind == "go.sum":
         return _go_sum_explained(name, old_blocks, new_blocks, listed)
-    return _blocks_explain(name, old_blocks, new_blocks, listed, keyed=kind == "yarn", locked=locked)
+    return _blocks_explain(name, old_blocks, new_blocks, listed, locked, keyed=kind == "yarn")
 
 
 def _single_version(entry: object) -> str | None:
@@ -265,14 +306,18 @@ def _pair_explained(
     old: tuple[str, str],
     new: tuple[str, str],
     listed: dict[str, set[tuple[str, str]]],
-    locked: frozenset[str] = frozenset(),
+    locked: Witnesses,
 ) -> bool:
-    """A package.json spec pair may use a shared range prefix when `locked` witnesses the listed version."""
+    """A package.json spec pair may use a shared range prefix when `locked` witnesses the listed version.
+
+    The witness is the top-level npm copy of `name` or the Yarn stanza for
+    the new `name@spec`; see Witnesses for why those are two keys.
+    """
     specs = _payload_kind(old[1]) == "spec" and _payload_kind(new[1]) == "spec"
-    witness = locked if specs else frozenset()
-    return _reached_listed_version(name, old[0], new[0], listed, locked=witness, npm=specs) and _payload_ok(
-        [old], [new]
-    )
+    empty: frozenset[str] = frozenset()
+    witness = (locked.get(name, empty) | locked.get(f"{name}@{new[0]}", empty)) if specs else empty
+    reached = _reached_listed_version(name, old[0], new[0], listed, locked=witness, mode="spec" if specs else "pin")
+    return reached and _payload_ok([old], [new])
 
 
 def _lock_covers_listed(
@@ -281,12 +326,12 @@ def _lock_covers_listed(
     after: str,
     updates: list[dict],
     names: set[str],
-    locked: dict[str, frozenset[str]] | None = None,
+    locked: Witnesses | None = None,
 ) -> bool:
     """True when a listed package moves to its listed version.
 
     A listed name must be explained; `locked`, the versions a lockfile in HEAD
-    resolves each package to, lets a shared `^` or `~` spec bump count as its
+    resolves each spec to, lets a shared `^` or `~` spec bump count as its
     listed bump. Every other name may change only its version and registry
     locators, or be added or removed as a registry tarball entry. Another
     resolved host, a same-version hash swap, leftover bytes, or a lock that
@@ -313,7 +358,7 @@ def _lock_covers_listed(
         old_blocks = _entry_blocks(old_entries.get(name))
         new_blocks = _entry_blocks(new_entries.get(name))
         if _canonical_package_name(kind, name) in listed:
-            if not _name_explained(kind, name, old_blocks, new_blocks, listed, (locked or {}).get(name, frozenset())):
+            if not _name_explained(kind, name, old_blocks, new_blocks, listed, locked or {}):
                 return False
             continue
         if not _registry_transitive(old_blocks, new_blocks):
@@ -366,7 +411,7 @@ def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
 
 
 def _multi_entry_names(
-    kind: str, before: str, after: str, updates: list[dict], locked: dict[str, frozenset[str]] | None = None
+    kind: str, before: str, after: str, updates: list[dict], locked: Witnesses | None = None
 ) -> set[str]:
     """Multi-entry names whose own blocks are not the listed change.
 
@@ -386,15 +431,13 @@ def _multi_entry_names(
         new_blocks = _entry_blocks(new_entries.get(name))
         if len(old_blocks) <= 1 and len(new_blocks) <= 1:
             continue
-        if _name_explained(kind, name, old_blocks, new_blocks, listed, (locked or {}).get(name, frozenset())):
+        if _name_explained(kind, name, old_blocks, new_blocks, listed, locked or {}):
             continue
         found.add(name)
     return found
 
 
-def _entries_explain(
-    kind: str, before: str, after: str, updates: list[dict], locked: dict[str, frozenset[str]] | None = None
-) -> bool:
+def _entries_explain(kind: str, before: str, after: str, updates: list[dict], locked: Witnesses | None = None) -> bool:
     """True when every changed entry moved to its listed version.
 
     A lock entry is explained when it moves to the listed version and the
@@ -402,8 +445,8 @@ def _entries_explain(
     an unlisted package, a replace line, a yarn key that appears or
     disappears, or any other residue is not.
 
-    `locked` maps a package name to the versions a lockfile in HEAD
-    resolves it to; a shared `^` or `~` spec bump needs the listed version there.
+    `locked` holds the versions a lockfile in HEAD resolves each spec to; a
+    shared `^` or `~` spec bump needs the listed version there.
 
     go.sum keeps one block per version. The listed bump matches when `to`
     is present and `from` was present before, including when `from` was removed.
@@ -425,47 +468,21 @@ def _entries_explain(
             _entry_blocks(old_entries.get(name)),
             _entry_blocks(new_entries.get(name)),
             listed,
-            (locked or {}).get(name, frozenset()),
+            locked or {},
         )
         for name in names
     )
 
 
-def _lock_witness(payload: str) -> bool:
-    """True when a lock payload may witness a package.json range bump.
+def _locked_versions(kind: str, text: str) -> Witnesses:
+    """Versions an npm or Yarn lock resolves each manifest spec to.
 
-    A v2/v3 npm lock record carries its `path`; only a top-level
-    `node_modules/<name>` copy counts. A v1 lock entry (no path) and a flat
-    Yarn stanza are top-level by construction.
+    npm keys the top-level `node_modules/<name>` copy by package name; Yarn
+    keys each stanza by its `name@range` descriptor. A nested or workspace
+    copy, a stanza for another range, and a manifest spec in the lock never witness.
     """
-    try:
-        doc = json.loads(payload)
-    except json.JSONDecodeError:
-        return True
-    path = doc.get("path") if isinstance(doc, dict) else ""
-    if not isinstance(path, str) or not path:
-        return True
-    return bool(_top_level_lock_name(path))
-
-
-def _locked_versions(kind: str, text: str, *, top_level: bool = False) -> dict[str, frozenset[str]]:
-    """Versions each package resolves to in an npm or Yarn lock. Manifest specs in the lock do not count.
-
-    `top_level` keeps only the `node_modules/<name>` copy directly under the
-    manifest, so a nested or workspace copy never witnesses a range bump.
-    """
-    split = _split_entries(kind, text) if kind in {"json", "yarn"} else None
-    if split is None:
-        return {}
-    found: dict[str, frozenset[str]] = {}
-    for name, entry in split[0].items():
-        versions = set()
-        for version, payload in _entry_blocks(entry):
-            if _payload_kind(payload) == "spec":
-                continue
-            if top_level and not _lock_witness(payload):
-                continue
-            versions.add(version)
-        if versions:
-            found[name] = frozenset(versions)
-    return found
+    if kind == "json":
+        return _json_witnesses(text)
+    if kind == "yarn":
+        return _yarn_witnesses(text)
+    return {}

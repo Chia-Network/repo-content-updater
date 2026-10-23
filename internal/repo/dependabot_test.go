@@ -227,6 +227,25 @@ func TestDependabotDetectionFailureAppliesDirectoryLists(t *testing.T) {
 	}
 }
 
+// TestDependabotVarsForRepoAppliesDirectoryLists writes a bare pinned
+// directory as a list whether detection finds nothing or finds the ecosystem.
+func TestDependabotVarsForRepoAppliesDirectoryLists(t *testing.T) {
+	pin := map[string]string{"DEPENDABOT_GOMOD_DIRECTORY": "/svc"}
+	vars, err := DependabotVarsForRepo(t.TempDir(), pin, nil)
+	if !errors.Is(err, errNoDependabotEcosystems) || vars["DEPENDABOT_GOMOD_DIRECTORY"] != `["/svc"]` {
+		t.Fatalf("no detection: vars = %v, err = %v; want [\"/svc\"] and errNoDependabotEcosystems", vars, err)
+	}
+	repoDir := t.TempDir()
+	writeDependabotTestFile(t, repoDir, filepath.Join("svc", "go.mod"), "")
+	vars, err = DependabotVarsForRepo(repoDir, pin, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vars["DEPENDABOT_GOMOD_DIRECTORY"] != `["/svc"]` || vars["DEPENDABOT_GOMOD_ENABLED"] != "1" {
+		t.Fatalf("detected: vars = %v, want gomod enabled at [\"/svc\"]", vars)
+	}
+}
+
 func TestDependabotNoDetectionKeepsFullNonEmptyTemplate(t *testing.T) {
 	cfg := loadDependabotTestConfig(t)
 	repoDir := t.TempDir()

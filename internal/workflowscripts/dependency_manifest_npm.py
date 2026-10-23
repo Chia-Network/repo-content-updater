@@ -5,45 +5,24 @@ from __future__ import annotations
 import json
 import re
 
-_YARN_DESCRIPTOR_RE = re.compile(r'"?(@?[^@"\s]+)@')
+_YARN_DESCRIPTOR_RE = re.compile(r'(@?[^@"\s]+)@')
+_LOCK_PREFIX = "node_modules/"
 _YARN_VERSION_RE = re.compile(r'^  version "([^"]+)"')
 
 
 def _direct_lock_name(key: str) -> str:
-    """Package name for a lockfile path.
+    """Leaf package name of a lockfile path, or "" when the path is not a package.
 
-    Nested copies (`node_modules/a/node_modules/b`, and workspace paths such as
-    `packages/gui/node_modules/b`) are the leaf package. A path that continues
-    past the package name stays in residue.
+    Nested copies (`node_modules/a/node_modules/b`) and workspace paths (such
+    as `packages/gui/node_modules/b`) name the leaf package too. A path that
+    continues past the package name stays in residue. Whether a path is the
+    top-level copy is not decided here; _json_witnesses compares it to
+    `node_modules/<name>`.
     """
-    marker = "node_modules/"
-    index = key.rfind(marker)
+    index = key.rfind(_LOCK_PREFIX)
     if index < 0:
         return ""
-    parts = key[index + len(marker) :].split("/")
-    if not parts or not parts[0]:
-        return ""
-    if parts[0].startswith("@"):
-        if len(parts) != 2 or len(parts[0]) < 2 or not parts[1]:
-            return ""
-        return f"{parts[0]}/{parts[1]}"
-    if len(parts) != 1:
-        return ""
-    return parts[0]
-
-
-def _top_level_lock_name(key: str) -> str:
-    """Package name of a top-level `node_modules/<name>` lock path.
-
-    Only the copy directly under the manifest counts as a witness for the
-    version a package.json range resolves to. A nested copy
-    (`node_modules/a/node_modules/b`) or a workspace path
-    (`packages/gui/node_modules/b`) is a different resolution and returns "".
-    """
-    prefix = "node_modules/"
-    if not key.startswith(prefix):
-        return ""
-    parts = key[len(prefix) :].split("/")
+    parts = key[index + len(_LOCK_PREFIX) :].split("/")
     if not parts or not parts[0]:
         return ""
     if parts[0].startswith("@"):
@@ -100,9 +79,8 @@ def _json_blocks(blob: dict[str, object], name: str) -> list[tuple[str, str]]:
     return blocks
 
 
-def _json_parts(text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
-    if not text.strip():
-        return {}, ""
+def _json_split(text: str) -> tuple[dict[str, dict[str, object]], dict[str, object]] | None:
+    """Specs and lock paths per package name, and the document left once they are taken out."""
     try:
         doc = json.loads(text)
     except json.JSONDecodeError:
@@ -137,6 +115,16 @@ def _json_parts(text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
             del packages[key]
         if not packages:
             doc.pop("packages", None)
+    return parts, doc
+
+
+def _json_parts(text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
+    if not text.strip():
+        return {}, ""
+    split = _json_split(text)
+    if split is None:
+        return None
+    parts, doc = split
     entries: dict[str, tuple[str, str] | list[tuple[str, str]]] = {}
     for name, blob in parts.items():
         blocks = _json_blocks(blob, name)
@@ -147,11 +135,35 @@ def _json_parts(text: str) -> tuple[dict[str, tuple[str, str]], str] | None:
     return entries, json.dumps(doc, sort_keys=True, separators=(",", ":"))
 
 
+def _json_witnesses(text: str) -> dict[str, frozenset[str]]:
+    """Versions an npm lock installs each package to directly under its manifest.
+
+    A lockfile v1 `dependencies` record and a `node_modules/<name>` path are
+    that copy. A nested or workspace path, and a manifest string spec, are not.
+    """
+    split = _json_split(text)
+    if split is None:
+        return {}
+    found: dict[str, frozenset[str]] = {}
+    for name, blob in split[0].items():
+        records = [spec for _section, spec in blob.get("specs") or () if isinstance(spec, dict)]
+        records += [meta for path, meta in blob.get("locks") or () if path == _LOCK_PREFIX + name]
+        versions = {str(record.get("version") or "") for record in records} - {""}
+        if versions:
+            found[name] = frozenset(versions)
+    return found
+
+
+def _yarn_descriptors(header: str) -> list[str]:
+    """Each comma-separated `name@range` descriptor of a Yarn stanza header, unquoted."""
+    return [part.strip().strip('"') for part in header.rstrip().rstrip(":").split(",") if part.strip()]
+
+
 def _yarn_names(header: str) -> list[str]:
     """Package names of a Yarn stanza header, one per distinct comma-separated descriptor."""
     names: list[str] = []
-    for descriptor in header.rstrip().rstrip(":").split(","):
-        match = _YARN_DESCRIPTOR_RE.match(descriptor.strip())
+    for descriptor in _yarn_descriptors(header):
+        match = _YARN_DESCRIPTOR_RE.match(descriptor)
         if match and match.group(1) not in names:
             names.append(match.group(1))
     return names
@@ -187,6 +199,19 @@ def _yarn_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
             version = match.group(1)
     flush()
     return entries, "".join(residue)
+
+
+def _yarn_witnesses(text: str) -> dict[str, frozenset[str]]:
+    """Versions each `name@range` descriptor resolves to in a Yarn lock.
+
+    Keyed by descriptor, so only the stanza for a manifest's exact spec witnesses it.
+    """
+    found: dict[str, frozenset[str]] = {}
+    for blocks in _yarn_parts(text)[0].values():
+        for version, payload in blocks:
+            for descriptor in _yarn_descriptors(payload.split("\n", 1)[0]):
+                found[descriptor] = found.get(descriptor, frozenset()) | {version}
+    return found
 
 
 _SEMVER = r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?"

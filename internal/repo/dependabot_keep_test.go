@@ -309,31 +309,118 @@ func TestDefaultDependabotTargetBranchDoesNotCoverPlainEntries(t *testing.T) {
 	}
 }
 
-// TestMergeDependabotConfigConflictIsATypedError distinguishes a conflict
-// between existing entries from an unreadable file.
-func TestMergeDependabotConfigConflictIsATypedError(t *testing.T) {
-	cfg := loadDependabotTestConfig(t)
-	fileinfo := cfg.GetFileInfo("dependabot-actions")
+// postRenderDefault finishes rendered as the default Dependabot file of a
+// repo whose existing copy holds existing.
+func postRenderDefault(t *testing.T, existing, rendered string) ([]byte, error) {
+	t.Helper()
+	return postRenderDefaultFiles(t, map[string]string{".github/dependabot.yml": existing}, rendered)
+}
+
+// postRenderDefaultFiles is postRenderDefault for a repo whose existing
+// Dependabot files map each repo path to its contents.
+func postRenderDefaultFiles(t *testing.T, existing map[string]string, rendered string) ([]byte, error) {
+	t.Helper()
+	fileinfo := loadDependabotTestConfig(t).GetFileInfo("dependabot-actions")
 	dir := t.TempDir()
-	writeDependabotTestFile(t, dir, fileinfo.RepoPath, ""+
+	for repoPath, body := range existing {
+		writeDependabotTestFile(t, dir, repoPath, body)
+	}
+	selected := config.SelectedFile{Name: fileinfo.Name, Origin: config.OriginDefault}
+	return postRenderForFile(dir, selected, fileinfo, []byte(rendered))
+}
+
+const renderedPipRoot = "version: 2\nupdates:\n  - package-ecosystem: pip\n    directory: /\n"
+
+// TestPostRenderForFileConflictIsASkip reports a conflict between existing
+// entries as a skip that names the conflict.
+func TestPostRenderForFileConflictIsASkip(t *testing.T) {
+	_, err := postRenderDefault(t, ""+
 		"version: 2\nupdates:\n"+
 		"  - package-ecosystem: pip\n    directory: /services\n    ignore:\n      - dependency-name: first\n"+
-		"  - package-ecosystem: pip\n    directory: /services\n    ignore:\n      - dependency-name: second\n")
-	rendered := []byte("version: 2\nupdates:\n  - package-ecosystem: pip\n    directory: /\n")
-	_, _, err := mergeDependabotConfig(dir, fileinfo, rendered)
-	if !errors.Is(err, errConflictingDependabotEntries) {
-		t.Fatalf("err = %v, want errConflictingDependabotEntries", err)
+		"  - package-ecosystem: pip\n    directory: /services\n    ignore:\n      - dependency-name: second\n",
+		renderedPipRoot)
+	if !errors.Is(err, errConflictingDependabotEntries) || !errors.Is(err, errSkipManagedFile) {
+		t.Fatalf("err = %v, want a skip for conflicting entries", err)
 	}
 }
 
-// TestMergeDependabotConfigUnreadableRenderedIsNotConflicting reports an
-// unreadable rendered file as ok=false with no error, not as a conflict.
-func TestMergeDependabotConfigUnreadableRenderedIsNotConflicting(t *testing.T) {
-	cfg := loadDependabotTestConfig(t)
-	fileinfo := cfg.GetFileInfo("dependabot-actions")
-	_, ok, err := mergeDependabotConfig(t.TempDir(), fileinfo, []byte("not: [valid yaml"))
-	if err != nil || ok {
-		t.Fatalf("ok = %v, err = %v; want ok=false and no error", ok, err)
+// TestPostRenderForFileUnreadableIsASkipNotAConflict skips a default whose
+// rendered or existing file is not YAML, and leaves an explicit file as rendered.
+func TestPostRenderForFileUnreadableIsASkipNotAConflict(t *testing.T) {
+	for name, files := range map[string][2]string{
+		"rendered": {renderedPipRoot, "not: [valid yaml"},
+		"existing": {"not: [valid yaml", renderedPipRoot},
+	} {
+		_, err := postRenderDefault(t, files[0], files[1])
+		if !errors.Is(err, errSkipManagedFile) || errors.Is(err, errConflictingDependabotEntries) {
+			t.Fatalf("%s: err = %v, want a skip that is not a conflict", name, err)
+		}
+	}
+	fileinfo := loadDependabotTestConfig(t).GetFileInfo("dependabot")
+	out, err := postRenderForFile(t.TempDir(), config.SelectedFile{Name: fileinfo.Name}, fileinfo, []byte("not: [valid yaml"))
+	if err != nil || string(out) != "not: [valid yaml" {
+		t.Fatalf("explicit = %q, %v; want the rendered bytes", out, err)
+	}
+}
+
+// TestPostRenderForFileOverlappingDirectoriesConflict compares existing
+// entries per directory: [/a, /b] and [/b] with different settings conflict,
+// and with identical settings /b is kept once.
+func TestPostRenderForFileOverlappingDirectoriesConflict(t *testing.T) {
+	existing := func(second string) string {
+		return "version: 2\nupdates:\n" +
+			"  - package-ecosystem: pip\n    directories: [/a, /b]\n    ignore:\n      - dependency-name: first\n" +
+			"  - package-ecosystem: pip\n    directories: [/b]\n    ignore:\n      - dependency-name: " + second + "\n"
+	}
+	if _, err := postRenderDefault(t, existing("second"), renderedPipRoot); !errors.Is(err, errConflictingDependabotEntries) {
+		t.Fatalf("err = %v, want errConflictingDependabotEntries", err)
+	}
+	out, err := postRenderDefault(t, existing("first"), renderedPipRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Updates []map[string]any `yaml:"updates"`
+	}
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if pip := entriesFor(doc.Updates, "pip"); len(pip) != 2 || fmt.Sprint(pip[1]["directories"]) != "[/a /b]" {
+		t.Fatalf("pip entries = %v, want the rendered root plus one [/a /b] entry\n%s", pip, out)
+	}
+}
+
+// TestPostRenderForFileCarriesReferencedRegistries copies the registry a kept
+// entry references from the existing file, and aborts when the rendered file
+// defines that registry name differently.
+func TestPostRenderForFileCarriesReferencedRegistries(t *testing.T) {
+	rendered := "version: 2\n" +
+		"registries:\n  chia-pypi:\n    type: python-index\n    url: https://pypi.chia.net/simple/\n" +
+		"updates:\n  - package-ecosystem: github-actions\n    directories:\n      - /\n"
+	existing := func(name, url string) string {
+		return "version: 2\n" +
+			"registries:\n  " + name + ":\n    type: python-index\n    url: " + url + "\n" +
+			"updates:\n  - package-ecosystem: pip\n    directory: /services\n    registries:\n      - " + name + "\n"
+	}
+	out, err := postRenderDefault(t, existing("private", "https://private.example/simple/"), rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Registries map[string]map[string]string `yaml:"registries"`
+	}
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Registries["private"]["url"] != "https://private.example/simple/" {
+		t.Fatalf("private registry not carried over:\n%s", out)
+	}
+	if _, kept := doc.Registries["chia-pypi"]; kept {
+		t.Fatalf("unreferenced chia-pypi not pruned:\n%s", out)
+	}
+	_, err = postRenderDefault(t, existing("chia-pypi", "https://elsewhere.example/simple/"), rendered)
+	if !errors.Is(err, errConflictingDependabotEntries) {
+		t.Fatalf("err = %v, want errConflictingDependabotEntries for a redefined registry", err)
 	}
 }
 
@@ -354,8 +441,8 @@ func TestDefaultDependabotChiaGamingFixture(t *testing.T) {
 	writeDependabotTestFile(t, repoDir(repoName), "Cargo.toml", "")
 	writeDependabotTestFile(t, repoDir(repoName), filepath.Join(".github", "workflows", "ci.yml"), "")
 
-	rendered, ok, err := content.renderManagedFile(repoName, config.SelectedFile{Name: fileinfo.Name, Origin: config.OriginDefault}, fileinfo, cfg, Config{})
-	if err != nil || !ok {
+	rendered, err := content.renderManagedFile(repoName, config.SelectedFile{Name: fileinfo.Name, Origin: config.OriginDefault}, fileinfo, cfg, Config{})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if !containsTrimmedLine(string(rendered), "# "+fileinfo.AdoptionMarker) {
@@ -398,23 +485,18 @@ func TestDefaultDependabotChiaGamingFixture(t *testing.T) {
 	}
 }
 
-// TestPostRenderDependabotPrunesAfterMerge keeps a registry that only a merged
-// existing block references; pruning before the merge would strand it.
-func TestPostRenderDependabotPrunesAfterMerge(t *testing.T) {
-	cfg := loadDependabotTestConfig(t)
-	fileinfo := cfg.GetFileInfo("dependabot-actions")
-	dir := t.TempDir()
-	writeDependabotTestFile(t, dir, fileinfo.RepoPath, ""+
+// TestPostRenderForFilePrunesAfterMerge keeps a registry that only a merged
+// existing entry references; pruning before the merge would strand it.
+func TestPostRenderForFilePrunesAfterMerge(t *testing.T) {
+	out, err := postRenderDefault(t, ""+
 		"version: 2\nupdates:\n"+
-		"  - package-ecosystem: pip\n    directories:\n      - /services\n    registries:\n      - chia-pypi\n")
-	rendered := []byte("version: 2\n" +
-		"registries:\n  chia-pypi:\n    type: python-index\n    url: https://pypi.chia.net/simple/\n" +
-		"  unused:\n    type: python-index\n    url: https://example.invalid/simple/\n" +
-		"updates:\n  - package-ecosystem: github-actions\n    directories:\n      - /\n")
-	selected := config.SelectedFile{Name: "dependabot-actions", Origin: config.OriginDefault}
-	out, ok, err := postRenderDependabot(dir, selected, fileinfo, rendered)
-	if err != nil || !ok {
-		t.Fatalf("ok = %v, err = %v", ok, err)
+		"  - package-ecosystem: pip\n    directories:\n      - /services\n    registries:\n      - chia-pypi\n",
+		"version: 2\n"+
+			"registries:\n  chia-pypi:\n    type: python-index\n    url: https://pypi.chia.net/simple/\n"+
+			"  unused:\n    type: python-index\n    url: https://example.invalid/simple/\n"+
+			"updates:\n  - package-ecosystem: github-actions\n    directories:\n      - /\n")
+	if err != nil {
+		t.Fatal(err)
 	}
 	var doc struct {
 		Registries map[string]any `yaml:"registries"`
@@ -427,5 +509,85 @@ func TestPostRenderDependabotPrunesAfterMerge(t *testing.T) {
 	}
 	if _, kept := doc.Registries["unused"]; kept {
 		t.Fatalf("unused registry not pruned:\n%s", out)
+	}
+}
+
+type dependabotTestDoc struct {
+	Registries map[string]map[string]string `yaml:"registries"`
+	Updates    []map[string]any             `yaml:"updates"`
+}
+
+func parseDependabotTestDoc(t *testing.T, out []byte) dependabotTestDoc {
+	t.Helper()
+	var doc dependabotTestDoc
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("%v:\n%s", err, out)
+	}
+	return doc
+}
+
+// TestPostRenderForFileIdenticalActionsEntriesDoNotConflict compares every
+// existing github-actions entry before any is moved to a weekly interval, so
+// identical settings that share a directory, or the same entry in both
+// dependabot.yml and dependabot.yaml, are kept once instead of conflicting.
+// Mapping keys compare by key, not by order.
+func TestPostRenderForFileIdenticalActionsEntriesDoNotConflict(t *testing.T) {
+	entry := func(dirs, schedule string) string {
+		return "  - package-ecosystem: github-actions\n    directories: " + dirs + "\n    schedule: " + schedule + "\n"
+	}
+	for name, existing := range map[string]map[string]string{
+		"overlapping directories": {".github/dependabot.yml": "version: 2\nupdates:\n" +
+			entry("[/a, /b]", "{interval: daily, time: \"09:00\"}") +
+			entry("[/b]", "{time: \"09:00\", interval: daily}")},
+		"both file names": {
+			".github/dependabot.yml":  "version: 2\nupdates:\n" + entry("[/a, /b]", "{interval: daily}"),
+			".github/dependabot.yaml": "version: 2\nupdates:\n" + entry("[/a, /b]", "{interval: daily}"),
+		},
+	} {
+		out, err := postRenderDefaultFiles(t, existing, renderedPipRoot)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		actions := entriesFor(parseDependabotTestDoc(t, out).Updates, "github-actions")
+		if len(actions) != 1 || fmt.Sprint(actions[0]["directories"]) != "[/a /b]" {
+			t.Fatalf("%s: github-actions entries = %v, want one [/a /b] entry\n%s", name, actions, out)
+		}
+		if schedule, _ := actions[0]["schedule"].(map[string]any); schedule["interval"] != "weekly" {
+			t.Fatalf("%s: github-actions schedule = %v, want weekly", name, actions[0]["schedule"])
+		}
+	}
+}
+
+// TestPostRenderForFileConflictAcrossFileNames compares entries of
+// dependabot.yml and dependabot.yaml with each other, and the conflict names
+// the branch it is on.
+func TestPostRenderForFileConflictAcrossFileNames(t *testing.T) {
+	entry := func(ignored string) string {
+		return "version: 2\nupdates:\n  - package-ecosystem: pip\n    directory: /services\n    ignore:\n      - dependency-name: " + ignored + "\n"
+	}
+	_, err := postRenderDefaultFiles(t, map[string]string{
+		".github/dependabot.yml":  entry("first"),
+		".github/dependabot.yaml": entry("second"),
+	}, renderedPipRoot)
+	if !errors.Is(err, errConflictingDependabotEntries) || !strings.Contains(err.Error(), "/services differently on the default branch") {
+		t.Fatalf("err = %v, want a conflict for /services on the default branch", err)
+	}
+}
+
+// TestPostRenderForFileCarriesWildcardRegistries copies every registry of the
+// existing file for a kept entry that uses registries: "*".
+func TestPostRenderForFileCarriesWildcardRegistries(t *testing.T) {
+	out, err := postRenderDefault(t, "version: 2\n"+
+		"registries:\n"+
+		"  first:\n    type: python-index\n    url: https://first.example/simple/\n"+
+		"  second:\n    type: python-index\n    url: https://second.example/simple/\n"+
+		"updates:\n  - package-ecosystem: pip\n    directory: /services\n    registries: \"*\"\n",
+		"version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directories:\n      - /\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := parseDependabotTestDoc(t, out)
+	if doc.Registries["first"]["url"] != "https://first.example/simple/" || doc.Registries["second"]["url"] != "https://second.example/simple/" {
+		t.Fatalf("registries = %v, want first and second carried over\n%s", doc.Registries, out)
 	}
 }

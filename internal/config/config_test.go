@@ -421,6 +421,34 @@ files:
 	assert.ErrorContains(t, err, "current-marker")
 }
 
+// TestLoadConfigNamesThePreviousMarkerInACollision reports a collision with
+// the field each marker came from, so a clash with a previous marker is not
+// reported as two current adoption markers.
+func TestLoadConfigNamesThePreviousMarkerInACollision(t *testing.T) {
+	for name, tt := range map[string]struct{ first, second, want string }{
+		"current collides with an earlier previous marker": {
+			first:  "adoption_marker: first-marker\n    previous_adoption_markers: [old-marker]",
+			second: "adoption_marker: old-marker",
+			want:   `adoption_marker "old-marker" of "second" is already the previous_adoption_marker of "first"`,
+		},
+		"previous collides with an earlier current marker": {
+			first:  "adoption_marker: old-marker",
+			second: "adoption_marker: second-marker\n    previous_adoption_markers: [old-marker]",
+			want:   `previous_adoption_marker "old-marker" of "second" is already the adoption_marker of "first"`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			body := "files:\n" +
+				"  - name: first\n    template_name: first.yml\n    repo_path: .github/first.yml\n    " + tt.first + "\n" +
+				"  - name: second\n    template_name: second.yml\n    repo_path: .github/second.yml\n    " + tt.second + "\n"
+			assert.Nil(t, os.WriteFile(path, []byte(body), 0o644))
+			_, err := config.LoadConfig(path)
+			assert.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
 func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)

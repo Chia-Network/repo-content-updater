@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -208,8 +209,8 @@ func TestDefaultDependabotRendersDetectedEcosystems(t *testing.T) {
 			for _, manifest := range tt.manifests {
 				writeDependabotTestFile(t, repoDir(repoName), manifest, "")
 			}
-			rendered, ok, err := content.renderManagedFile(repoName, asDefault, fileinfo, cfg, Config{VarOverrides: tt.overrides})
-			if err != nil || !ok {
+			rendered, err := content.renderManagedFile(repoName, asDefault, fileinfo, cfg, Config{VarOverrides: tt.overrides})
+			if err != nil {
 				t.Fatal(err)
 			}
 			if got := renderedDependabotEcosystems(t, rendered); got != tt.want {
@@ -225,8 +226,8 @@ func TestDefaultDependabotRendersDetectedEcosystems(t *testing.T) {
 		repoName := "ecosystem-error"
 		writeDependabotTestFile(t, repoDir(repoName), workflow, "")
 		overrides := map[string]string{"DEPENDABOT_GOMOD_DIRECTORY": "../outside"}
-		rendered, ok, err := content.renderManagedFile(repoName, asDefault, fileinfo, cfg, Config{VarOverrides: overrides})
-		if err != nil || !ok {
+		rendered, err := content.renderManagedFile(repoName, asDefault, fileinfo, cfg, Config{VarOverrides: overrides})
+		if err != nil {
 			t.Fatal(err)
 		}
 		if got := renderedDependabotEcosystems(t, rendered); got != "gomod,github-actions" {
@@ -235,16 +236,16 @@ func TestDefaultDependabotRendersDetectedEcosystems(t *testing.T) {
 	})
 
 	t.Run("a repository detection error skips the default", func(t *testing.T) {
-		rendered, ok, err := content.renderManagedFile("missing-repo", asDefault, fileinfo, cfg, Config{})
-		if err != nil || ok || rendered != nil {
-			t.Fatalf("render = %q, %v, %v; want a skip", rendered, ok, err)
+		rendered, err := content.renderManagedFile("missing-repo", asDefault, fileinfo, cfg, Config{})
+		if !errors.Is(err, errSkipManagedFile) || rendered != nil {
+			t.Fatalf("render = %q, %v; want a skip", rendered, err)
 		}
 	})
 
 	t.Run("a repository detection error keeps the full explicit configuration", func(t *testing.T) {
 		explicit := cfg.GetFileInfo("dependabot")
-		rendered, ok, err := content.renderManagedFile("missing-repo", config.SelectedFile{Name: explicit.Name}, explicit, cfg, Config{})
-		if err != nil || !ok {
+		rendered, err := content.renderManagedFile("missing-repo", config.SelectedFile{Name: explicit.Name}, explicit, cfg, Config{})
+		if err != nil {
 			t.Fatal(err)
 		}
 		if got, want := renderedDependabotEcosystems(t, rendered), "gomod,pip,github-actions,npm,cargo,swift,docker,terraform,nuget"; got != want {
@@ -255,8 +256,8 @@ func TestDefaultDependabotRendersDetectedEcosystems(t *testing.T) {
 	t.Run("explicit dependabot renders without the adoption marker", func(t *testing.T) {
 		repoName := "explicit"
 		writeDependabotTestFile(t, repoDir(repoName), "go.mod", "")
-		rendered, ok, err := content.renderManagedFile(repoName, config.SelectedFile{Name: "dependabot"}, cfg.GetFileInfo("dependabot"), cfg, Config{})
-		if err != nil || !ok {
+		rendered, err := content.renderManagedFile(repoName, config.SelectedFile{Name: "dependabot"}, cfg.GetFileInfo("dependabot"), cfg, Config{})
+		if err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(string(rendered), "repo-content-updater:") {

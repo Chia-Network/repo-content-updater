@@ -182,32 +182,34 @@ func (c *Config) validateRequiresPaths() error {
 var adoptionMarkerPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
 
 func (c *Config) validateAdoptionMarkers() error {
-	seen := map[string]string{}
+	type markerOwner struct{ field, file string }
+	seen := map[string]markerOwner{}
+	claim := func(field, marker, file string) error {
+		if !adoptionMarkerPattern.MatchString(marker) {
+			return fmt.Errorf("%s %q for %q must use only letters, digits and . _ : / -", field, marker, file)
+		}
+		if owner, ok := seen[marker]; ok && owner.file != file {
+			return fmt.Errorf("%s %q of %q is already the %s of %q", field, marker, file, owner.field, owner.file)
+		}
+		seen[marker] = markerOwner{field: field, file: file}
+		return nil
+	}
 	for i := range c.Files {
 		file := &c.Files[i]
 		marker := strings.TrimSpace(file.AdoptionMarker)
 		if marker == "" {
 			continue
 		}
-		if !adoptionMarkerPattern.MatchString(marker) {
-			return fmt.Errorf("adoption_marker %q for %q must use only letters, digits and . _ : / -", marker, file.Name)
+		if err := claim("adoption_marker", marker, file.Name); err != nil {
+			return err
 		}
-		if previous, ok := seen[marker]; ok && previous != file.Name {
-			return fmt.Errorf("adoption_marker %q is used by both %q and %q", marker, previous, file.Name)
-		}
-		seen[marker] = file.Name
 		for _, previous := range file.PreviousAdoptionMarkers {
-			previous = strings.TrimSpace(previous)
-			if previous == "" {
+			if previous = strings.TrimSpace(previous); previous == "" {
 				continue
 			}
-			if !adoptionMarkerPattern.MatchString(previous) {
-				return fmt.Errorf("previous_adoption_marker %q for %q must use only letters, digits and . _ : / -", previous, file.Name)
+			if err := claim("previous_adoption_marker", previous, file.Name); err != nil {
+				return err
 			}
-			if owner, ok := seen[previous]; ok && owner != file.Name {
-				return fmt.Errorf("adoption_marker %q is used by both %q and %q", previous, owner, file.Name)
-			}
-			seen[previous] = file.Name
 		}
 	}
 	return nil
