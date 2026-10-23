@@ -28,7 +28,6 @@ updates:
       global:
         patterns:
           - "*"
-
   - package-ecosystem: "pip"
     registries:
       - chia-pypi
@@ -47,7 +46,6 @@ updates:
       - python
       - "Changed"
     reviewers: ["emlowe"]
-
   - package-ecosystem: "github-actions"
     directories: ["/", ".github/actions/*"]
     schedule:
@@ -62,7 +60,6 @@ updates:
       - github_actions
       - "Changed"
     reviewers: ["cameroncooper", "emlowe"]
-
   - package-ecosystem: "npm"
     directories: ["/"]
     schedule:
@@ -77,7 +74,6 @@ updates:
       - javascript
       - "Changed"
     reviewers: ["emlowe", "seeden"]
-
   - package-ecosystem: cargo
     directories: ["/"]
     schedule:
@@ -92,7 +88,6 @@ updates:
       - rust
       - "Changed"
     reviewers: ["cameroncooper", "emlowe"]
-
   - package-ecosystem: swift
     directories: ["/"]
     schedule:
@@ -103,7 +98,6 @@ updates:
     open-pull-requests-limit: 10
     rebase-strategy: auto
     reviewers: ["cameroncooper", "emlowe"]
-
   - package-ecosystem: docker
     directories: ["/"]
     schedule:
@@ -118,7 +112,6 @@ updates:
       - docker
       - "Changed"
     reviewers: ["cameroncooper", "emlowe"]
-
   - package-ecosystem: terraform
     directories: ["/"]
     schedule:
@@ -133,7 +126,6 @@ updates:
       - terraform
       - "Changed"
     reviewers: ["cameroncooper", "emlowe"]
-
   - package-ecosystem: nuget
     directories: ["/"]
     schedule:

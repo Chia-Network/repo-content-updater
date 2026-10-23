@@ -28,7 +28,6 @@ updates:
       global:
         patterns:
           - "*"
-
   - package-ecosystem: "pip"
     registries:
       - chia-pypi
@@ -51,7 +50,6 @@ updates:
       global:
         patterns:
           - "*"
-
   - package-ecosystem: "github-actions"
     directories: ["/", ".github/actions/*"]
     schedule:
@@ -70,7 +68,6 @@ updates:
       global:
         patterns:
           - "*"
-
   - package-ecosystem: "npm"
     directories: ["/"]
     schedule:
@@ -89,7 +86,6 @@ updates:
       global:
         patterns:
           - "*"
-
   - package-ecosystem: cargo
     directories: ["/"]
     schedule:
@@ -108,7 +104,6 @@ updates:
       global:
         patterns:
           - "*"
-
   - package-ecosystem: swift
     directories: ["/"]
     schedule:
@@ -123,7 +118,6 @@ updates:
       global:
         patterns:
           - "*"
-
   - package-ecosystem: docker
     directories: ["/"]
     schedule:
@@ -142,7 +136,6 @@ updates:
       global:
         patterns:
           - "*"
-
   - package-ecosystem: terraform
     directories: ["/"]
     schedule:
@@ -161,7 +154,6 @@ updates:
       global:
         patterns:
           - "*"
-
   - package-ecosystem: nuget
     directories: ["/"]
     schedule:
