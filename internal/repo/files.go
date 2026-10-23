@@ -178,18 +178,7 @@ func filesForRepo(selection config.ManagedFileSelection, repo *github.Repository
 
 // CheckFiles checks all the files for updates in the repo
 func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config, props CustomProperties) error {
-	repo, _, err := ghDo(func() (*github.Repository, *github.Response, error) {
-		return c.githubClient.Repositories.Get(context.TODO(), c.githubOrg, repoName)
-	})
-	if err != nil {
-		return fmt.Errorf("error getting repo info: %w", err)
-	}
-	if repo.GetArchived() {
-		log.Printf("Skipping archived repository %s\n", repoName)
-		return nil
-	}
-
-	files, err = cfg.EnsureCompanionFiles(files)
+	files, err := cfg.EnsureCompanionFiles(files)
 	if err != nil {
 		return fmt.Errorf("error ensuring companion files for %s: %w", repoName, err)
 	}
@@ -198,6 +187,15 @@ func (c *Content) CheckFiles(repoName string, files []string, cfg *config.Config
 }
 
 func (c *Content) checkSelectedFiles(repoName string, selection config.ManagedFileSelection, cfg *config.Config, props CustomProperties) error {
+	repo, err := c.repoMetadata(repoName)
+	if err != nil {
+		return err
+	}
+	if repo.GetArchived() {
+		log.Printf("Skipping archived repository %s\n", repoName)
+		return nil
+	}
+
 	defer removeDirIfExists(repoDir(repoName))
 
 	r, w, err := c.cloneRepo(repoName)
