@@ -70,7 +70,7 @@ files:
       - upstream-malware-scan
       - dependency-update-coverage
       - dependency-manifest-diff
-      - dependency-versions
+      - dependency-cursor-review-versions
       - dependency-manifest-go
       - dependency-manifest-npm
       - dependency-manifest-python
@@ -107,9 +107,13 @@ files:
     template_name: dependency-cursor-review-manifest-diff.py
     repo_path: .github/scripts/dependency_manifest_diff.py
 
-  - name: dependency-versions
+  - name: dependency-cursor-review-versions
     template_name: dependency-cursor-review-versions.py
-    repo_path: .github/scripts/versions.py
+    repo_path: .github/scripts/dependency_cursor_review_versions.py
+    aliases:
+      - dependency-manifest-versions
+    alternate_paths:
+      - .github/scripts/dependency_manifest_versions.py
 
   - name: dependency-manifest-go
     template_name: dependency-cursor-review-manifest-go.py

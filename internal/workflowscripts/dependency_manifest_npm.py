@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from versions import NPM_SEMVER
+from dependency_cursor_review_versions import NPM_SEMVER
 
 _YARN_DESCRIPTOR_RE = re.compile(r'(@?[^@"\s]+)@')
 _LOCK_PREFIX = "node_modules/"

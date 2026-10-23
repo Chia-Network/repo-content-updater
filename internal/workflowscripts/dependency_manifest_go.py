@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import re
 
-from versions import _exact_body, _version_body
+from dependency_cursor_review_versions import _exact_body, _version_body
 
 _GO_MOD_RE = re.compile(
     r"^\s*(?:require\s+)?([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)\s+(v\S+)",
-    re.MULTILINE,
+    re.M,
 )
-_GO_SUM_RE = re.compile(r"^(\S+)\s+(v\S+)\s+", re.MULTILINE)
+_GO_SUM_RE = re.compile(r"^(\S+)\s+(v\S+)\s+", re.M)
 _GO_BLOCK_STARTS = frozenset({"require(", "replace(", "exclude(", "retract("})
 
 

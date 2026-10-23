@@ -100,6 +100,25 @@ func TestManagedFileAliasesAndPathsIncludeCompanions(t *testing.T) {
 	}
 }
 
+func TestRenamedVersionsCompanionKeepsItsOldNameAndPath(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	for _, entry := range []string{
+		"dependency-manifest-versions",
+		".github/scripts/dependency_manifest_versions.py",
+		".github/scripts/dependency_cursor_review_versions.py",
+	} {
+		canonical, ok := cfg.ResolveManagedFileName(entry)
+		assert.True(t, ok, entry)
+		assert.Equal(t, "dependency-cursor-review-versions", canonical, entry)
+	}
+	file := cfg.GetFileInfo("dependency-cursor-review-versions")
+	if assert.NotNil(t, file) {
+		assert.Equal(t, []string{".github/scripts/dependency_manifest_versions.py"}, file.AlternatePaths)
+	}
+}
+
 func TestEnsureCompanionFilesPairsWorkflowWithFormatter(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)

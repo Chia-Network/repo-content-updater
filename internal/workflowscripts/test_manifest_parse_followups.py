@@ -9,11 +9,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import dependency_cursor_review_versions as version_manifest
 import dependency_manifest_diff as manifest
 import dependency_manifest_npm as npm_manifest
 import dependency_manifest_python as python_manifest
 import dependency_update_coverage as coverage
-import versions as version_manifest
 from test_dependency_update_coverage import _commit, _git, _git_repo
 
 

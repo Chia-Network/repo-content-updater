@@ -12,6 +12,7 @@ import json
 import re
 from pathlib import Path
 
+from dependency_cursor_review_versions import _reached_listed_version
 from dependency_manifest_go import _go_mod_parts, _go_sum_explained, _go_sum_parts
 from dependency_manifest_npm import (
     _fold_residue,
@@ -23,7 +24,6 @@ from dependency_manifest_npm import (
     _yarn_witnesses,
 )
 from dependency_manifest_python import _PYTHON_MANIFESTS, _req_parts, _requirement_name
-from versions import _reached_listed_version
 
 # npm and Yarn locks whose unlisted names may be registry tarball residue once every listed bump is explained.
 TRANSITIVE_LOCK_NAMES = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock"})
