@@ -1,4 +1,4 @@
 # Repo-specific overrides for managed-files rendering in repo-content-updater.
 var_overrides:
   MAKEFILE_WORKFLOWSCRIPT_TESTS: "1"
-  DEPENDABOT_ACTIONS_DIRECTORIES: '["/", ".github/actions/*", "/templates"]'
+  DEPENDABOT_ACTIONS_DIRECTORIES: '["/", "/.github/actions/*", "/templates"]'

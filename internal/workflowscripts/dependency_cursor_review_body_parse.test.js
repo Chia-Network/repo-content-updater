@@ -134,3 +134,17 @@ test('preamble links outside the Bumps sentence are not packages', () => {
   const parsed = parseDependencyUpdate('Bump lodash from 4.17.20 to 4.17.21', body);
   assert.deepEqual(rows(parsed), [['lodash', '4.17.20', '4.17.21', 'lodash/lodash']]);
 });
+
+test('backticks around a Package cell label are not part of the package name', () => {
+  const body = [
+    '| Package | Type | Update | Change |',
+    '|---|---|---|---|',
+    '| [`@noble/hashes`](https://github.com/paulmillr/noble-hashes) | dependencies | minor | `1.3.0` -> `1.4.0` |',
+    '| `left-pad` | dependencies | patch | `1.2.3` -> `1.2.4` |',
+  ].join('\n');
+  const parsed = parseDependencyUpdate('Update dependencies', body);
+  assert.deepEqual(rows(parsed), [
+    ['@noble/hashes', '1.3.0', '1.4.0', 'paulmillr/noble-hashes'],
+    ['left-pad', '1.2.3', '1.2.4', ''],
+  ]);
+});

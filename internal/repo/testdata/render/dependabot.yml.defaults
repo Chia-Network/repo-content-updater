@@ -47,7 +47,7 @@ updates:
       - "Changed"
     reviewers: ["emlowe"]
   - package-ecosystem: "github-actions"
-    directories: ["/", ".github/actions/*"]
+    directories: ["/", "/.github/actions/*"]
     schedule:
       interval: "weekly"
       day: "tuesday"

@@ -84,6 +84,26 @@ class PublishedCheckTest(unittest.TestCase):
         self.assertEqual(shaped["check"], "fail")
         self.assertIs(shaped["complete"], False)
 
+    def test_combine_reads_malicious_line_in_final_message(self) -> None:
+        malware = json.dumps(
+            {
+                "result": "Reviewed the update.\n",
+                "final_message": "Reviewed the update.\n\nMALWARE_REVIEW_VERDICT: malicious\n",
+            }
+        )
+        written = self._run(
+            malware,
+            '{"result": "COMPATIBILITY_RECOMMENDATION: Merge\\n\\nFine.\\n"}',
+            report={
+                "status": "clean",
+                "scan_conclusive": True,
+                "verdict_token_in_tree": False,
+                "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            },
+        )
+        self.assertIn("**Verdict: malicious**", written["result"])
+        self.assertEqual(written["check"], "fail")
+
     def _enforce(
         self,
         report: object,

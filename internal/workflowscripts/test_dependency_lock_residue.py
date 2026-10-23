@@ -34,8 +34,16 @@ class DependencyLockResidueTest(unittest.TestCase):
                     {
                         "lockfileVersion": 3,
                         "packages": {
-                            "node_modules/lodash": {"version": lodash, "resolved": f"https://registry.npmjs.org/lodash/-/lodash-{lodash}.tgz", "integrity": "sha-" + lodash},
-                            "node_modules/minimist": {"version": minimist, "resolved": f"https://registry.npmjs.org/minimist/-/minimist-{minimist}.tgz", "integrity": "sha-" + minimist},
+                            "node_modules/lodash": {
+                                "version": lodash,
+                                "resolved": f"https://registry.npmjs.org/lodash/-/lodash-{lodash}.tgz",
+                                "integrity": "sha-" + lodash,
+                            },
+                            "node_modules/minimist": {
+                                "version": minimist,
+                                "resolved": f"https://registry.npmjs.org/minimist/-/minimist-{minimist}.tgz",
+                                "integrity": "sha-" + minimist,
+                            },
                         },
                     }
                 )
@@ -201,25 +209,25 @@ class DependencyLockResidueTest(unittest.TestCase):
         self.assertIn("package-lock.json", _unresolved(tainted))
 
         yarn_old = (
-            'ua-parser-js@^0.7.18:\n'
+            "ua-parser-js@^0.7.18:\n"
             '  version "0.7.22"\n'
             '  resolved "https://registry.npmjs.org/ua-parser-js/-/ua-parser-js-0.7.22.tgz"\n'
         )
         yarn_new = (
-            'ua-parser-js@^0.7.18:\n'
+            "ua-parser-js@^0.7.18:\n"
             '  version "0.7.31"\n'
             '  resolved "https://registry.yarnpkg.com/ua-parser-js/-/ua-parser-js-0.7.31.tgz#649a656b191dffab4f21d5e053e27ca17cbff5c6"\n'
-            '  integrity sha512-qLK/Xe9E2uzmYI3qLeOmI0tEOt+TBBQyUIAh4aAgU05FVYzeZrKUdkAZfBNVGRaHVgV0TDkdEngJSw/SyQchkQ==\n'
+            "  integrity sha512-qLK/Xe9E2uzmYI3qLeOmI0tEOt+TBBQyUIAh4aAgU05FVYzeZrKUdkAZfBNVGRaHVgV0TDkdEngJSw/SyQchkQ==\n"
         )
         yarn_updates = [_bump("ua-parser-js", "0.7.22", "0.7.31", "faisalman/ua-parser-js")]
         yarn_report = _run_listed_scan({"yarn.lock": yarn_old}, {"yarn.lock": yarn_new}, yarn_updates)
         self.assertIs(yarn_report["scan_conclusive"], True)
         self.assertEqual(yarn_report["status"], "clean")
         added = yarn_new + (
-            '\ncy-verify-downloads@^0.0.5:\n'
+            "\ncy-verify-downloads@^0.0.5:\n"
             '  version "0.0.5"\n'
             '  resolved "https://registry.yarnpkg.com/cy-verify-downloads/-/cy-verify-downloads-0.0.5.tgz#2f9c7da0f5fda125ecef2f19ca2b83b1890d3037"\n'
-            '  integrity sha512-aRK7VvKG5rmDJK4hjZ27KM2oOOz0cMO7z/j4zX8qCc4ffXZS1XRJkofUY0w5u6MCB/wUsNMs03VuvkeR2tNPoQ==\n'
+            "  integrity sha512-aRK7VvKG5rmDJK4hjZ27KM2oOOz0cMO7z/j4zX8qCc4ffXZS1XRJkofUY0w5u6MCB/wUsNMs03VuvkeR2tNPoQ==\n"
         )
         self.assertFalse(manifest._entries_explain("yarn", yarn_old, added, yarn_updates))
         added_report = _run_listed_scan({"yarn.lock": yarn_old}, {"yarn.lock": added}, yarn_updates)
@@ -251,7 +259,12 @@ class DependencyLockResidueTest(unittest.TestCase):
                 npm("1.2.4", "file:../pwned", "sha-new", resolution="left-pad@npm:1.2.4"),
             )
         )
-        self.assertFalse(explains(npm("1.2.3", canonical.format("1.2.3")), npm("1.2.4", canonical.format("1.2.4"), "sha-new", resolution="left-pad@npm:1.2.4")))
+        self.assertFalse(
+            explains(
+                npm("1.2.3", canonical.format("1.2.3")),
+                npm("1.2.4", canonical.format("1.2.4"), "sha-new", resolution="left-pad@npm:1.2.4"),
+            )
+        )
         self.assertFalse(explains(old, npm("1.2.4", canonical.format("1.2.4"), "sha-new", bin="bin/cli.js")))
         self.assertFalse(explains(old, npm("1.2.4", canonical.format("1.2.4"), "sha-new", bin="../evil.js")))
 
@@ -268,12 +281,26 @@ class DependencyLockResidueTest(unittest.TestCase):
             spec = {"version": version, "resolved": resolved, "integrity": integrity, **extra}
             return json.dumps({"lockfileVersion": 1, "dependencies": {"left-pad": spec}})
 
-        self.assertTrue(explains(v1("1.2.3", canonical.format("1.2.3"), "sha-old"), v1("1.2.4", canonical.format("1.2.4"), "sha-new")))
+        self.assertTrue(
+            explains(
+                v1("1.2.3", canonical.format("1.2.3"), "sha-old"), v1("1.2.4", canonical.format("1.2.4"), "sha-new")
+            )
+        )
         self.assertFalse(explains(v1("1.2.3", evil, "sha-old"), v1("1.2.4", evil, "sha-new")))
-        self.assertFalse(explains(v1("1.2.3", canonical.format("1.2.3"), "sha-old"), v1("1.2.4", canonical.format("1.2.4"), "sha-new", scripts={"preinstall": "echo pwned"})))
+        self.assertFalse(
+            explains(
+                v1("1.2.3", canonical.format("1.2.3"), "sha-old"),
+                v1("1.2.4", canonical.format("1.2.4"), "sha-new", scripts={"preinstall": "echo pwned"}),
+            )
+        )
 
         def nested(integrity: str) -> str:
-            pad = {"version": "1.2.3", "resolved": canonical.format("1.2.3"), "integrity": "sha-old", "dependencies": {"minimist": {"version": "1.2.5", "resolved": mini, "integrity": integrity}}}
+            pad = {
+                "version": "1.2.3",
+                "resolved": canonical.format("1.2.3"),
+                "integrity": "sha-old",
+                "dependencies": {"minimist": {"version": "1.2.5", "resolved": mini, "integrity": integrity}},
+            }
             return json.dumps({"lockfileVersion": 1, "dependencies": {"left-pad": pad}})
 
         self.assertFalse(manifest._residues_match("json", nested("sha-a"), nested("sha-b")))
@@ -281,6 +308,23 @@ class DependencyLockResidueTest(unittest.TestCase):
         yarn_old = 'left-pad@^1.2.3:\n  version "1.2.3"\n  resolved "file:../pwned"\n'
         yarn_new = 'left-pad@^1.2.3:\n  version "1.2.4"\n  resolved "file:../pwned"\n'
         self.assertFalse(manifest._entries_explain("yarn", yarn_old, yarn_new, updates))
+
+    def test_lock_v1_nested_transitive_bump(self) -> None:
+        """Lockfile v1 nested dependencies are package entries, so a nested registry bump rides with a listed bump."""
+        updates = [_bump("left-pad", "1.2.3", "1.2.4", "left-pad/left-pad")]
+        pad_url = "https://registry.npmjs.org/left-pad/-/left-pad-{}.tgz"
+        mini_url = "https://registry.npmjs.org/minimist/-/minimist-{}.tgz"
+
+        def lock(pad: str, mini: str, mini_integrity: str) -> str:
+            nested = {"minimist": {"version": mini, "resolved": mini_url.format(mini), "integrity": mini_integrity}}
+            entry = {"version": pad, "resolved": pad_url.format(pad), "integrity": f"sha-{pad}", "dependencies": nested}
+            return json.dumps({"lockfileVersion": 1, "dependencies": {"left-pad": entry}})
+
+        old = lock("1.2.3", "1.2.5", "sha-a")
+        names = {"left-pad"}
+        self.assertTrue(manifest._lock_covers_listed("json", old, lock("1.2.4", "1.2.6", "sha-b"), updates, names))
+        self.assertFalse(manifest._lock_covers_listed("json", old, lock("1.2.4", "1.2.5", "sha-b"), updates, names))
+
 
 if __name__ == "__main__":
     unittest.main()

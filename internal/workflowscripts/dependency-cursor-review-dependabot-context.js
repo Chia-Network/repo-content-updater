@@ -79,11 +79,12 @@ function githubRepoFromText(text) {
 
 // A table Package cell: `name`, `[name](url)`, or Renovate's `[name](url) ([source](repo))`.
 function packageCell(cell) {
+  const label = (text) => text.replace(/`/g, '').trim();
   const links = [...cell.matchAll(/\[([^\]]*)\]\(([^)]*)\)/g)];
-  if (links.length === 0) return { name: cell.trim(), repo: githubRepoFromText(cell.trim()) };
+  if (links.length === 0) return { name: label(cell), repo: githubRepoFromText(label(cell)) };
   const source = links.find((link) => link[1].trim().toLowerCase() === 'source');
   return {
-    name: links[0][1].trim(),
+    name: label(links[0][1]),
     repo: githubRepoFromText(source?.[2]) || githubRepoFromText(links[0][2]) || githubRepoFromText(links[0][1]),
   };
 }
