@@ -37,7 +37,6 @@ updates:
     # {{- end }}
 
   # {{- if ne .DEPENDABOT_PIP_ENABLED "0" }}
-
   - package-ecosystem: "pip"
     registries:
       - chia-pypi
@@ -65,7 +64,6 @@ updates:
     # {{- end }}
 
   # {{- if ne .DEPENDABOT_ACTIONS_ENABLED "0" }}
-
   - package-ecosystem: "github-actions"
     directories: "{{ .DEPENDABOT_ACTIONS_DIRECTORIES }}"
     schedule:
@@ -89,7 +87,6 @@ updates:
     # {{- end }}
 
   # {{- if ne .DEPENDABOT_NPM_ENABLED "0" }}
-
   - package-ecosystem: "npm"
     directories: "{{ .DEPENDABOT_NPM_DIRECTORY }}"
     schedule:
@@ -113,7 +110,6 @@ updates:
     # {{- end }}
 
   # {{- if ne .DEPENDABOT_CARGO_ENABLED "0" }}
-
   - package-ecosystem: cargo
     directories: "{{ .DEPENDABOT_CARGO_DIRECTORY }}"
     schedule:
@@ -137,7 +133,6 @@ updates:
     # {{- end }}
 
   # {{- if ne .DEPENDABOT_SWIFT_ENABLED "0" }}
-
   - package-ecosystem: swift
     directories: "{{ .DEPENDABOT_SWIFT_DIRECTORY }}"
     schedule:
@@ -157,7 +152,6 @@ updates:
     # {{- end }}
 
   # {{- if ne .DEPENDABOT_DOCKER_ENABLED "0" }}
-
   - package-ecosystem: docker
     directories: "{{ .DEPENDABOT_DOCKER_DIRECTORIES }}"
     schedule:
@@ -181,7 +175,6 @@ updates:
     # {{- end }}
 
   # {{- if ne .DEPENDABOT_TERRAFORM_ENABLED "0" }}
-
   - package-ecosystem: terraform
     directories: "{{ .DEPENDABOT_TERRAFORM_DIRECTORIES }}"
     schedule:
@@ -205,7 +198,6 @@ updates:
     # {{- end }}
 
   # {{- if ne .DEPENDABOT_NUGET_ENABLED "0" }}
-
   - package-ecosystem: nuget
     directories: "{{ .DEPENDABOT_NUGET_DIRECTORIES }}"
     schedule:

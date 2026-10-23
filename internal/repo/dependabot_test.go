@@ -506,3 +506,25 @@ func TestListDirectoriesMatchesTemplate(t *testing.T) {
 		}
 	}
 }
+
+// Manifest detection can disable every block before the first enabled one.
+// Prettier rejects a blank line between updates: and that first list entry.
+func TestDependabotFirstEnabledEcosystemFormatting(t *testing.T) {
+	cfg := loadDependabotTestConfig(t)
+	for _, first := range dependabotEcosystems {
+		t.Run(first.name, func(t *testing.T) {
+			vars := map[string]string{}
+			for key, value := range cfg.Variables {
+				vars[key] = value
+			}
+			for _, ecosystem := range dependabotEcosystems {
+				vars[ecosystem.enabledVar] = "0"
+			}
+			vars[first.enabledVar] = "1"
+			rendered := renderDependabotTemplate(t, cfg, vars)
+			if !strings.Contains(string(rendered), "updates:\n  - package-ecosystem:") {
+				t.Fatalf("first update must immediately follow updates:\n%s", rendered)
+			}
+		})
+	}
+}
