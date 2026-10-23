@@ -167,17 +167,22 @@ function upstreamRepoFromBody(text) {
   return dependencyRepoMatch ? dependencyRepoMatch[1].replace(/\.git$/i, '') : '';
 }
 
-// One map. Intro links, table rows, Updates lines, and the title all write it.
+// One map. The package sentence, table rows, Updates lines, and the title all write it.
 // A second non-empty repository or version that differs clears that field.
 // Only the body outside <details> is read.
-function collectPackageUpdates(title, body) {
+function collectPackageUpdates(title, body, bodyRepo) {
   const byName = new Map();
   const visible = withoutDetails(body);
   const preamble = groupPreamble(visible);
+  // Only the sentence naming the bumped package(s). Other links in the preamble
+  // (release notes, changelog, commits) are not packages.
+  const statement = /^\s*(?:Bumps|Update(?:s|d)?)\b.*?(?:\.(?=\s|$)|$)/im.exec(preamble);
   const linkRe = /\[([^\]]+)\]\(\s*(https?:\/\/[^)\s]+)[^)]*\)/gi;
-  let link;
-  while ((link = linkRe.exec(preamble)) !== null) {
-    rememberUpdate(byName, link[1], '', '', githubRepoFromText(link[2]));
+  if (statement) {
+    let link;
+    while ((link = linkRe.exec(statement[0])) !== null) {
+      rememberUpdate(byName, link[1], '', '', githubRepoFromText(link[2]));
+    }
   }
   const bumpsRe = /\[([^\]]+)\]\(\s*(https?:\/\/[^)\s]+)[^)]*\)\s+from\s+(\S+)\s+to\s+(\S+)/gi;
   let bumps;
@@ -192,7 +197,7 @@ function collectPackageUpdates(title, body) {
   }
   const tableRows = updateTableRows(visible);
   for (const row of tableRows) {
-    rememberUpdate(byName, row.name, row.from, row.to, row.repo);
+    rememberUpdate(byName, row.name, row.from, row.to, row.repo || bodyRepo);
   }
   const lineRe = /^Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+)/gm;
   let line;
@@ -260,7 +265,7 @@ function parseDependencyUpdate(title, body) {
     if (shaMatches && shaMatches.length > 0) commits = shaMatches.join('\n');
   }
 
-  const updates = collectPackageUpdates(title, body);
+  const updates = collectPackageUpdates(title, body, upstreamRepo);
   const sole = updates.length === 1 ? updates[0] : null;
   return {
     upstreamRepo: sole ? sole.upstreamRepo : '',
@@ -326,6 +331,8 @@ function skipApplies(reviewedShas, resolvedSha) {
 function versionTextCameFromBody(title, body) {
   const fromTitle = parseDependencyUpdate(title, '');
   const parsed = parseDependencyUpdate(title, body);
+  // A grouped PR has no top-level versions to compare, so check every body version.
+  if (parsed.updates.length > 1) return true;
   return parsed.fromVersion !== fromTitle.fromVersion || parsed.toVersion !== fromTitle.toVersion;
 }
 

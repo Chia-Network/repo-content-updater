@@ -122,6 +122,52 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         one = _clean("lodash", "lodash/lodash")
         self.assertIs(coverage.aggregate([one])["scan_conclusive"], True)
 
+    def test_single_update_summary_reflects_coverage_not_the_child_summary(self) -> None:
+        update = {
+            "packageName": "lodash",
+            "fromVersion": "4.17.20",
+            "toVersion": "4.17.21",
+            "upstreamRepo": "lodash/lodash",
+        }
+        child = _clean("lodash", "lodash/lodash")
+        child["from_tag"] = ""
+        child["to_tag"] = ""
+        child["scan_conclusive"] = False
+
+        def scan_and_publish(_update: dict, dest: Path, _script: Path) -> dict:
+            (dest / "malware_scan_summary.md").write_text(
+                "## Malware Scan Summary\n\n- Status: **clean**\n- Scan coverage: **conclusive**.\n",
+                encoding="utf-8",
+            )
+            return child
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "dependency_updates.json").write_text(json.dumps([update]), encoding="utf-8")
+            output = root / "github_output.txt"
+            previous = os.getcwd()
+            saved = os.environ.get("GITHUB_OUTPUT")
+            os.chdir(root)
+            os.environ["GITHUB_OUTPUT"] = str(output)
+            try:
+                with (
+                    patch.object(coverage, "manifest_gaps", return_value=[]),
+                    patch.object(coverage, "_scan_one", side_effect=scan_and_publish),
+                ):
+                    coverage.main()
+            finally:
+                os.chdir(previous)
+                if saved is None:
+                    os.environ.pop("GITHUB_OUTPUT", None)
+                else:
+                    os.environ["GITHUB_OUTPUT"] = saved
+            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
+            summary = (root / "malware_scan_summary.md").read_text(encoding="utf-8")
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertIn("Scan coverage: **incomplete**", summary)
+        self.assertIn("not covered", summary)
+        self.assertNotIn("Scan coverage: **conclusive**", summary)
+
     def test_main_names_an_unresolvable_entry_and_does_not_clone_it(self) -> None:
         updates = [
             {
@@ -597,6 +643,37 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             report, "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n", "COMPATIBILITY_RECOMMENDATION: Merge\n"
         )
         self.assertEqual(published["check"], "fail")
+
+    def test_emit_puts_the_heredoc_delimiter_on_its_own_line(self) -> None:
+        report = {"status": "clean", "scan_conclusive": True, "changed_files_count": 0}
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp) / "github_output.txt"
+            with patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}):
+                coverage._emit(report, "summary without trailing newline")
+            lines = output.read_text(encoding="utf-8").splitlines()
+        start = next(index for index, line in enumerate(lines) if line.startswith("summary<<"))
+        delim = lines[start].split("<<", 1)[1]
+        self.assertEqual(lines[start + 1], "summary without trailing newline")
+        self.assertEqual(lines[start + 2], delim)
+
+    def _changed_paths_from(self, stdout: str) -> list[tuple[str, str, str]] | None:
+        result = subprocess.CompletedProcess([], 0, stdout, "")
+        with patch.object(coverage.subprocess, "run", return_value=result):
+            return coverage._changed_paths("base")
+
+    def test_changed_paths_rejects_short_rename_and_copy_records(self) -> None:
+        for status in ("R100", "C100"):
+            with self.subTest(status=status):
+                self.assertIsNone(self._changed_paths_from(f"{status}\0old-name"))
+
+    def test_changed_paths_rejects_short_single_path_record(self) -> None:
+        self.assertIsNone(self._changed_paths_from("M"))
+
+    def test_changed_paths_reads_complete_rename_and_copy_records(self) -> None:
+        self.assertEqual(
+            self._changed_paths_from("R100\0old\0new\0C75\0src\0dst\0M\0other\0"),
+            [("old", "new", "R"), ("src", "dst", "C"), ("other", "other", "M")],
+        )
 
 
 if __name__ == "__main__":

@@ -124,3 +124,13 @@ test('only == and === are stripped; range operators stay on the version', () => 
   const renovate = parseDependencyUpdate('Update dependency ruff to v0.6.0', 'https://github.com/astral-sh/ruff');
   assert.equal(renovate.toVersion, 'v0.6.0');
 });
+
+test('preamble links outside the Bumps sentence are not packages', () => {
+  const body = [
+    'Bumps [lodash](https://github.com/lodash/lodash) from 4.17.20 to 4.17.21. [Release notes](https://github.com/lodash/lodash/releases)',
+    '[Changelog](https://github.com/lodash/lodash/blob/main/CHANGELOG.md) and [homepage](https://github.com/example/other).',
+    'Updates `lodash` from 4.17.20 to 4.17.21',
+  ].join('\n');
+  const parsed = parseDependencyUpdate('Bump lodash from 4.17.20 to 4.17.21', body);
+  assert.deepEqual(rows(parsed), [['lodash', '4.17.20', '4.17.21', 'lodash/lodash']]);
+});

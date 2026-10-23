@@ -475,6 +475,17 @@ test('a rebased pull request with a moved tag is not already reviewed', async ()
   }
 });
 
+test('grouped updates always run the body version checks', () => {
+  const title = 'Bump the npm-dependencies group with 2 updates';
+  const body = [
+    '| Package | From | To |',
+    '| --- | --- | --- |',
+    '| [lodash](https://github.com/lodash/lodash) | `4.17.20` | `4.17.21` |',
+    '| [semver](https://github.com/npm/node-semver) | `7.5.4` | `7.6.0` |',
+  ].join('\n');
+  assert.equal(versionTextCameFromBody(title, body), true);
+});
+
 test('release note versions are marked only when they supply a missing version', () => {
   const titled = 'Bump example from 1.0.0 to 1.1.0';
   const notes = '`9.9.9` -> `9.9.9`\nhttps://github.com/example/example';

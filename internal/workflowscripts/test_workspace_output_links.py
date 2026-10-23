@@ -147,8 +147,20 @@ class ScanJobOutputLinksTest(_LinkedCheckout):
                 script = "\n".join(
                     line for line in _step_script(step).splitlines() if "trusted-dcr-scripts" not in line
                 )
-                subprocess.run(["bash", "-euo", "pipefail", "-c", script], check=True, env={**os.environ, "PACKAGE_NAME": ""})
+                subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", script], check=True, env={**os.environ, "PACKAGE_NAME": ""}
+                )
                 self.assert_replaced(name, target)
+
+    def test_changed_files_content_is_preserved(self) -> None:
+        expected = "a/one.js\nb/two.js\n"
+        Path("upstream_changed_files.txt").write_text(expected, encoding="utf-8")
+        script = "\n".join(
+            line for line in _step_script("Build Cursor prompts").splitlines() if "trusted-dcr-scripts" not in line
+        )
+        subprocess.run(["bash", "-euo", "pipefail", "-c", script], check=True, env={**os.environ})
+        self.assertFalse(Path("upstream_changed_files.txt").is_symlink())
+        self.assertEqual(Path("upstream_changed_files.txt").read_text(encoding="utf-8"), expected)
 
 
 class AgentOutputLinksTest(_LinkedCheckout):

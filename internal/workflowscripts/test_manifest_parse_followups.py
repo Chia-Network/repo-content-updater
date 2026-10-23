@@ -59,6 +59,29 @@ class VersionOperatorTest(unittest.TestCase):
         self.assertFalse(version_manifest._reached_listed_version("lodash", "1", "2", listed, mode="spec"))
         self.assertFalse(version_manifest._reached_listed_version("lodash", "1.2", "1.3", listed, mode="spec"))
 
+    def test_caret_and_tilde_ranges_use_npm_membership(self) -> None:
+        for spec, version in (
+            ("^1.0.0", "1.5.0"),
+            ("^0.2.3", "0.2.9"),
+            ("^0.0.3", "0.0.3"),
+            ("^0", "0.9.9"),
+            ("^0.0", "0.0.9"),
+            ("~1.2.3", "1.2.9"),
+            ("~1", "1.9.0"),
+        ):
+            self.assertTrue(version_manifest._in_range(spec, version), (spec, version))
+        for spec, version in (
+            ("^1.0.0", "2.0.0"),
+            ("^0.2.3", "0.3.0"),
+            ("^0.0.3", "0.0.4"),
+            ("^0", "1.0.0"),
+            ("^0.0", "0.1.0"),
+            ("~1.2.3", "1.3.0"),
+            ("~1", "2.0.0"),
+            ("1.5.0", "1.5.0"),
+        ):
+            self.assertFalse(version_manifest._in_range(spec, version), (spec, version))
+
     def test_dependabot_mode_takes_any_multi_part_version_without_an_operator(self) -> None:
         for token in ("2024.1", "24.2", "1.2.3.4", "v1.2", "V2024.2", "1.2.3-rc.1"):
             self.assertEqual(version_manifest._exact_body(token, mode="dependabot"), token.lstrip("vV"), token)
@@ -435,6 +458,18 @@ class RenamedManifestTest(unittest.TestCase):
 
 
 class ScannableTest(unittest.TestCase):
+    def test_pep_440_pre_post_and_dev_releases_are_exact(self) -> None:
+        def update(frm: str, to: str) -> dict:
+            return {"packageName": "p", "fromVersion": frm, "toVersion": to, "upstreamRepo": "o/r"}
+
+        for version in ("1.2.3rc1", "1.2.3a1", "1.2.3.post1", "1.2.3.dev0", "1.2.3rc1.post1.dev0"):
+            self.assertEqual(version_manifest._exact_body(version), version)
+            self.assertEqual(version_manifest._exact_body(f"=={version}"), version)
+            self.assertEqual(version_manifest._exact_body(version, mode="spec"), version)
+            self.assertEqual(version_manifest._exact_body(version, mode="dependabot"), version)
+        for frm, to in (("1.2.3rc1", "1.2.3"), ("1.2.3", "1.2.3.post1"), ("1.2.3.dev0", "1.2.3.post1")):
+            self.assertTrue(coverage.scannable(update(frm, to)), (frm, to))
+
     def test_only_exact_versions_with_a_github_repository_are_scannable(self) -> None:
         def update(frm: str, to: str, repo: str = "o/r") -> dict:
             return {"packageName": "p", "fromVersion": frm, "toVersion": to, "upstreamRepo": repo}

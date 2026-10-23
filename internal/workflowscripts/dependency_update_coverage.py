@@ -418,16 +418,19 @@ def _changed_paths(base: str) -> list[tuple[str, str, str]] | None:
     if diff.returncode != 0:
         return None
     fields = diff.stdout.split("\0")
+    while fields and not fields[-1]:
+        fields.pop()
     changed: list[tuple[str, str, str]] = []
     index = 0
-    while index + 1 < len(fields):
+    while index < len(fields):
         status = fields[index][:1]
-        if status in {"R", "C"}:
-            changed.append((fields[index + 1], fields[index + 2], status))
-            index += 3
-        else:
-            changed.append((fields[index + 1], fields[index + 1], status))
-            index += 2
+        need = 3 if status in {"R", "C"} else 2
+        if index + need > len(fields):
+            return None
+        before = fields[index + 1]
+        after = fields[index + 2] if need == 3 else before
+        changed.append((before, after, status))
+        index += need
     return changed
 
 
@@ -635,6 +638,7 @@ def _emit(report: dict, summary: str) -> None:
     fields = _emitted_fields(report)
     delim = f"GHEOF_{uuid.uuid4().hex}"
     conclusive = "true" if report.get("scan_conclusive") is True else "false"
+    body = summary.rstrip("\n")
     text = (
         f"status={_output_field(report.get('status'))}\n"
         f"changed_files_count={int(report.get('changed_files_count') or 0)}\n"
@@ -648,7 +652,7 @@ def _emit(report: dict, summary: str) -> None:
         f"to_tag={_output_field(fields.get('to_tag'))}\n"
         f"scan_conclusive={conclusive}\n"
         f"summary<<{delim}\n"
-        f"{summary}"
+        f"{body}\n"
         f"{delim}\n"
     )
     with open(output, "a", encoding="utf-8") as handle:
@@ -686,7 +690,6 @@ def main() -> None:
     work.mkdir()
     records: list[dict] = list(gaps)
     scans: list[tuple[dict, Path]] = []
-    child_summary = ""
     try:
         for index, update in enumerate(updates):
             dest = work / str(index)
@@ -694,11 +697,8 @@ def main() -> None:
             record = _scan_one(update, dest, scan_script)
             records.append(record)
             scans.append((record, dest))
-            summary_path = dest / "malware_scan_summary.md"
-            if len(updates) == 1 and not gaps and summary_path.is_file():
-                child_summary = summary_path.read_text(encoding="utf-8")
         report = aggregate(records)
-        summary = child_summary if len(records) == 1 and child_summary else render_summary(report, records)
+        summary = render_summary(report, records)
         _write_report(report, summary)
         _keep_checkout(records, scans)
     finally:
