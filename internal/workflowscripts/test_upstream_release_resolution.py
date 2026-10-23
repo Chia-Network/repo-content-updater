@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 try:
     from upstream_malware_scan_case import UpstreamScanCase, _commit_file, _git
@@ -14,6 +16,8 @@ except ImportError:
         _commit_file,
         _git,
     )
+
+_SCRIPTS = Path(__file__).resolve().parent
 
 
 def _assert_not_benign(test: UpstreamScanCase, report: dict) -> None:
@@ -314,6 +318,37 @@ class ReleaseResolutionTest(UpstreamScanCase):
             self.assertEqual(report["not_scanned_reason"], "tag_spellings_disagree")
             self.assertEqual(report["resolved_to"], "")
             self.assertEqual(report["findings"]["ioc"], [])
+
+    def test_release_tag_lookup_failure_is_not_a_disagreement(self) -> None:
+        # Exit 3 is no tag and 4 is disagreeing spellings. A traceback (exit 1)
+        # or a missing script (exit 2) is a failed lookup that the scan notes.
+        cases = {
+            "missing": (None, "from_ref_unresolved", "release tag lookup exit 2"),
+            "traceback": ("raise RuntimeError\n", "from_ref_unresolved", "release tag lookup exit 1"),
+            "absent": ("raise SystemExit(3)\n", "from_ref_unresolved", None),
+            "disagree": ("raise SystemExit(4)\n", "tag_spellings_disagree", None),
+        }
+        for label, (stub, reason, error) in cases.items():
+            with self.subTest(label), self._workspace() as (work, repo), TemporaryDirectory() as scripts:
+                for name in ("upstream_malware_scan.sh", "upstream_malware_scan_lib.sh", "upstream_malware_scan_findings.sh"):
+                    shutil.copy(_SCRIPTS / name, scripts)
+                if stub is not None:
+                    Path(scripts, "dependency_cursor_review_versions.py").write_text(stub, encoding="utf-8")
+                _commit_file(repo, "pkg/index.js", "module.exports = 1;\n", "from")
+                _git(repo, "tag", "1.0.0")
+                _commit_file(repo, "pkg/index.js", "module.exports = 2;\n", "to")
+                _git(repo, "tag", "1.1.0")
+                report = self._scan(
+                    work, repo, scan=Path(scripts, "upstream_malware_scan.sh"), FROM_VERSION="1.0.0", TO_VERSION="1.1.0"
+                )
+                _assert_not_benign(self, report)
+                self.assertEqual(report["not_scanned_reason"], reason)
+                self.assertEqual((report["from_tag"], report["to_tag"]), ("", ""))
+                lookup_errors = [line for line in report["errors"] if line.startswith("release tag lookup")]
+                self.assertEqual(lookup_errors, [error] * 2 if error else [], msg=report["errors"])
+                if error:
+                    jump_error = error.replace("release tag lookup", "version jump check")
+                    self.assertIn(jump_error, report["errors"])
 
     def test_empty_from_version_is_not_conclusive(self) -> None:
         with self._workspace() as (work, repo):

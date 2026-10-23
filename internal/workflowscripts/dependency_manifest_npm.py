@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import re
 
+from dependency_cursor_review_versions import NPM_SEMVER
+
 _YARN_DESCRIPTOR_RE = re.compile(r'(@?[^@"\s]+)@')
 _LOCK_PREFIX = "node_modules/"
 _YARN_VERSION_RE = re.compile(r'^  version "([^"]+)"')
@@ -214,12 +216,11 @@ def _yarn_witnesses(text: str) -> dict[str, frozenset[str]]:
     return found
 
 
-_SEMVER = r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?"
 _TARBALL_RE = re.compile(
     r"^https://registry\.(?:npmjs\.org|yarnpkg\.com)/"
-    r"(?:(?P<scope>@[^/]+)/)?(?P<name>[^/]+)/-/(?P<base>[^/]+)-(?P<version>" + _SEMVER + r")\.tgz$"
+    r"(?:(?P<scope>@[^/]+)/)?(?P<name>[^/]+)/-/(?P<base>[^/]+)-(?P<version>" + NPM_SEMVER + r")\.tgz$"
 )
-_FOLD_SPEC_RE = re.compile(rf"^(?:\^|=)?({_SEMVER})$")
+_FOLD_SPEC_RE = re.compile(rf"^(?:\^|=)?({NPM_SEMVER})$")
 _LOCATOR_KEYS = frozenset({"version", "resolved", "integrity", "checksum"})
 _SPEC_SECTIONS = frozenset({"dependencies", "devDependencies", "optionalDependencies", "peerDependencies"})
 

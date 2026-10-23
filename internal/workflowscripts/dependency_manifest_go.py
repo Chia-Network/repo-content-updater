@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from dependency_manifest_versions import _exact_body, _version_body
+from dependency_cursor_review_versions import _exact_body, _version_body
 
 _GO_MOD_RE = re.compile(
     r"^\s*(?:require\s+)?([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)\s+(v\S+)",
