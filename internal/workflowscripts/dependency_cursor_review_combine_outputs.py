@@ -1,4 +1,4 @@
-"""Merge Cursor malware + compatibility JSON outputs; format malware verdict via trusted loader.
+"""Merge Cursor malware + compatibility JSON outputs; format the malware verdict.
 
 The verdict job passes DCR_SCAN_REPORT and MALWARE_SCAN_REPORT_SHA256 from the
 scan job. Combine reads that report and exits unless hashlib.sha256 matches.
@@ -10,60 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import runpy
 import sys
 from pathlib import Path
 
-_INSTALL = Path(__file__).resolve().parent
-# The running script's directory is the trusted checkout (runner temp). Prefer it
-# over the PR workspace .github/scripts so a PR-head formatter cannot win.
-_SCRIPT_CANDIDATES = (
-    _INSTALL,
-    Path(".github/scripts"),
-    Path("internal/workflowscripts"),
-)
-_COLD_START_PATH = _INSTALL / "trusted_formatter_loader_cold_start.py"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-
-def _drop_pr_head_scripts_from_sys_path() -> None:
-    """Keep the PR checkout's .github/scripts off sys.path.
-
-    Trusted modules load by file path from this script's directory. A PR-head
-    directory on sys.path can shadow stdlib (dataclasses, json) in the step
-    that has CURSOR_API_KEY.
-    """
-    workspace_scripts = (Path.cwd() / ".github" / "scripts").resolve()
-    if workspace_scripts == _INSTALL.resolve():
-        return
-    kept: list[str] = []
-    for entry in sys.path:
-        if not entry:
-            kept.append(entry)
-            continue
-        try:
-            resolved = Path(entry).resolve()
-        except OSError:
-            kept.append(entry)
-            continue
-        if resolved == workspace_scripts:
-            continue
-        kept.append(entry)
-    sys.path[:] = kept
-
-
-def _host_namespace() -> dict[str, object]:
-    """Canonical python3 -I host entry (no sibling imports)."""
-    return runpy.run_path(str(_COLD_START_PATH))
-
-
-def _load_formatter():
-    """The trusted malware verdict formatter module."""
-    ns = _host_namespace()
-    loader, script_dir = ns["resolve_loader_bundle"](_SCRIPT_CANDIDATES)
-    return loader.import_module_from_trusted_script(
-        script_dir / "malware_verdict_formatter.py",
-        "trusted_malware_verdict_formatter",
-    )
+import malware_verdict_formatter as formatter
 
 
 def _load_any(path: str) -> dict:
@@ -172,15 +124,12 @@ def _sealed_report() -> object:
 
 
 def main() -> None:
-    _drop_pr_head_scripts_from_sys_path()
-    # Check the sealed report before loading any sibling module.
     report = _sealed_report()
     malware_path = str(_env_path("DCR_MALWARE_JSON"))
     compatibility_path = str(_env_path("DCR_COMPAT_JSON"))
     combined_path = _env_path("DCR_COMBINED_JSON")
     malware_payload = _load_any(malware_path)
     compatibility_payload = _load_any(compatibility_path)
-    formatter = _load_formatter()
     agent_text = _extract_text(malware_payload)
     compatibility_text = _final_message(compatibility_payload) or _extract_text(compatibility_payload)
     published = formatter.compose_published_review(
@@ -228,9 +177,7 @@ def _optional_final_message(name: str) -> str:
 
 def _enforce_published_check() -> None:
     """Recompute the check from the sealed report. A stored check string is ignored."""
-    _drop_pr_head_scripts_from_sys_path()
     report = _sealed_report()
-    formatter = _load_formatter()
     published = formatter.compose_published_review(
         report,
         _optional_analysis("DCR_MALWARE_JSON"),

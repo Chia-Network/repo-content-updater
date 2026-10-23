@@ -28,11 +28,12 @@ def _run_listed_scan(base: dict[str, str], head: dict[str, str], updates: list[d
             _commit(root, name, content, f"head {name}")
         (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
         previous = os.getcwd()
-        saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT")}
+        saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT", "DCR_OUT")}
         os.chdir(root)
         os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
         os.environ.pop("GITHUB_BASE_REF", None)
         os.environ["GITHUB_OUTPUT"] = str(root / "github_output.txt")
+        os.environ["DCR_OUT"] = str(root)
 
         def fake_scan(update: dict, *_args: object, **_kwargs: object) -> dict:
             return _clean(str(update.get("packageName") or ""), str(update.get("upstreamRepo") or ""))

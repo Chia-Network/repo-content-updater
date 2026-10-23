@@ -10,13 +10,16 @@ import base64
 import json
 import os
 import re
-import runpy
 import shutil
 import subprocess
 import sys
-import tempfile
 import uuid
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import dependency_manifest_diff as _diff
+import dependency_manifest_versions as _versions
 
 _REPO_RE = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
@@ -294,33 +297,6 @@ def any_read(report: dict) -> bool:
     return int(report.get("materialized_count") or 0) > 0
 
 
-# Grammars dependency_manifest_diff imports, in dependency order.
-_MANIFEST_GRAMMARS = (
-    "dependency_manifest_versions",
-    "dependency_manifest_go",
-    "dependency_manifest_npm",
-    "dependency_manifest_python",
-)
-
-
-def _load_manifest_modules():
-    """Load the manifest grammars beside this file under python3 -I; return the diff and version modules.
-
-    The cold-start spine is the only bootstrap. It path-filters the sibling,
-    so this script never imports it and never puts the scripts directory on sys.path.
-    """
-    script_dir = Path(__file__).resolve().parent
-    cold = runpy.run_path(str(script_dir / "trusted_formatter_loader_cold_start.py"))
-    cold["resolve_loader_for_dir"](script_dir)
-    scrub = sys.modules["scripts_dir_path_scrub"]
-    loaded = {
-        name: scrub.bootstrap_module_from_scripts_dir(script_dir, f"{name}.py", name)
-        for name in (*_MANIFEST_GRAMMARS, "dependency_manifest_diff")
-    }
-    return loaded["dependency_manifest_diff"], loaded["dependency_manifest_versions"]
-
-
-_diff, _versions = _load_manifest_modules()
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
 
 
@@ -541,14 +517,6 @@ def _has_upstream_link(updates: list[dict]) -> bool:
     return any(_REPO_RE.fullmatch(str(item.get("upstreamRepo") or "")) for item in updates)
 
 
-def publish_text(path: Path, text: str) -> None:
-    """Replace the entry at path with a new file, so a link there is replaced, not followed."""
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(text)
-    os.replace(tmp, path)
-
-
 def remove_entry(path: Path) -> None:
     """Remove the entry at path; a link is unlinked, never followed."""
     if path.is_dir() and not path.is_symlink():
@@ -557,9 +525,9 @@ def remove_entry(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def _write_report(report: dict, summary: str) -> None:
-    publish_text(Path("malware_scan_report.json"), json.dumps(report, indent=2) + "\n")
-    publish_text(Path("malware_scan_summary.md"), summary)
+def _write_report(out: Path, report: dict, summary: str) -> None:
+    (out / "malware_scan_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    (out / "malware_scan_summary.md").write_text(summary, encoding="utf-8")
 
 
 def _clone(repo: str, dest: Path) -> bool:
@@ -677,11 +645,12 @@ def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
 def main() -> None:
     fetch_token = os.environ.pop(FETCH_AUTH_VARIABLE, "")
     scan_script = Path(__file__).resolve().parent / "upstream_malware_scan.sh"
-    updates = _load_updates(Path("dependency_updates.json"))
+    out = Path(os.environ["DCR_OUT"])
+    updates = _load_updates(out / "dependency_updates.json")
     if updates and not _has_upstream_link(updates):
         report = uncovered({}, "no_upstream_link")
         summary = render_summary(report, [])
-        _write_report(report, summary)
+        _write_report(out, report, summary)
         _emit(report, summary)
         return
     gaps = manifest_gaps(updates, fetch_token)
@@ -699,7 +668,7 @@ def main() -> None:
             scans.append((record, dest))
         report = aggregate(records)
         summary = render_summary(report, records)
-        _write_report(report, summary)
+        _write_report(out, report, summary)
         _keep_checkout(records, scans)
     finally:
         shutil.rmtree(work, ignore_errors=True)

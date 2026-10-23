@@ -62,11 +62,12 @@ class DependencyManifestDiffTest(unittest.TestCase):
             (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
             output = root / "github_output.txt"
             previous = os.getcwd()
-            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT")}
+            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT", "DCR_OUT")}
             os.chdir(root)
             os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
             os.environ.pop("GITHUB_BASE_REF", None)
             os.environ["GITHUB_OUTPUT"] = str(output)
+            os.environ["DCR_OUT"] = str(root)
             try:
                 with patch.object(coverage, "_clone", lambda *_args, **_kwargs: False):
                     coverage.main()
@@ -126,11 +127,12 @@ class DependencyManifestDiffTest(unittest.TestCase):
             (root / "dependency_updates.json").write_text("[]", encoding="utf-8")
             output = root / "github_output.txt"
             previous = os.getcwd()
-            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT")}
+            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT", "DCR_OUT")}
             os.chdir(root)
             os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
             os.environ.pop("GITHUB_BASE_REF", None)
             os.environ["GITHUB_OUTPUT"] = str(output)
+            os.environ["DCR_OUT"] = str(root)
             try:
                 coverage.main()
             finally:
@@ -231,11 +233,12 @@ class DependencyManifestDiffTest(unittest.TestCase):
             (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
             output = root / "github_output.txt"
             previous = os.getcwd()
-            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT")}
+            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT", "DCR_OUT")}
             os.chdir(root)
             os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
             os.environ.pop("GITHUB_BASE_REF", None)
             os.environ["GITHUB_OUTPUT"] = str(output)
+            os.environ["DCR_OUT"] = str(root)
             try:
                 with patch.object(coverage, "_clone", lambda *_args, **_kwargs: False):
                     coverage.main()

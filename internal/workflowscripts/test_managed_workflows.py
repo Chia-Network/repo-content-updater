@@ -12,63 +12,14 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEPENDENCY_CURSOR_REVIEW = _REPO_ROOT / "templates" / "dependency-cursor-review.yml"
-_TRUSTED_GIT_CHECKOUT_ACTION = (
-    _REPO_ROOT / "templates" / "trusted-git-path-checkout-action.yml"
-)
 _SLOT = "ab" * 16
 _OTHER_SLOT = "cd" * 16
 _LATER_SLOT = "ef" * 16
 
 
 class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
-    def _post_checkout_section(self) -> str:
-        workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
-        return workflow.split("Checkout repository", 1)[1]
-
-    def test_composite_action_bootstrapped_from_trusted_ref_before_uses(self) -> None:
-        self.assertTrue(_DEPENDENCY_CURSOR_REVIEW.is_file())
-        section = self._post_checkout_section()
-        bootstrap = section.split(
-            "Install trusted git path checkout action definition", 1
-        )[1].split("Ensure malware verdict formatter bundle", 1)[0]
-        ensure_bundle = section.split("Ensure malware verdict formatter bundle", 1)[1].split(
-            "Extract Dependabot comment context", 1
-        )[0]
-        self.assertNotIn("Formatter script present on PR head.", section)
-        self.assertIn(
-            "not PR head definition",
-            bootstrap,
-            msg="bootstrap must overwrite composite action from trusted ref",
-        )
-        self.assertIn('http.extraheader=AUTHORIZATION: basic ${auth_basic}', bootstrap)
-        self.assertIn(
-            'git checkout "FETCH_HEAD" -- "${action_file}"',
-            bootstrap,
-        )
-        self.assertIn(".github/actions/trusted-git-path-checkout/action.yml", bootstrap)
-        self.assertNotIn("http.extraheader=AUTHORIZATION", ensure_bundle)
-        self.assertIn(
-            "./.github/actions/trusted-git-path-checkout",
-            ensure_bundle,
-            msg="formatter bundle uses composite after trusted bootstrap",
-        )
-        self.assertIn("paths_manifest:", ensure_bundle)
-        self.assertIn(
-            ".github/scripts/dependency-cursor-review-trusted-scripts.paths",
-            ensure_bundle,
-        )
-        self.assertIn("dest:", ensure_bundle)
-        self.assertIn("trusted-dcr-scripts", ensure_bundle)
-        self.assertNotIn("paths: |", ensure_bundle)
-        self.assertLess(
-            section.index("Install trusted git path checkout action definition"),
-            section.index("Ensure malware verdict formatter bundle"),
-        )
-
     def test_dependency_cursor_review_workflow_under_line_budget(self) -> None:
-        line_count = len(
-            _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8").splitlines()
-        )
+        line_count = len(_DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8").splitlines())
         self.assertLess(
             line_count,
             1000,
@@ -95,7 +46,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         agent = self._job(workflow, "dependency-review-agent")
         verdict = self._job(workflow, "dependency-review")
         self.assertIn(
-            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_update_coverage.py"',
+            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/dependency_update_coverage.py"',
             scan,
         )
         prompts = scan.split("- name: Build Cursor prompts\n", 1)[1].split("\n      - name:", 1)[0]
@@ -103,29 +54,18 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertIn("steps.malware_scan.outputs.from_version", prompts)
         self.assertIn("steps.malware_scan.outputs.to_version", prompts)
         self.assertNotIn("steps.dependabot_context.outputs", prompts)
-        coverage = (
-            _REPO_ROOT / "internal/workflowscripts/dependency_update_coverage.py"
-        ).read_text(encoding="utf-8")
+        coverage = (_REPO_ROOT / "internal/workflowscripts/dependency_update_coverage.py").read_text(encoding="utf-8")
         self.assertIn("upstream_malware_scan.sh", coverage)
         self.assertIn("scan_conclusive", coverage)
         self.assertNotIn("bash .github/scripts/upstream_malware_scan.sh", workflow)
         combine = (
-            _REPO_ROOT
-            / "internal"
-            / "workflowscripts"
-            / "dependency_cursor_review_combine_outputs.py"
+            _REPO_ROOT / "internal" / "workflowscripts" / "dependency_cursor_review_combine_outputs.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("resolve_loader_bundle", combine)
-        self.assertIn("runpy.run_path", combine)
-        self.assertNotIn("dependency_cursor_review_trusted_loader", combine)
-        self.assertNotIn("def _load_util", combine)
-        self.assertNotIn("_util_via_bootstrap", combine)
-        self.assertNotIn("_cold_start_module", combine)
-        self.assertNotIn("_bootstrap_module_for", combine)
+        self.assertIn("import malware_verdict_formatter as formatter", combine)
         self.assertIn("dependency-cursor-review-dependabot-context.js", scan)
         self.assertIn("dependency-cursor-review-target-pr.js", scan)
         self.assertIn(
-            'bash "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/upstream_release_checkout.sh"',
+            'bash "${RUNNER_TEMP}/trusted-dcr-scripts/upstream_release_checkout.sh"',
             scan,
         )
         checkout_step = scan.split("- name: Check out upstream release and drop agent instructions\n", 1)[1].split(
@@ -133,9 +73,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         )[0]
         self.assertIn("steps.malware_scan.outputs.resolved_to", checkout_step)
         self.assertIn("steps.target_pr.outputs.base_sha", scan)
-        checkout_sh = (
-            _REPO_ROOT / "internal/workflowscripts/upstream_release_checkout.sh"
-        ).read_text(encoding="utf-8")
+        checkout_sh = (_REPO_ROOT / "internal/workflowscripts/upstream_release_checkout.sh").read_text(encoding="utf-8")
         self.assertNotIn("agent_target", checkout_sh)
         self.assertNotIn("jq ", checkout_sh)
         self.assertNotIn("git -C .upstream-dependency checkout --detach", workflow)
@@ -154,11 +92,10 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         for name in (
             "malware_scan_report.json",
             "malware_scan_summary.md",
-            "upstream_changed_files.txt",
             "cursor_prompt_malware.txt",
             "cursor_prompt_compatibility.txt",
         ):
-            self.assertIn(name, upload)
+            self.assertIn("${{`{{ runner.temp }}`}}/dcr-out/" + name, upload)
         self.assertIn("retention-days: 1", upload)
         self.assertNotIn("cursor_output_malware.json", upload)
 
@@ -181,18 +118,16 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("merge-base --is-ancestor", agent)
         self.assertNotIn("fetch --tags", agent)
         self.assertIn('fetch --no-tags --depth=1 origin "$sha"', agent)
-        self.assertIn('refs/tags/${name}:refs/tags/${name}', agent)
+        self.assertIn("refs/tags/${name}:refs/tags/${name}", agent)
         self.assertIn("refs/dcr/from", agent)
         self.assertIn("refs/dcr/to", agent)
-        self.assertIn('refs/tags/${name}^{commit}', agent)
+        self.assertIn("refs/tags/${name}^{commit}", agent)
         self.assertIn('update-ref -d "refs/tags/${name}"', agent)
         self.assertEqual(agent.count("tag_name_ok()"), 1)
         self.assertNotIn("*/*/*", agent)
         self.assertIn('update-ref -d "refs/tags/${name}" || return 1', agent)
         self.assertIn('file="dcr-scan-input/cursor_prompt_compatibility.txt"', agent)
-        fetch = agent.split("- name: Fetch upstream commits and version tags\n", 1)[1].split(
-            "\n      - name:", 1
-        )[0]
+        fetch = agent.split("- name: Fetch upstream commits and version tags\n", 1)[1].split("\n      - name:", 1)[0]
         self.assertNotIn("|| exit 1", fetch)
         self.assertNotIn("dcr-slot-[0-9a-f]", fetch)
         scan_sh = (_REPO_ROOT / "internal/workflowscripts/upstream_malware_scan.sh").read_text(encoding="utf-8")
@@ -240,9 +175,9 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             "python3 -I .github/scripts/dependency_cursor_review_combine_outputs.py",
             agent,
         )
-        post_js = (
-            _REPO_ROOT / "internal/workflowscripts/dependency-cursor-review-post-comment.js"
-        ).read_text(encoding="utf-8")
+        post_js = (_REPO_ROOT / "internal/workflowscripts/dependency-cursor-review-post-comment.js").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("require('./dependency-cursor-review-dependabot-context.js')", post_js)
         self.assertNotIn("RUNNER_TEMP", post_js)
         self.assertIn("function selectPostedMarker", post_js)
@@ -522,7 +457,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
                 "  echo 'update-ref -d failed' >&2\n"
                 "  exit 1\n"
                 "fi\n"
-                f"exec {real_git} \"$@\"\n",
+                f'exec {real_git} "$@"\n',
                 encoding="utf-8",
             )
             wrapper.chmod(0o755)
@@ -555,9 +490,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
     def _fetch_script(self) -> str:
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
         agent = self._job(workflow, "dependency-review-agent")
-        block = agent.split("- name: Fetch upstream commits and version tags\n", 1)[1].split(
-            "\n      - name:", 1
-        )[0]
+        block = agent.split("- name: Fetch upstream commits and version tags\n", 1)[1].split("\n      - name:", 1)[0]
         return textwrap.dedent(block.split("run: |\n", 1)[1])
 
     def _plant_prompts(self, work: Path) -> None:
@@ -645,27 +578,11 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
     def test_5dd16704_target_pr_sparse_helper_does_not_shrink_pr_checkout(self) -> None:
         """Bugbot 5dd16704: sparse helper checkout must not leave GITHUB_WORKSPACE sparse for PR head."""
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
-        helper_block = workflow.split("Checkout trusted target-PR helper", 1)[1].split(
-            "Resolve target PR context", 1
-        )[0]
-        self.assertIn("path: .trusted-dcr-helper", helper_block)
+        helper_block = workflow.split("Checkout trusted review scripts", 1)[1].split("Resolve target PR context", 1)[0]
+        self.assertIn("path: .trusted-dcr-scripts", helper_block)
         self.assertIn(
-            "RUNNER_TEMP}/trusted-dcr-helper/dependency-cursor-review-target-pr.js",
+            "RUNNER_TEMP}/trusted-dcr-scripts/dependency-cursor-review-target-pr.js",
             workflow,
         )
-        pr_block = workflow.split("Checkout repository", 1)[1].split(
-            "Install trusted git path checkout action definition", 1
-        )[0]
+        pr_block = workflow.split("Checkout repository", 1)[1].split("Extract Dependabot comment context", 1)[0]
         self.assertNotIn("sparse-checkout:", pr_block)
-
-    def test_trusted_git_path_checkout_action_uses_basic_auth_fetch(self) -> None:
-        self.assertTrue(_TRUSTED_GIT_CHECKOUT_ACTION.is_file())
-        action = _TRUSTED_GIT_CHECKOUT_ACTION.read_text(encoding="utf-8")
-        self.assertIn("never executing PR head copy", action)
-        self.assertIn('http.extraheader=AUTHORIZATION: basic ${auth_basic}', action)
-        self.assertIn('git checkout "FETCH_HEAD" -- "${checkout_targets[@]}"', action)
-        self.assertIn("x-access-token:", action)
-        self.assertNotRegex(
-            action,
-            r'if\s+\[\s*-f\s+"?\$?\{?script\}?"?\s*\];\s*then[\s\S]*?exit\s+0',
-        )

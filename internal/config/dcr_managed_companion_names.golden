@@ -1,12 +1,6 @@
 dependency-cursor-review
 github-scripts-init
 malware-verdict-formatter
-scripts-dir-disk-exec
-scripts-dir-path-scrub
-formatter-runtime-bundle
-isolated-module-exec
-trusted-formatter-loader
-trusted-formatter-loader-cold-start
 upstream-malware-scan
 dependency-update-coverage
 dependency-manifest-diff
@@ -19,8 +13,6 @@ dependency-cursor-review-combine-outputs
 dependency-cursor-review-dependabot-context
 dependency-cursor-review-post-comment
 dependency-cursor-review-target-pr
-dependency-cursor-review-trusted-scripts
 upstream-malware-scan-lib
 upstream-malware-scan-findings
 upstream-release-checkout
-trusted-git-path-checkout-action

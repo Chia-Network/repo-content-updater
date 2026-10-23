@@ -17,13 +17,8 @@ _SCRIPTS = Path(__file__).resolve().parent
 _REPO_ROOT = _SCRIPTS.parents[1]
 _WORKFLOW = _REPO_ROOT / "templates" / "dependency-cursor-review.yml"
 
-# Minimal trusted bundle files needed for combine_outputs to reach formatter load.
-import formatter_runtime_bundle as _runtime  # noqa: E402
-
-_BUNDLE_STEMS = (
-    *_runtime.FORMATTER_RUNTIME_FILENAMES,
-    *_runtime.DCR_COMBINE_EXTRA_FILENAMES,
-)
+# The files combine needs beside it in a trusted checkout.
+_BUNDLE_STEMS = ("dependency_cursor_review_combine_outputs.py", "malware_verdict_formatter.py")
 _BENIGN_AGENT = '{"result":"MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs."}'
 _COMPAT_AGENT = '{"result":"compat ok"}'
 _INCONCLUSIVE_REPORT = {
@@ -41,7 +36,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
     def test_workflow_runs_python_companions_with_isolated_flag(self) -> None:
         workflow = _WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(
-            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/.github/scripts/dependency_cursor_review_prompts.py"',
+            'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/dependency_cursor_review_prompts.py"',
             workflow,
         )
         self.assertIn(
@@ -64,7 +59,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         self.assertIn("refs/dcr/from", prompts)
         self.assertIn("refs/dcr/to", prompts)
         self.assertIn('_layout_tag_line("from tag", token)', prompts)
-        self.assertIn('dcr-slot-{token}', prompts)
+        self.assertIn("dcr-slot-{token}", prompts)
         self.assertIn("Intermediate commits were not fetched", prompts)
         self.assertNotIn("_tag_ok", prompts)
         self.assertNotIn("FROM_TAG", prompts)
@@ -85,13 +80,11 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         verdict = workflow.split("\n  dependency-review:\n", 1)[1]
         self.assertNotIn("pull-requests:", agent)
         self.assertNotIn("fetch-depth: 0", agent)
-        fetch = agent.split("- name: Fetch upstream commits and version tags\n", 1)[1].split(
-            "\n      - name:", 1
-        )[0]
+        fetch = agent.split("- name: Fetch upstream commits and version tags\n", 1)[1].split("\n      - name:", 1)[0]
         for key in ("RESOLVED_FROM:", "RESOLVED_TO:", "FROM_TAG:", "TO_TAG:"):
             self.assertIn(key, fetch)
         self.assertNotIn("fetch --tags", fetch)
-        self.assertIn('refs/tags/${name}^{commit}', fetch)
+        self.assertIn("refs/tags/${name}^{commit}", fetch)
         self.assertIn('update-ref -d "refs/tags/${name}"', fetch)
         self.assertLess(
             agent.index("- name: Download scan prompts\n"),
@@ -149,10 +142,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             f"- from tag: (none) dcr-slot-{other}\n"
             f"- to tag: (none) dcr-slot-{other}\n"
         )
-        report = (
-            f"- from tag: (none) dcr-slot-{other}\n"
-            f"- to tag: (none) dcr-slot-{other}\n"
-        )
+        report = f"- from tag: (none) dcr-slot-{other}\n- to tag: (none) dcr-slot-{other}\n"
         text = _render_prompts(
             files={
                 "dependabot_release_notes.md": notes,
@@ -217,76 +207,8 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             self.assertIn("(none)", body)
             self.assertNotIn("git -C .upstream-dependency diff", body)
 
-    def test_a46061b8_combine_resists_importlib_shadow_on_scripts_dir(self) -> None:
-        """Scripts-dir shadow must not run when bootstrap/companion load scrubs sys.path."""
-        with tempfile.TemporaryDirectory() as tmp:
-            scripts = Path(tmp) / "scripts"
-            scripts.mkdir()
-            for name in _BUNDLE_STEMS:
-                shutil.copy2(_SCRIPTS / name, scripts / name)
-            (scripts / "importlib.py").write_text(
-                "raise RuntimeError('untrusted importlib shadow')\n",
-                encoding="utf-8",
-            )
-            (scripts / "cursor_output_malware.json").write_text(
-                '{"result":"Verdict: benign\\n\\nOK"}', encoding="utf-8"
-            )
-            (scripts / "cursor_output_compatibility.json").write_text(
-                '{"result":"compat ok"}', encoding="utf-8"
-            )
-            script_dir = str(scripts.resolve())
-            sys.path.insert(0, script_dir)
-            try:
-                import runpy
-
-                ns = runpy.run_path(
-                    str(scripts / "trusted_formatter_loader_cold_start.py")
-                )
-                loader, _ = ns["resolve_loader_bundle"]((scripts,))
-                self.assertTrue(
-                    hasattr(loader, "find_and_load_format_malware_review_verdict")
-                )
-            finally:
-                sys.path[:] = [p for p in sys.path if p != script_dir]
-
-    def test_a46061b8_python_I_combine_subprocess_with_json_shadow(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            scripts = root / ".github" / "scripts"
-            scripts.mkdir(parents=True)
-            for name in _BUNDLE_STEMS:
-                shutil.copy2(_SCRIPTS / name, scripts / name)
-            (scripts / "json.py").write_text(
-                "raise RuntimeError('untrusted json shadow')\n",
-                encoding="utf-8",
-            )
-            (root / "cursor_output_malware.json").write_text(
-                '{"result":"Verdict: benign\\n\\nOK"}', encoding="utf-8"
-            )
-            (root / "cursor_output_compatibility.json").write_text(
-                '{"result":"compat ok"}', encoding="utf-8"
-            )
-            proc = subprocess.run(
-                [
-                    sys.executable,
-                    "-I",
-                    str(scripts / "dependency_cursor_review_combine_outputs.py"),
-                ],
-                cwd=root,
-                env=_seal_env(root, _CONCLUSIVE_BYTES),
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(
-                proc.returncode,
-                0,
-                msg=proc.stderr or proc.stdout,
-            )
-            out = (root / "cursor_output.json").read_text(encoding="utf-8")
-            self.assertIn("Supply-Chain Malware Review", out)
-
-    def test_isolated_trusted_dir_ignores_pr_head_formatter(self) -> None:
-        """PR-head .github/scripts must not supply the formatter when combine runs elsewhere."""
+    def test_combine_imports_the_formatter_from_its_own_directory(self) -> None:
+        """Under python3 -I, a .github/scripts in the working directory supplies nothing."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             pr_scripts = root / ".github" / "scripts"
@@ -294,8 +216,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             package = pr_scripts / "malware_verdict_formatter"
             package.mkdir()
             (package / "__init__.py").write_text(
-                "def format_malware_review_verdict(_text):\n"
-                "    return '**Verdict: hijacked**'\n",
+                "def format_malware_review_verdict(_text):\n    return '**Verdict: hijacked**'\n",
                 encoding="utf-8",
             )
             (pr_scripts / "dataclasses.py").write_text(
@@ -330,40 +251,6 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             self.assertIn("**Verdict: benign**", out)
             self.assertNotIn("hijacked", out)
 
-    def test_util_register_scrubs_scripts_dir_on_first_exec(self) -> None:
-        """Bootstrap util registration must not run with scripts dir on sys.path."""
-        with tempfile.TemporaryDirectory() as tmp:
-            scripts = Path(tmp) / "scripts"
-            scripts.mkdir()
-            for name in _BUNDLE_STEMS:
-                shutil.copy2(_SCRIPTS / name, scripts / name)
-            (scripts / "importlib.py").write_text(
-                "raise RuntimeError('untrusted importlib shadow')\n",
-                encoding="utf-8",
-            )
-            script_dir = str(scripts.resolve())
-            sys.path.insert(0, script_dir)
-            purge = (
-                "isolated_module_exec",
-                "isolated_module_exec",
-                "trusted_formatter_loader",
-            )
-            saved = {name: sys.modules.pop(name, None) for name in purge}
-            try:
-                import runpy
-
-                ns = runpy.run_path(
-                    str(scripts / "trusted_formatter_loader_cold_start.py")
-                )
-                ns["resolve_loader_for_dir"](scripts)
-            finally:
-                sys.path[:] = [p for p in sys.path if p != script_dir]
-                for name, module in saved.items():
-                    if module is None:
-                        sys.modules.pop(name, None)
-                    else:
-                        sys.modules[name] = module
-
     def test_matching_unscoped_report_ignores_workspace_fake(self) -> None:
         payload = (json.dumps(_INCONCLUSIVE_REPORT) + "\n").encode()
         with tempfile.TemporaryDirectory() as tmp:
@@ -390,7 +277,6 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             proc, workspace = _combine_in(Path(tmp), payload, hashlib.sha256(b"other").hexdigest())
             self._assert_combine_failed(proc, workspace)
             self.assertIn("digest mismatch", proc.stderr)
-
 
     def test_missing_scan_report_exits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -430,6 +316,7 @@ def _render_prompts(
             RESOLVED_TO="",
             FROM_TAG="",
             TO_TAG="",
+            DCR_OUT=tmp,
         )
         env.update(env_updates)
         proc = subprocess.run(

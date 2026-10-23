@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,13 +12,6 @@ import unittest
 from pathlib import Path
 
 _SCRIPTS = Path(__file__).resolve().parent
-
-import formatter_runtime_bundle as _runtime  # noqa: E402
-
-_BUNDLE_STEMS = (
-    *_runtime.FORMATTER_RUNTIME_FILENAMES,
-    *_runtime.DCR_COMBINE_EXTRA_FILENAMES,
-)
 _COMBINE = _SCRIPTS / "dependency_cursor_review_combine_outputs.py"
 
 
@@ -32,10 +24,6 @@ class CombineCompleteTest(unittest.TestCase):
     ) -> dict:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            scripts = root / ".github" / "scripts"
-            scripts.mkdir(parents=True)
-            for name in _BUNDLE_STEMS:
-                shutil.copy2(_SCRIPTS / name, scripts / name)
             if malware is not None:
                 (root / "cursor_output_malware.json").write_text(malware, encoding="utf-8")
             if compatibility is not None:
