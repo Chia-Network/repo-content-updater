@@ -186,7 +186,7 @@ func DependabotEcosystemVars(repoDir string, vars map[string]string) (map[string
 		return nil, fmt.Errorf("inspect repository %s: not a directory", repoDir)
 	}
 
-	vars = withDirectoryLists(vars)
+	vars = copyTemplateVars(vars)
 	out := copyTemplateVars(vars)
 	var unpinned []dependabotEcosystem
 	for _, ecosystem := range dependabotEcosystems {

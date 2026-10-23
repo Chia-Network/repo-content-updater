@@ -49,6 +49,15 @@ class VersionOperatorTest(unittest.TestCase):
         self.assertEqual(version_manifest._exact_body("v1.2.3-xyz"), "1.2.3-xyz")
         self.assertEqual(version_manifest._exact_body("1.2.3+build.x"), "1.2.3+build.x")
 
+    def test_npm_bare_major_and_minor_are_not_exact(self) -> None:
+        for token in ("1", "1.2", "v1", "v1.2", "1.2.3.4"):
+            self.assertEqual(version_manifest._exact_body(token, npm=True), "", token)
+        self.assertEqual(version_manifest._exact_body("1.2.3", npm=True), "1.2.3")
+        self.assertEqual(version_manifest._exact_body("1.2.3-rc.1", npm=True), "1.2.3-rc.1")
+        listed = {"lodash": {("1.0.0", "2.0.0")}}
+        self.assertFalse(version_manifest._reached_listed_version("lodash", "1", "2", listed, npm=True))
+        self.assertFalse(version_manifest._reached_listed_version("lodash", "1.2", "1.3", listed, npm=True))
+
 
 class PythonManifestTest(unittest.TestCase):
     def test_python_manifests_are_requirements(self) -> None:
@@ -150,11 +159,59 @@ class ChangedPathGapTest(unittest.TestCase):
             gaps = {item["package_name"] for item in _gaps_at(root, base, [_update("requests", "2.31.0", "2.32.0")])}
             self.assertEqual(gaps, {"poetry.lock", ".github/workflows/ci.yml"})
 
-    def test_missing_base_is_a_gap(self) -> None:
+    def test_unnamed_base_has_no_gaps(self) -> None:
         with TemporaryDirectory() as tmp:
             root, _base = self._repo(tmp)
             gaps = _gaps_at(root, None, [_update("requests", "2.31.0", "2.32.0")])
+            self.assertEqual(gaps, [])
+
+    def test_unreadable_named_base_is_a_gap(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, _base = self._repo(tmp)
+            previous = os.getcwd()
+            os.chdir(root)
+            try:
+                with patch.dict(os.environ, {"PR_BASE_SHA": "abc123"}, clear=False):
+                    os.environ.pop("GITHUB_BASE_REF", None)
+                    gaps = coverage.manifest_gaps([_update("requests", "2.31.0", "2.32.0")])
+            finally:
+                os.chdir(previous)
             self.assertEqual([item["package_name"] for item in gaps], ["manifest-diff"])
+            self.assertEqual(gaps[0]["not_scanned_reason"], "unresolved")
+
+    def test_worktree_git_file_resolves_the_named_base(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            _git_repo(root)
+            _commit(root, "requirements.txt", "requests==2.31.0\n", "base")
+            base = _git(root, "rev-parse", "HEAD")
+            _commit(root, "requirements.txt", "requests==2.32.0\n", "bump")
+            bump = _git(root, "rev-parse", "HEAD")
+            worktree = Path(tmp) / "wt"
+            _git(root, "worktree", "add", "--detach", "-q", str(worktree), bump)
+            self.assertTrue((worktree / ".git").is_file())
+            previous = os.getcwd()
+            os.chdir(worktree)
+            try:
+                with patch.dict(os.environ, {"PR_BASE_SHA": base}, clear=False):
+                    os.environ.pop("GITHUB_BASE_REF", None)
+                    gaps = coverage.manifest_gaps([_update("requests", "2.31.0", "2.32.0")])
+            finally:
+                os.chdir(previous)
+            self.assertEqual(gaps, [])
+
+    def test_unparsable_manifest_uses_unparsed_manifest_reason(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            _git_repo(root)
+            _commit(root, ".github/workflows/ci.yml", "on: push\n", "base")
+            base = _git(root, "rev-parse", "HEAD")
+            _commit(root, ".github/workflows/ci.yml", "on: [push, pull_request]\n", "change")
+            gaps = _gaps_at(root, base, [])
+            self.assertEqual(
+                [(item["package_name"], item["not_scanned_reason"]) for item in gaps],
+                [(".github/workflows/ci.yml", "unparsed_manifest")],
+            )
 
     def test_type_change_and_rename_off_a_manifest_are_gaps(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -210,6 +267,35 @@ class PackageJsonSectionsTest(unittest.TestCase):
         new = json.dumps({"dependencies": {"left-pad": "^9.0.0"}, "devDependencies": {"left-pad": "^1.0.0"}})
         self.assertFalse(manifest._entries_explain("json", old, new, []))
         self.assertEqual(manifest._multi_entry_names("json", old, new, []), {"left-pad"})
+
+
+class LockWitnessTest(unittest.TestCase):
+    def test_top_level_lock_name_rejects_nested_and_workspace_copies(self) -> None:
+        self.assertEqual(npm_manifest._top_level_lock_name("node_modules/lodash"), "lodash")
+        self.assertEqual(npm_manifest._top_level_lock_name("node_modules/@scope/pkg"), "@scope/pkg")
+        self.assertEqual(npm_manifest._top_level_lock_name("node_modules/a/node_modules/b"), "")
+        self.assertEqual(npm_manifest._top_level_lock_name("packages/gui/node_modules/b"), "")
+        self.assertEqual(npm_manifest._top_level_lock_name(""), "")
+
+    def test_locked_versions_top_level_filters_nested_copies(self) -> None:
+        lock = json.dumps(
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {"name": "root", "dependencies": {"lodash": "^4.0.0"}},
+                    "node_modules/lodash": {"version": "4.17.21"},
+                    "node_modules/a/node_modules/lodash": {"version": "3.0.0"},
+                },
+            }
+        )
+        self.assertEqual(
+            manifest._locked_versions("json", lock, top_level=True),
+            {"lodash": frozenset({"4.17.21"})},
+        )
+        self.assertEqual(
+            manifest._locked_versions("json", lock),
+            {"lodash": frozenset({"4.17.21", "3.0.0"})},
+        )
 
 
 class GoAndYarnLockTest(unittest.TestCase):
@@ -278,6 +364,10 @@ class ScannableTest(unittest.TestCase):
         ):
             self.assertFalse(coverage.scannable(update(frm, to)), (frm, to))
         self.assertFalse(coverage.scannable(update("1.0", "1.1", "")))
+
+    def test_scannable_uses_the_canonical_exact_version(self) -> None:
+        # `==` is stripped by the manifest grammar's one exact-pin definition.
+        self.assertTrue(coverage.scannable({"packageName": "p", "fromVersion": "1.0", "toVersion": "==1.2.3", "upstreamRepo": "o/r"}))
 
 
 if __name__ == "__main__":

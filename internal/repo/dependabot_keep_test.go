@@ -1,6 +1,8 @@
 package repo
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -55,6 +57,21 @@ func entriesFor(updates []map[string]any, eco string) []map[string]any {
 		}
 	}
 	return out
+}
+
+// dependabotEcosystemNames returns the rendered update ecosystems in order.
+func dependabotEcosystemNames(raw []byte) ([]string, bool) {
+	var doc yaml.Node
+	updates, ok := dependabotUpdates(raw, &doc)
+	if !ok {
+		return nil, false
+	}
+	names := make([]string, 0, len(updates.Content))
+	for _, entry := range updates.Content {
+		eco, _, _ := entryKey(entry)
+		names = append(names, eco)
+	}
+	return names, true
 }
 
 func TestDefaultDependabotNeverDropsExistingEcosystems(t *testing.T) {
@@ -173,6 +190,153 @@ func TestDefaultDependabotConflictingDuplicateEntriesLeaveTheFileUnchanged(t *te
 	}
 }
 
+// TestDefaultDependabotKeepsTargetBranchEntries leaves every target-branch
+// entry untouched: a target-branch entry is never covered by the rendered
+// default, and two entries that differ only by target-branch do not conflict.
+func TestDefaultDependabotKeepsTargetBranchEntries(t *testing.T) {
+	cfg := loadDependabotTestConfig(t)
+	templates, err := filepath.Abs(filepath.Join("..", "..", "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	content := &Content{templates: templates}
+	repoName := "target-branch"
+	marker := "# " + cfg.GetFileInfo("dependabot-actions").AdoptionMarker
+	selection := config.ManagedFileSelection{Defaults: []config.DefaultBundle{{Root: "dependabot-actions", Files: []string{"dependabot-actions"}}}}
+	updates := "" +
+		"  - package-ecosystem: pip\n" +
+		"    directory: /\n" +
+		"    target-branch: release\n" +
+		"  - package-ecosystem: pip\n" +
+		"    directory: /\n" +
+		"    target-branch: main\n"
+	original := "# managed by the repo-content-updater\n" + marker + "\nversion: 2\nupdates:\n" + updates
+	writeDependabotTestFile(t, repoDir(repoName), ".github/dependabot.yml", original)
+	writeDependabotTestFile(t, repoDir(repoName), ".github/workflows/ci.yml", "")
+	writeDependabotTestFile(t, repoDir(repoName), "requirements.txt", "")
+	if err := content.applySelection(repoName, selection, cfg, Config{}, func(string, []string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(repoDir(repoName), ".github", "dependabot.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Updates []map[string]any `yaml:"updates"`
+	}
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		t.Fatal(err)
+	}
+	pip := entriesFor(doc.Updates, "pip")
+	if len(pip) != 3 {
+		t.Fatalf("pip entries = %v, want rendered + release + main", doc.Updates)
+	}
+	var branches []string
+	for _, update := range pip {
+		branches = append(branches, fmt.Sprint(update["target-branch"]))
+	}
+	slices.Sort(branches)
+	if !slices.Equal(branches, []string{"<nil>", "main", "release"}) {
+		t.Fatalf("target-branches = %v, want [<nil> main release]\n%s", branches, body)
+	}
+}
+
+// TestDefaultDependabotMissingDirectoryDefaultsToRoot keys a directory-less
+// entry as "/", so it collapses into the rendered root entry instead of being
+// written as a duplicate.
+func TestDefaultDependabotMissingDirectoryDefaultsToRoot(t *testing.T) {
+	updates := mergeDefaultDependabot(t, "missing-dir",
+		"  - package-ecosystem: github-actions\n    directory: /\n  - package-ecosystem: pip\n")
+	pip := entriesFor(updates, "pip")
+	if len(pip) != 1 {
+		t.Fatalf("pip entries = %v, want a single root entry", updates)
+	}
+}
+
+// TestDefaultDependabotTargetBranchDoesNotCoverPlainEntries keeps a plain
+// entry at a directory a target-branch entry also uses: the two update
+// different branches and are not the same coverage.
+func TestDefaultDependabotTargetBranchDoesNotCoverPlainEntries(t *testing.T) {
+	cfg := loadDependabotTestConfig(t)
+	templates, err := filepath.Abs(filepath.Join("..", "..", "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	content := &Content{templates: templates}
+	repoName := "target-branch-overlap"
+	marker := "# " + cfg.GetFileInfo("dependabot-actions").AdoptionMarker
+	selection := config.ManagedFileSelection{Defaults: []config.DefaultBundle{{Root: "dependabot-actions", Files: []string{"dependabot-actions"}}}}
+	updates := "" +
+		"  - package-ecosystem: pip\n    directory: /services\n    target-branch: release\n" +
+		"  - package-ecosystem: pip\n    directory: /services\n"
+	original := "# managed by the repo-content-updater\n" + marker + "\nversion: 2\nupdates:\n" + updates
+	writeDependabotTestFile(t, repoDir(repoName), ".github/dependabot.yml", original)
+	writeDependabotTestFile(t, repoDir(repoName), ".github/workflows/ci.yml", "")
+	writeDependabotTestFile(t, repoDir(repoName), "requirements.txt", "")
+	if err := content.applySelection(repoName, selection, cfg, Config{}, func(string, []string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(repoDir(repoName), ".github", "dependabot.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Updates []map[string]any `yaml:"updates"`
+	}
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		t.Fatal(err)
+	}
+	pip := entriesFor(doc.Updates, "pip")
+	if len(pip) != 3 {
+		t.Fatalf("pip entries = %v, want rendered + target-branch + plain", doc.Updates)
+	}
+	var plain int
+	var release int
+	for _, update := range pip {
+		switch fmt.Sprint(update["target-branch"]) {
+		case "release":
+			release++
+		case "<nil>":
+			if update["directory"] == "/services" {
+				plain++
+			}
+		}
+	}
+	if plain != 1 || release != 1 {
+		t.Fatalf("pip entries = %v, want one plain /services and one release /services\n%s", pip, body)
+	}
+}
+
+// TestMergeDependabotConfigConflictIsATypedError distinguishes a conflict
+// between existing entries from an unreadable file.
+func TestMergeDependabotConfigConflictIsATypedError(t *testing.T) {
+	cfg := loadDependabotTestConfig(t)
+	fileinfo := cfg.GetFileInfo("dependabot-actions")
+	dir := t.TempDir()
+	writeDependabotTestFile(t, dir, fileinfo.RepoPath, ""+
+		"version: 2\nupdates:\n"+
+		"  - package-ecosystem: pip\n    directory: /services\n    ignore:\n      - dependency-name: first\n"+
+		"  - package-ecosystem: pip\n    directory: /services\n    ignore:\n      - dependency-name: second\n")
+	rendered := []byte("version: 2\nupdates:\n  - package-ecosystem: pip\n    directory: /\n")
+	_, _, err := mergeDependabotConfig(dir, fileinfo, rendered)
+	if !errors.Is(err, errConflictingDependabotEntries) {
+		t.Fatalf("err = %v, want errConflictingDependabotEntries", err)
+	}
+}
+
+// TestMergeDependabotConfigUnreadableRenderedIsNotConflicting reports an
+// unreadable rendered file as ok=false with no error, not as a conflict.
+func TestMergeDependabotConfigUnreadableRenderedIsNotConflicting(t *testing.T) {
+	cfg := loadDependabotTestConfig(t)
+	fileinfo := cfg.GetFileInfo("dependabot-actions")
+	_, ok, err := mergeDependabotConfig(t.TempDir(), fileinfo, []byte("not: [valid yaml"))
+	if err != nil || ok {
+		t.Fatalf("ok = %v, err = %v; want ok=false and no error", ok, err)
+	}
+}
+
 // TestDefaultDependabotChiaGamingFixture renders the default for a repo with
 // npm, cargo and github-actions but no Python, exercising the marker rename,
 // per-block reviewers, registries pruning, and list-form directories.
@@ -231,5 +395,37 @@ func TestDefaultDependabotChiaGamingFixture(t *testing.T) {
 		if update.Ecosystem == "github-actions" && update.Schedule["interval"] != "weekly" {
 			t.Fatalf("github-actions interval = %v, want weekly", update.Schedule["interval"])
 		}
+	}
+}
+
+// TestPostRenderDependabotPrunesAfterMerge keeps a registry that only a merged
+// existing block references; pruning before the merge would strand it.
+func TestPostRenderDependabotPrunesAfterMerge(t *testing.T) {
+	cfg := loadDependabotTestConfig(t)
+	fileinfo := cfg.GetFileInfo("dependabot-actions")
+	dir := t.TempDir()
+	writeDependabotTestFile(t, dir, fileinfo.RepoPath, ""+
+		"version: 2\nupdates:\n"+
+		"  - package-ecosystem: pip\n    directories:\n      - /services\n    registries:\n      - chia-pypi\n")
+	rendered := []byte("version: 2\n" +
+		"registries:\n  chia-pypi:\n    type: python-index\n    url: https://pypi.chia.net/simple/\n" +
+		"  unused:\n    type: python-index\n    url: https://example.invalid/simple/\n" +
+		"updates:\n  - package-ecosystem: github-actions\n    directories:\n      - /\n")
+	selected := config.SelectedFile{Name: "dependabot-actions", Origin: config.OriginDefault}
+	out, ok, err := postRenderDependabot(dir, selected, fileinfo, rendered)
+	if err != nil || !ok {
+		t.Fatalf("ok = %v, err = %v", ok, err)
+	}
+	var doc struct {
+		Registries map[string]any `yaml:"registries"`
+	}
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, kept := doc.Registries["chia-pypi"]; !kept {
+		t.Fatalf("chia-pypi pruned though a merged block uses it:\n%s", out)
+	}
+	if _, kept := doc.Registries["unused"]; kept {
+		t.Fatalf("unused registry not pruned:\n%s", out)
 	}
 }

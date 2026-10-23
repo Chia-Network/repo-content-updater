@@ -399,6 +399,28 @@ files:
 	assert.ErrorContains(t, err, "shared-marker")
 }
 
+func TestLoadConfigRejectsPreviousAdoptionMarkerCollision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+    adoption_marker: current-marker
+  - name: second
+    template_name: second.yml
+    repo_path: .github/second.yml
+    adoption_marker: other-marker
+    previous_adoption_markers:
+      - current-marker
+`), 0o644)
+	assert.Nil(t, err)
+
+	_, err = config.LoadConfig(path)
+	assert.ErrorContains(t, err, "adoption_marker")
+	assert.ErrorContains(t, err, "current-marker")
+}
+
 func TestAmbiguousSharedPathsAreNotUsedForPathLookup(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)

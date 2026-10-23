@@ -13,7 +13,14 @@ import re
 from pathlib import Path
 
 from dependency_manifest_go import _go_mod_parts, _go_sum_explained, _go_sum_parts
-from dependency_manifest_npm import _fold_residue, _json_parts, _payloads_match, _registry_block, _yarn_parts
+from dependency_manifest_npm import (
+    _fold_residue,
+    _json_parts,
+    _payloads_match,
+    _registry_block,
+    _top_level_lock_name,
+    _yarn_parts,
+)
 from dependency_manifest_python import _PYTHON_MANIFESTS, _req_parts, _requirement_name
 from dependency_manifest_versions import _reached_listed_version
 
@@ -263,17 +270,27 @@ def _pair_explained(
     """A package.json spec pair may use a shared range prefix when `locked` witnesses the listed version."""
     specs = _payload_kind(old[1]) == "spec" and _payload_kind(new[1]) == "spec"
     witness = locked if specs else frozenset()
-    return _reached_listed_version(name, old[0], new[0], listed, locked=witness) and _payload_ok([old], [new])
+    return _reached_listed_version(name, old[0], new[0], listed, locked=witness, npm=specs) and _payload_ok(
+        [old], [new]
+    )
 
 
-def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict], names: set[str]) -> bool:
+def _lock_covers_listed(
+    kind: str,
+    before: str,
+    after: str,
+    updates: list[dict],
+    names: set[str],
+    locked: dict[str, frozenset[str]] | None = None,
+) -> bool:
     """True when a listed package moves to its listed version.
 
-    A listed name must be explained. Every other name may change only its
-    version and registry locators, or be added or removed as a registry
-    tarball entry. Another resolved host, a same-version
-    hash swap, leftover bytes, or a lock that never moves a listed package
-    stays unresolved.
+    A listed name must be explained; `locked`, the versions a lockfile in HEAD
+    resolves each package to, lets a shared `^` or `~` spec bump count as its
+    listed bump. Every other name may change only its version and registry
+    locators, or be added or removed as a registry tarball entry. Another
+    resolved host, a same-version hash swap, leftover bytes, or a lock that
+    never moves a listed package stays unresolved.
     """
     listed = _listed_versions(updates, kind=kind)
     old_split = _split_entries(kind, before)
@@ -296,7 +313,7 @@ def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict],
         old_blocks = _entry_blocks(old_entries.get(name))
         new_blocks = _entry_blocks(new_entries.get(name))
         if _canonical_package_name(kind, name) in listed:
-            if not _name_explained(kind, name, old_blocks, new_blocks, listed):
+            if not _name_explained(kind, name, old_blocks, new_blocks, listed, (locked or {}).get(name, frozenset())):
                 return False
             continue
         if not _registry_transitive(old_blocks, new_blocks):
@@ -414,14 +431,41 @@ def _entries_explain(
     )
 
 
-def _locked_versions(kind: str, text: str) -> dict[str, frozenset[str]]:
-    """Versions each package resolves to in an npm or Yarn lock. Manifest specs in the lock do not count."""
+def _lock_witness(payload: str) -> bool:
+    """True when a lock payload may witness a package.json range bump.
+
+    A v2/v3 npm lock record carries its `path`; only a top-level
+    `node_modules/<name>` copy counts. A v1 lock entry (no path) and a flat
+    Yarn stanza are top-level by construction.
+    """
+    try:
+        doc = json.loads(payload)
+    except json.JSONDecodeError:
+        return True
+    path = doc.get("path") if isinstance(doc, dict) else ""
+    if not isinstance(path, str) or not path:
+        return True
+    return bool(_top_level_lock_name(path))
+
+
+def _locked_versions(kind: str, text: str, *, top_level: bool = False) -> dict[str, frozenset[str]]:
+    """Versions each package resolves to in an npm or Yarn lock. Manifest specs in the lock do not count.
+
+    `top_level` keeps only the `node_modules/<name>` copy directly under the
+    manifest, so a nested or workspace copy never witnesses a range bump.
+    """
     split = _split_entries(kind, text) if kind in {"json", "yarn"} else None
     if split is None:
         return {}
     found: dict[str, frozenset[str]] = {}
     for name, entry in split[0].items():
-        versions = {version for version, payload in _entry_blocks(entry) if _payload_kind(payload) != "spec"}
+        versions = set()
+        for version, payload in _entry_blocks(entry):
+            if _payload_kind(payload) == "spec":
+                continue
+            if top_level and not _lock_witness(payload):
+                continue
+            versions.add(version)
         if versions:
             found[name] = frozenset(versions)
     return found

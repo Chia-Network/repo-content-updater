@@ -204,6 +204,10 @@ func (c *Config) validateAdoptionMarkers() error {
 			if !adoptionMarkerPattern.MatchString(previous) {
 				return fmt.Errorf("previous_adoption_marker %q for %q must use only letters, digits and . _ : / -", previous, file.Name)
 			}
+			if owner, ok := seen[previous]; ok && owner != file.Name {
+				return fmt.Errorf("adoption_marker %q is used by both %q and %q", previous, owner, file.Name)
+			}
+			seen[previous] = file.Name
 		}
 	}
 	return nil

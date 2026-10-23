@@ -32,6 +32,29 @@ def _direct_lock_name(key: str) -> str:
     return parts[0]
 
 
+def _top_level_lock_name(key: str) -> str:
+    """Package name of a top-level `node_modules/<name>` lock path.
+
+    Only the copy directly under the manifest counts as a witness for the
+    version a package.json range resolves to. A nested copy
+    (`node_modules/a/node_modules/b`) or a workspace path
+    (`packages/gui/node_modules/b`) is a different resolution and returns "".
+    """
+    prefix = "node_modules/"
+    if not key.startswith(prefix):
+        return ""
+    parts = key[len(prefix) :].split("/")
+    if not parts or not parts[0]:
+        return ""
+    if parts[0].startswith("@"):
+        if len(parts) != 2 or len(parts[0]) < 2 or not parts[1]:
+            return ""
+        return f"{parts[0]}/{parts[1]}"
+    if len(parts) != 1:
+        return ""
+    return parts[0]
+
+
 def _take_specs(block: object, parts: dict[str, dict[str, object]], section: str) -> None:
     """Move each spec out of one section. A name listed in several sections keeps one spec per section."""
     if not isinstance(block, dict):

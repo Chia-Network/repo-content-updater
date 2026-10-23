@@ -19,14 +19,15 @@ var errConflictingDependabotEntries = errors.New("conflicting Dependabot update 
 
 // mergeDependabotConfig folds the update entries of an existing default
 // Dependabot file into rendered so adopting a repo never removes an
-// ecosystem or directory it already updates. Entries are keyed by ecosystem
-// plus directories: a directory the rendered file already covers for that
-// ecosystem is taken from the rendered entry, and each remaining
-// (ecosystem, directories) key from the existing file is kept as one block.
-// Identical duplicate blocks collapse; two blocks that share a key but
-// configure it differently abort the merge. Every github-actions block stays
-// weekly. ok is false when either file cannot be read as YAML or two existing
-// blocks conflict; the existing file then stays as it is.
+// ecosystem, directory or target branch it already updates. Entries are keyed
+// by ecosystem, target-branch and directories: a directory the rendered file
+// already covers for that ecosystem (without a target-branch) is taken from
+// the rendered entry, and each remaining key from the existing file is kept
+// as one block. Identical duplicate blocks collapse; two blocks that share a
+// key but configure it differently abort the merge with
+// errConflictingDependabotEntries. Every github-actions block stays weekly.
+// ok is false when either file cannot be read as YAML; the existing file then
+// stays as it is.
 func mergeDependabotConfig(dir string, fileinfo *config.File, rendered []byte) ([]byte, bool, error) {
 	var doc yaml.Node
 	updates, ok := dependabotUpdates(rendered, &doc)
@@ -35,7 +36,10 @@ func mergeDependabotConfig(dir string, fileinfo *config.File, rendered []byte) (
 	}
 	covered := map[string][]string{}
 	for _, entry := range updates.Content {
-		eco, dirs := entryKey(entry)
+		eco, dirs, targetBranch := entryKey(entry)
+		if targetBranch != "" {
+			continue
+		}
 		covered[eco] = append(covered[eco], dirs...)
 	}
 	seen := map[string]string{}
@@ -56,7 +60,7 @@ func mergeDependabotConfig(dir string, fileinfo *config.File, rendered []byte) (
 		for _, entry := range oldUpdates.Content {
 			keep, err := uncoveredEntry(entry, covered, seen)
 			if err != nil {
-				return nil, false, nil
+				return nil, false, err
 			}
 			if keep != nil {
 				updates.Content = append(updates.Content, keep)
@@ -68,7 +72,7 @@ func mergeDependabotConfig(dir string, fileinfo *config.File, rendered []byte) (
 		return rendered, true, nil
 	}
 	for _, entry := range updates.Content {
-		if eco, _ := entryKey(entry); eco == "github-actions" {
+		if eco, _, _ := entryKey(entry); eco == "github-actions" {
 			setActionsDefaults(entry)
 		}
 	}
@@ -92,21 +96,30 @@ func readRegularConfined(dir, repoPath string) ([]byte, error) {
 }
 
 // uncoveredEntry returns entry narrowed to the directories covered does not
-// yet hold for its ecosystem, or nil when nothing is left. An entry without
-// directories is kept only when its ecosystem is not covered at all. Two
-// entries sharing an ecosystem and directories key collapse only when they
-// are identical; differing settings return errConflictingDependabotEntries so
-// the merge leaves the existing file untouched.
+// yet hold for its ecosystem, or nil when nothing is left. Only an entry
+// without a target-branch counts as covered; a target-branch entry updates a
+// non-default branch the rendered file never covers, so it is always kept
+// whole. An entry without directories is kept only when its ecosystem is not
+// covered at all. Two entries sharing an ecosystem, target-branch and
+// directories key collapse only when they are identical; differing settings
+// return errConflictingDependabotEntries so the merge leaves the existing
+// file untouched.
 func uncoveredEntry(entry *yaml.Node, covered map[string][]string, seen map[string]string) (*yaml.Node, error) {
-	eco, dirs := entryKey(entry)
-	key := dependabotEntryKey(eco, dirs)
+	eco, dirs, targetBranch := entryKey(entry)
+	key := dependabotEntryKey(eco, dirs, targetBranch)
 	if previous, ok := seen[key]; ok {
 		if previous == encodeDependabotEntry(entry) {
 			return nil, nil
 		}
 		return nil, errConflictingDependabotEntries
 	}
-	var rest []string
+	if targetBranch != "" {
+		// A target-branch entry updates a non-default branch the rendered
+		// file never covers; keep it whole without touching covered.
+		seen[key] = encodeDependabotEntry(entry)
+		return entry, nil
+	}
+	rest := make([]string, 0, len(dirs))
 	for _, d := range dirs {
 		if !slices.Contains(covered[eco], d) && !slices.Contains(rest, d) {
 			rest = append(rest, d)
@@ -125,11 +138,12 @@ func uncoveredEntry(entry *yaml.Node, covered map[string][]string, seen map[stri
 	return entry, nil
 }
 
-// dependabotEntryKey is the ecosystem plus sorted normalized directories.
-func dependabotEntryKey(eco string, dirs []string) string {
+// dependabotEntryKey is the ecosystem plus target-branch plus sorted
+// normalized directories.
+func dependabotEntryKey(eco string, dirs []string, targetBranch string) string {
 	sorted := slices.Clone(dirs)
 	slices.Sort(sorted)
-	return eco + "\x00" + strings.Join(sorted, "\x00")
+	return eco + "\x00" + targetBranch + "\x00" + strings.Join(sorted, "\x00")
 }
 
 // encodeDependabotEntry renders one update entry back to YAML for comparison.
@@ -161,9 +175,10 @@ func dependabotUpdates(raw []byte, doc *yaml.Node) (*yaml.Node, bool) {
 	return updates, true
 }
 
-// entryKey returns an update entry's ecosystem and its normalized
-// directories from either directory or directories.
-func entryKey(entry *yaml.Node) (string, []string) {
+// entryKey returns an update entry's ecosystem, its normalized directories
+// from either directory or directories (["/"] when neither is set), and its
+// target-branch ("" when it updates the default branch).
+func entryKey(entry *yaml.Node) (string, []string, string) {
 	var eco string
 	if node := mapValue(entry, "package-ecosystem"); node != nil {
 		eco = node.Value
@@ -177,7 +192,14 @@ func entryKey(entry *yaml.Node) (string, []string) {
 			dirs = append(dirs, normalizeDependabotDir(item.Value))
 		}
 	}
-	return eco, dirs
+	if len(dirs) == 0 {
+		dirs = []string{"/"}
+	}
+	var targetBranch string
+	if node := mapValue(entry, "target-branch"); node != nil && node.Kind == yaml.ScalarNode {
+		targetBranch = strings.TrimSpace(node.Value)
+	}
+	return eco, dirs, targetBranch
 }
 
 func normalizeDependabotDir(d string) string {
@@ -240,20 +262,6 @@ func stringSeq(values []string) *yaml.Node {
 		seq.Content = append(seq.Content, scalarNode(v))
 	}
 	return seq
-}
-
-func dependabotEcosystemNames(raw []byte) ([]string, bool) {
-	var doc yaml.Node
-	updates, ok := dependabotUpdates(raw, &doc)
-	if !ok {
-		return nil, false
-	}
-	names := make([]string, 0, len(updates.Content))
-	for _, entry := range updates.Content {
-		eco, _ := entryKey(entry)
-		names = append(names, eco)
-	}
-	return names, true
 }
 
 // pruneDependabotRegistries drops top-level registries no update block

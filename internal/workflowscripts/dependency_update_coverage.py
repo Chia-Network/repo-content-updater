@@ -21,9 +21,6 @@ _REPO_RE = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
 
 
-_EXACT_RE = re.compile(r"\A[vV]?[0-9]+(?:\.[0-9]+)*(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?\Z")
-
-
 def scannable(update: dict) -> bool:
     """An explicit GitHub repository and an exact destination version. An empty from stays inconclusive.
 
@@ -32,9 +29,9 @@ def scannable(update: dict) -> bool:
     repo = str(update.get("upstreamRepo") or "")
     from_version = str(update.get("fromVersion") or "")
     to_version = str(update.get("toVersion") or "")
-    if not _REPO_RE.fullmatch(repo) or not _EXACT_RE.fullmatch(to_version):
+    if not _REPO_RE.fullmatch(repo) or not _versions._exact_body(to_version):
         return False
-    return not from_version or bool(_EXACT_RE.fullmatch(from_version))
+    return not from_version or bool(_versions._exact_body(from_version))
 
 
 def _label(update: dict) -> str:
@@ -322,6 +319,7 @@ def _load_manifest_diff():
 
 
 _diff = _load_manifest_diff()
+_versions = sys.modules["dependency_manifest_versions"]
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
 
 
@@ -395,7 +393,7 @@ def _fetch_commit(sha: str, token: str = "") -> str:
 
 def _base_commit(token: str = "") -> str | None:
     """Resolved base commit, '' when a named base cannot be read, None when unnamed."""
-    if not Path(".git").is_dir():
+    if not Path(".git").exists():
         return None
     sha = os.environ.get("PR_BASE_SHA", "").strip()
     if sha:
@@ -425,7 +423,7 @@ def _changed_paths(base: str) -> list[tuple[str, str, str]] | None:
     index = 0
     while index + 1 < len(fields):
         status = fields[index][:1]
-        if status in "RC":
+        if status in {"R", "C"}:
             changed.append((fields[index + 1], fields[index + 2], status))
             index += 3
         else:
@@ -439,13 +437,17 @@ _RANGE_WITNESS_LOCKS = (("package-lock.json", "json"), ("npm-shrinkwrap.json", "
 
 
 def _head_locked_versions(manifest_path: str) -> dict[str, frozenset[str]]:
-    """Versions the npm or Yarn locks beside manifest_path in HEAD resolve each package to."""
+    """Versions the npm or Yarn locks beside manifest_path in HEAD resolve each package to.
+
+    Only the top-level `node_modules/<name>` copy witnesses a range, so a
+    nested or workspace bump is never confirmed.
+    """
     if Path(manifest_path).name != "package.json":
         return {}
     found: dict[str, frozenset[str]] = {}
     for lock_name, kind in _RANGE_WITNESS_LOCKS:
         lock_path = str(Path(manifest_path).with_name(lock_name))
-        for name, versions in _diff._locked_versions(kind, _git_text("HEAD", lock_path)).items():
+        for name, versions in _diff._locked_versions(kind, _git_text("HEAD", lock_path), top_level=True).items():
             found[name] = found.get(name, frozenset()) | versions
     return found
 
@@ -453,21 +455,26 @@ def _head_locked_versions(manifest_path: str) -> dict[str, frozenset[str]]:
 def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
     """Direct manifest bumps missing from the parsed list.
 
-    An unreadable base ref, when one was named, is itself unresolved.
-    An entry is explained only when its package moved to the listed version.
-    Anything else in the file stays unresolved under the path. A listed
-    package with that path as its name does not hide the path. A dependency
-    with more than one unexplained entry is named as well.
+    An unreadable base ref, when one was named, is itself unresolved; no
+    named base ref is no gap at all. An entry is explained only when its
+    package moved to the listed version. Anything else in the file stays
+    unresolved under the path. A listed package with that path as its name
+    does not hide the path. A dependency with more than one unexplained entry
+    is named as well.
 
-    A missing base, an opaque lockfile, a deleted path, and any changed path
-    this grammar does not parse are unresolved under their path. A shared
-    `^` or `~` package.json bump is explained only when a lockfile beside it
-    in HEAD resolves the package to the listed version. Unlisted names in a npm or Yarn
-    lock are transitive residue when every listed name in that lock moved to
-    its listed version and each unlisted entry was bumped, added or removed as
-    a registry tarball.
+    An opaque lockfile, a deleted path, and any changed path this grammar does
+    not parse are unresolved under their path; a changed path that is a
+    manifest we have no parser for (a workflow, Dockerfile, Cargo.toml, *.tf
+    or Package.swift) is reported as `unparsed_manifest`. A shared `^` or `~`
+    package.json bump is explained only when a top-level lockfile beside it in
+    HEAD resolves the package to the listed version. Unlisted names in a npm
+    or Yarn lock are transitive residue when every listed name in that lock
+    moved to its listed version and each unlisted entry was bumped, added or
+    removed as a registry tarball.
     """
     base = _base_commit(token)
+    if base is None:
+        return []
     if not base:
         return [uncovered({"packageName": "manifest-diff"}, "unresolved")]
     listed = {str(item.get("packageName") or "").strip() for item in updates}
@@ -478,9 +485,13 @@ def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
     seen = set(listed)
     for old_path, path, status in changed:
         kind = _diff._manifest_kind(path)
-        if status in "DT" or not kind or kind == "opaque":
+        if status in {"D", "T"}:
             for label in dict.fromkeys((old_path, path)):
                 gaps.append(uncovered({"packageName": label}, "unresolved"))
+            continue
+        if not kind or kind == "opaque":
+            for label in dict.fromkeys((old_path, path)):
+                gaps.append(uncovered({"packageName": label}, "unparsed_manifest"))
             continue
         before = _git_text(base, old_path)
         after = _git_text("HEAD", path)
@@ -494,7 +505,7 @@ def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
         if (
             Path(path).name in _diff.TRANSITIVE_LOCK_NAMES
             and names
-            and _diff._lock_covers_listed(kind, before, after, updates, names)
+            and _diff._lock_covers_listed(kind, before, after, updates, names, locked)
         ):
             continue
         if file_unresolved and (names is None or _diff._names_listed(kind, names, listed)):

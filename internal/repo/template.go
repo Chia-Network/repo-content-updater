@@ -54,7 +54,7 @@ func mergeTemplateVars(defaultVars map[string]string, overrides map[string]strin
 		data[key] = value
 	}
 
-	return data
+	return withDirectoryLists(data)
 }
 
 func processTemplate(templateContent []byte, data map[string]string) ([]byte, error) {

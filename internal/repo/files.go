@@ -364,20 +364,41 @@ func (c *Content) renderManagedFile(repoName string, selected config.SelectedFil
 	if err != nil {
 		return nil, false, err
 	}
-	if fileinfo.TemplateName == dependabotTemplateName {
-		content, err = pruneDependabotRegistries(content)
-		if err != nil {
-			return nil, false, err
-		}
-	}
-	if selected.Origin != config.OriginDefault || fileinfo.TemplateName != dependabotTemplateName {
+	if fileinfo.TemplateName != dependabotTemplateName {
 		return content, true, nil
 	}
-	merged, ok, err := mergeDependabotConfig(repoDir(repoName), fileinfo, content)
-	if err == nil && !ok {
+	merged, ok, err := postRenderDependabot(repoDir(repoName), selected, fileinfo, content)
+	if err != nil {
+		if errors.Is(err, errConflictingDependabotEntries) {
+			log.Printf("Skipping default %s for %s: %v\n", selected.Name, repoName, err)
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !ok {
 		log.Printf("Skipping default %s for %s: the existing or rendered file is not readable as YAML\n", selected.Name, repoName)
 	}
-	return merged, ok, err
+	return merged, ok, nil
+}
+
+// postRenderDependabot finishes a rendered Dependabot file. A default file
+// folds in every update entry its existing copy configures so adoption never
+// drops an ecosystem, directory or target branch, then registries no final
+// update block references are pruned: pruning after the merge keeps a registry
+// a merged block still references, where pruning first would strand it. A
+// conflict between existing entries surfaces as errConflictingDependabotEntries;
+// an unreadable file as ok=false.
+func postRenderDependabot(dir string, selected config.SelectedFile, fileinfo *config.File, content []byte) ([]byte, bool, error) {
+	if selected.Origin != config.OriginDefault {
+		pruned, err := pruneDependabotRegistries(content)
+		return pruned, true, err
+	}
+	merged, ok, err := mergeDependabotConfig(dir, fileinfo, content)
+	if err != nil || !ok {
+		return merged, ok, err
+	}
+	pruned, err := pruneDependabotRegistries(merged)
+	return pruned, ok, err
 }
 
 // templateInputsForFile keeps template-specific variable derivation out of the
