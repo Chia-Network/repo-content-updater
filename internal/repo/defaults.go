@@ -30,7 +30,7 @@ const (
 // Anything other than a regular file, or a path whose parent is not a real
 // directory inside dir, is never owned, so adoption only reads checkout files.
 func existingFileState(dir string, fileinfo *config.File) (fileState, error) {
-	marker := strings.TrimSpace(fileinfo.AdoptionMarker)
+	markers := adoptionMarkerLines(fileinfo)
 	state := fileAbsent
 	for _, repoPath := range managedPaths(fileinfo) {
 		fullPath, info, err := lstatConfined(dir, repoPath)
@@ -43,19 +43,36 @@ func existingFileState(dir string, fileinfo *config.File) (fileState, error) {
 		if info == nil {
 			continue
 		}
-		if marker == "" || !info.Mode().IsRegular() {
+		if len(markers) == 0 || !info.Mode().IsRegular() {
 			return fileUnowned, nil
 		}
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
 			return fileAbsent, err
 		}
-		if !containsTrimmedLine(string(content), "# "+marker) {
+		if !containsAnyTrimmedLine(string(content), markers) {
 			return fileUnowned, nil
 		}
 		state = fileMarked
 	}
 	return state, nil
+}
+
+// adoptionMarkerLines returns every marker spelling a file accepts, each as the
+// whole-line `# marker` form the template renders, current marker first.
+func adoptionMarkerLines(fileinfo *config.File) []string {
+	var markers []string
+	add := func(marker string) {
+		marker = strings.TrimSpace(marker)
+		if marker != "" {
+			markers = append(markers, "# "+marker)
+		}
+	}
+	add(fileinfo.AdoptionMarker)
+	for _, previous := range fileinfo.PreviousAdoptionMarkers {
+		add(previous)
+	}
+	return markers
 }
 
 // managedPaths lists fileinfo's repo_path followed by its alternate_paths.
@@ -175,6 +192,17 @@ func containsTrimmedLine(content, want string) bool {
 	}
 	for _, line := range strings.Split(content, "\n") {
 		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// containsAnyTrimmedLine reports whether content contains any of wants as a
+// complete line, ignoring surrounding whitespace.
+func containsAnyTrimmedLine(content string, wants []string) bool {
+	for _, want := range wants {
+		if containsTrimmedLine(content, want) {
 			return true
 		}
 	}

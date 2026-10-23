@@ -22,6 +22,13 @@ func ProcessTemplate(templateContent []byte, defaultVars map[string]string, over
 	return processTemplate(templateContent, mergeTemplateVars(defaultVars, overrides))
 }
 
+// ProcessNamedTemplate renders the template file templateName like
+// ProcessTemplate, with the variables the managed-file run gives that
+// template (see templateVarsFor).
+func ProcessNamedTemplate(templateName string, templateContent []byte, defaultVars map[string]string, overrides map[string]string) ([]byte, error) {
+	return processTemplate(templateContent, templateVarsFor(templateName, defaultVars, overrides))
+}
+
 // CURRENT_YEAR is fixed in every merge, and Dependabot flags and the adoption
 // marker are computed rather than configured, so none may be replaced by an
 // override.

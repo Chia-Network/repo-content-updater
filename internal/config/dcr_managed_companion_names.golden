@@ -10,6 +10,10 @@ trusted-formatter-loader-cold-start
 upstream-malware-scan
 dependency-update-coverage
 dependency-manifest-diff
+dependency-manifest-versions
+dependency-manifest-go
+dependency-manifest-npm
+dependency-manifest-python
 dependency-cursor-review-prompts
 dependency-cursor-review-combine-outputs
 dependency-cursor-review-dependabot-context

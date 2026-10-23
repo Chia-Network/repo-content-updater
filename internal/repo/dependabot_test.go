@@ -206,6 +206,46 @@ func TestDependabotKeepsFullTemplateWhenRepoInspectionFails(t *testing.T) {
 	}
 }
 
+// TestDependabotDetectionFailureAppliesDirectoryLists keeps a bare pinned
+// directory as a list even when detection fails and the full template is
+// returned, so the template never renders a scalar `directories:`.
+func TestDependabotDetectionFailureAppliesDirectoryLists(t *testing.T) {
+	cfg := loadDependabotTestConfig(t)
+	notARepo := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(notARepo, []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	vars, err := DependabotVarsForRepo(notARepo, cfg.Variables, map[string]string{
+		"DEPENDABOT_GOMOD_DIRECTORY": "/sub",
+	})
+	if err == nil {
+		t.Fatal("expected repository inspection to fail")
+	}
+	if got := vars["DEPENDABOT_GOMOD_DIRECTORY"]; got != `["/sub"]` {
+		t.Fatalf("DEPENDABOT_GOMOD_DIRECTORY = %q, want [\"/sub\"]", got)
+	}
+}
+
+// TestDependabotVarsForRepoAppliesDirectoryLists writes a bare pinned
+// directory as a list whether detection finds nothing or finds the ecosystem.
+func TestDependabotVarsForRepoAppliesDirectoryLists(t *testing.T) {
+	pin := map[string]string{"DEPENDABOT_GOMOD_DIRECTORY": "/svc"}
+	vars, err := DependabotVarsForRepo(t.TempDir(), pin, nil)
+	if !errors.Is(err, errNoDependabotEcosystems) || vars["DEPENDABOT_GOMOD_DIRECTORY"] != `["/svc"]` {
+		t.Fatalf("no detection: vars = %v, err = %v; want [\"/svc\"] and errNoDependabotEcosystems", vars, err)
+	}
+	repoDir := t.TempDir()
+	writeDependabotTestFile(t, repoDir, filepath.Join("svc", "go.mod"), "")
+	vars, err = DependabotVarsForRepo(repoDir, pin, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vars["DEPENDABOT_GOMOD_DIRECTORY"] != `["/svc"]` || vars["DEPENDABOT_GOMOD_ENABLED"] != "1" {
+		t.Fatalf("detected: vars = %v, want gomod enabled at [\"/svc\"]", vars)
+	}
+}
+
 func TestDependabotNoDetectionKeepsFullNonEmptyTemplate(t *testing.T) {
 	cfg := loadDependabotTestConfig(t)
 	repoDir := t.TempDir()

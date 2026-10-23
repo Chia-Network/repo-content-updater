@@ -27,7 +27,8 @@ var debugTemplateCmd = &cobra.Command{
 		if err != nil {
 			log.Fatalln(err.Error())
 		}
-		content, err := repo.ProcessTemplate(
+		content, err := repo.ProcessNamedTemplate(
+			args[0],
 			tmplContent,
 			cfg.Variables,
 			viper.GetStringMapString("debug-template-vars"),

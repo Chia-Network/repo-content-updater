@@ -6,6 +6,7 @@ import json
 import unittest
 
 import dependency_manifest_diff as manifest
+import dependency_manifest_npm as npm_manifest
 import malware_verdict_formatter as formatter
 from manifest_scan_support import (
     _BLOCK_REVIEW,
@@ -17,20 +18,15 @@ from manifest_scan_support import (
 
 
 class DependencyLockResidueTest(unittest.TestCase):
-    def test_poetry_lock_and_transitive_residue_pass_when_the_verdict_is_pass(self) -> None:
+    def test_poetry_lock_is_a_gap_and_npm_residue_passes_when_the_verdict_is_pass(self) -> None:
         listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
         poetry = _run_listed_scan(
             {"poetry.lock": '[[package]]\nname = "lodash"\nversion = "4.17.20"\n'},
             {"poetry.lock": '[[package]]\nname = "lodash"\nversion = "4.17.21"\n'},
             listed,
         )
-        self.assertIs(poetry["scan_conclusive"], True)
-        self.assertEqual(poetry["status"], "clean")
-        self.assertNotIn("poetry.lock", " ".join(poetry.get("errors") or []))
-        published = formatter.compose_published_review(poetry, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
-        self.assertEqual(published["verdict"], "benign")
-        self.assertEqual(published["check"], "pass")
-        self.assertIs(published["may_complete"], True)
+        self.assertIs(poetry["scan_conclusive"], False)
+        self.assertIn("poetry.lock", " ".join(poetry.get("errors") or []))
 
         def lock(lodash: str, minimist: str) -> str:
             return (
@@ -181,7 +177,7 @@ class DependencyLockResidueTest(unittest.TestCase):
         listed = [_bump("prettier", "3.9.8", "3.9.9", "prettier/prettier")]
         base_npm = npm(prettier_old, "^3.9.8", "^16.0.3", stylis)
         head_npm = npm(prettier_new, "^3.9.9", "16.0.3", stylis)
-        entries, residue = manifest._json_parts(base_npm)
+        entries, residue = npm_manifest._json_parts(base_npm)
         self.assertIn("stylis", entries)
         self.assertNotIn(nested, residue)
         report = _run_listed_scan(

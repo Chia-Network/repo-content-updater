@@ -15,7 +15,7 @@ registries:
 updates:
   # {{- if ne .DEPENDABOT_GOMOD_ENABLED "0" }}
   - package-ecosystem: "gomod"
-    directory: "{{ .DEPENDABOT_GOMOD_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_GOMOD_DIRECTORY }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -43,7 +43,7 @@ updates:
       - chia-pypi
       - chia-downloads
     insecure-external-code-execution: allow
-    directory: "{{ .DEPENDABOT_PIP_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_PIP_DIRECTORY }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -91,7 +91,7 @@ updates:
   # {{- if ne .DEPENDABOT_NPM_ENABLED "0" }}
 
   - package-ecosystem: "npm"
-    directory: "{{ .DEPENDABOT_NPM_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_NPM_DIRECTORY }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -115,7 +115,7 @@ updates:
   # {{- if ne .DEPENDABOT_CARGO_ENABLED "0" }}
 
   - package-ecosystem: cargo
-    directory: "{{ .DEPENDABOT_CARGO_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_CARGO_DIRECTORY }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -127,6 +127,7 @@ updates:
       - dependencies
       - rust
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_CARGO_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -138,7 +139,7 @@ updates:
   # {{- if ne .DEPENDABOT_SWIFT_ENABLED "0" }}
 
   - package-ecosystem: swift
-    directory: "{{ .DEPENDABOT_SWIFT_DIRECTORY }}"
+    directories: "{{ .DEPENDABOT_SWIFT_DIRECTORY }}"
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -146,6 +147,7 @@ updates:
       default-days: 7
     open-pull-requests-limit: "{{ .DEPENDABOT_SWIFT_PULL_REQUEST_LIMIT }}"
     rebase-strategy: "{{ .DEPENDABOT_SWIFT_REBASE_STRATEGY }}"
+    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_SWIFT_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -169,6 +171,7 @@ updates:
       - dependencies
       - docker
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_DOCKER_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -192,6 +195,7 @@ updates:
       - dependencies
       - terraform
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_TERRAFORM_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -215,6 +219,7 @@ updates:
       - dependencies
       - dotnet
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_NUGET_GROUP_UPDATES "1" }}
     groups:
       global:

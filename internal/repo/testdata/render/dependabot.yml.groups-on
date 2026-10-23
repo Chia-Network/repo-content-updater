@@ -11,7 +11,7 @@ registries:
     url: https://download.chia.net/simple/
 updates:
   - package-ecosystem: "gomod"
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -34,7 +34,7 @@ updates:
       - chia-pypi
       - chia-downloads
     insecure-external-code-execution: allow
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -72,7 +72,7 @@ updates:
           - "*"
 
   - package-ecosystem: "npm"
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -91,7 +91,7 @@ updates:
           - "*"
 
   - package-ecosystem: cargo
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -103,13 +103,14 @@ updates:
       - dependencies
       - rust
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:
           - "*"
 
   - package-ecosystem: swift
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -117,6 +118,7 @@ updates:
       default-days: 7
     open-pull-requests-limit: 10
     rebase-strategy: auto
+    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:
@@ -135,6 +137,7 @@ updates:
       - dependencies
       - docker
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:
@@ -153,6 +156,7 @@ updates:
       - dependencies
       - terraform
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:
@@ -171,6 +175,7 @@ updates:
       - dependencies
       - dotnet
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:

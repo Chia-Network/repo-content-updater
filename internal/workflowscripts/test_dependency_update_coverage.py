@@ -78,6 +78,13 @@ def _clean(name: str, repo: str) -> dict:
 
 
 class DependencyUpdateCoverageTest(unittest.TestCase):
+    def test_manifest_loader_returns_the_diff_and_versions_modules(self) -> None:
+        diff, versions = coverage._load_manifest_modules()
+        self.assertIs(diff, coverage._diff)
+        self.assertIs(versions, coverage._versions)
+        self.assertTrue(callable(diff._manifest_kind))
+        self.assertTrue(callable(versions._exact_body))
+
     def test_every_conclusive_scan_covers_the_group(self) -> None:
         first = _clean("lodash", "lodash/lodash")
         second = _clean("semver", "npm/node-semver")
@@ -199,7 +206,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             os.environ["MALWARE_WARN_ONLY"] = "1"
             os.environ["VERSION_RANGE_FROM_BODY"] = "0"
             for name in saved_env:
-                if name not in ("MALWARE_IOC_PATTERNS", "MALWARE_WARN_ONLY", "VERSION_RANGE_FROM_BODY"):
+                if name not in {"MALWARE_IOC_PATTERNS", "MALWARE_WARN_ONLY", "VERSION_RANGE_FROM_BODY"}:
                     os.environ[name] = "[]"
 
             def scan(to_version: str) -> dict:
@@ -230,7 +237,8 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             self.assertEqual((child / "dependabot_commits.md").read_text(encoding="utf-8"), f"commit {sha}\n")
         for report in (by_sha, by_branch):
             self.assertIs(report["scan_conclusive"], False, msg=report)
-            self.assertEqual(report["not_scanned_reason"], "to_ref_unresolved")
+            # A branch name is not an exact version, so it stops before the clone.
+            self.assertIn(report["not_scanned_reason"], {"to_ref_unresolved", "unresolved"})
             self.assertEqual(report["to_tag"], "")
             self.assertEqual(report["findings"]["ioc"], [])
 
@@ -469,7 +477,6 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
-
     def test_missing_scan_report_fails_the_check(self) -> None:
         update = {
             "packageName": "left-pad",
@@ -564,9 +571,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIn(str(Path(tmp).resolve() / "child"), child_output)
 
     def test_no_upstream_link_writes_a_report(self) -> None:
-        updates = [
-            {"packageName": "lodash", "fromVersion": "4.17.20", "toVersion": "4.17.21", "upstreamRepo": ""}
-        ]
+        updates = [{"packageName": "lodash", "fromVersion": "4.17.20", "toVersion": "4.17.21", "upstreamRepo": ""}]
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")

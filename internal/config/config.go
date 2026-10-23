@@ -68,6 +68,9 @@ type File struct {
 	Aliases        []string `yaml:"aliases"`
 	CompanionFiles []string `yaml:"companion_files"`
 	AdoptionMarker string   `yaml:"adoption_marker"`
+	// PreviousAdoptionMarkers are older marker spellings that existing files
+	// may still carry and that count as owned, so a rename never abandons them.
+	PreviousAdoptionMarkers []string `yaml:"previous_adoption_markers"`
 	// RequiresPaths lists repo-relative paths that must exist in the cloned repo
 	// for this file to be applied as a default. It is ignored for explicit selections.
 	RequiresPaths []string `yaml:"requires_paths"`
@@ -179,20 +182,35 @@ func (c *Config) validateRequiresPaths() error {
 var adoptionMarkerPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
 
 func (c *Config) validateAdoptionMarkers() error {
-	seen := map[string]string{}
+	type markerOwner struct{ field, file string }
+	seen := map[string]markerOwner{}
+	claim := func(field, marker, file string) error {
+		if !adoptionMarkerPattern.MatchString(marker) {
+			return fmt.Errorf("%s %q for %q must use only letters, digits and . _ : / -", field, marker, file)
+		}
+		if owner, ok := seen[marker]; ok && owner.file != file {
+			return fmt.Errorf("%s %q of %q is already the %s of %q", field, marker, file, owner.field, owner.file)
+		}
+		seen[marker] = markerOwner{field: field, file: file}
+		return nil
+	}
 	for i := range c.Files {
 		file := &c.Files[i]
 		marker := strings.TrimSpace(file.AdoptionMarker)
 		if marker == "" {
 			continue
 		}
-		if !adoptionMarkerPattern.MatchString(marker) {
-			return fmt.Errorf("adoption_marker %q for %q must use only letters, digits and . _ : / -", marker, file.Name)
+		if err := claim("adoption_marker", marker, file.Name); err != nil {
+			return err
 		}
-		if previous, ok := seen[marker]; ok && previous != file.Name {
-			return fmt.Errorf("adoption_marker %q is used by both %q and %q", marker, previous, file.Name)
+		for _, previous := range file.PreviousAdoptionMarkers {
+			if previous = strings.TrimSpace(previous); previous == "" {
+				continue
+			}
+			if err := claim("previous_adoption_marker", previous, file.Name); err != nil {
+				return err
+			}
 		}
-		seen[marker] = file.Name
 	}
 	return nil
 }

@@ -307,12 +307,13 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 			log.Printf("unknown file %s. Skipping...", selected.Name)
 			continue
 		}
-		content, ok, err := c.renderManagedFile(repoName, selected, fileinfo, cfg, repoConfig)
+		content, err := c.renderManagedFile(repoName, selected, fileinfo, cfg, repoConfig)
+		if errors.Is(err, errSkipManagedFile) {
+			log.Printf("Skipping %s for %s: %v\n", selected.Name, repoName, err)
+			continue
+		}
 		if err != nil {
 			return err
-		}
-		if !ok {
-			continue
 		}
 		for _, repoRelPath := range managedPaths(fileinfo) {
 			if _, err := confinedPath(repoDir(repoName), repoRelPath); err != nil {
@@ -340,26 +341,34 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 	return nil
 }
 
-// renderManagedFile renders fileinfo's template for repoName. When Dependabot
-// detection fails, an explicit file keeps the full template output and a
-// default file is skipped (ok is false) so an adopted file stays as it is.
-func (c *Content) renderManagedFile(repoName string, selected config.SelectedFile, fileinfo *config.File, cfg *config.Config, repoConfig Config) ([]byte, bool, error) {
+// errSkipManagedFile marks a file that is not written this run, so the
+// existing copy stays as it is; the wrapping error says why.
+var errSkipManagedFile = errors.New("keeping the existing file")
+
+// renderManagedFile renders fileinfo's template for repoName and finishes it
+// with postRenderForFile. When the template inputs cannot be derived, an
+// explicit file renders from the fallback inputs and a default file is
+// skipped with an error wrapping errSkipManagedFile, so an adopted file stays
+// as it is.
+func (c *Content) renderManagedFile(repoName string, selected config.SelectedFile, fileinfo *config.File, cfg *config.Config, repoConfig Config) ([]byte, error) {
 	tmplContent, err := os.ReadFile(path.Join(c.templates, fileinfo.TemplateName))
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
 	templateVars, templateOverrides, err := templateInputsForFile(fileinfo, repoName, cfg, repoConfig)
 	if err != nil {
 		if selected.Origin == config.OriginDefault {
-			log.Printf("Skipping default %s for %s: Dependabot detection failed: %v\n", selected.Name, repoName, err)
-			return nil, false, nil
+			return nil, fmt.Errorf("%w: template inputs failed: %w", errSkipManagedFile, err)
 		}
-		log.Printf("Dependabot detection for %s failed; keeping full configuration: %v\n", repoName, err)
+		log.Printf("Template inputs for %s in %s failed; rendering the full template: %v\n", selected.Name, repoName, err)
 	}
 
 	content, err := ProcessTemplate(tmplContent, templateVars, templateOverrides)
-	return content, err == nil, err
+	if err != nil {
+		return nil, err
+	}
+	return postRenderForFile(repoDir(repoName), selected, fileinfo, content)
 }
 
 // templateInputsForFile keeps template-specific variable derivation out of the
@@ -373,4 +382,15 @@ func templateInputsForFile(fileinfo *config.File, repoName string, cfg *config.C
 		overrides = nil
 	}
 	return withAdoptionMarker(vars, fileinfo.AdoptionMarker), overrides, err
+}
+
+// postRenderForFile finishes rendered template output for fileinfo, the
+// counterpart of templateInputsForFile. Only the Dependabot file is changed
+// (see postRenderDependabot); a default that must keep its existing file
+// returns an error wrapping errSkipManagedFile.
+func postRenderForFile(dir string, selected config.SelectedFile, fileinfo *config.File, rendered []byte) ([]byte, error) {
+	if fileinfo.TemplateName != dependabotTemplateName {
+		return rendered, nil
+	}
+	return postRenderDependabot(dir, selected.Origin == config.OriginDefault, fileinfo, rendered)
 }
