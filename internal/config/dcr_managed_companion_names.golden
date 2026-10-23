@@ -4,7 +4,7 @@ malware-verdict-formatter
 upstream-malware-scan
 dependency-update-coverage
 dependency-manifest-diff
-dependency-manifest-versions
+dependency-versions
 dependency-manifest-go
 dependency-manifest-npm
 dependency-manifest-python

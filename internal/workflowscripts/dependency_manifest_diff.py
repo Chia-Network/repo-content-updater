@@ -23,7 +23,7 @@ from dependency_manifest_npm import (
     _yarn_witnesses,
 )
 from dependency_manifest_python import _PYTHON_MANIFESTS, _req_parts, _requirement_name
-from dependency_manifest_versions import _reached_listed_version
+from versions import _reached_listed_version
 
 # npm and Yarn locks whose unlisted names may be registry tarball residue once every listed bump is explained.
 TRANSITIVE_LOCK_NAMES = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock"})

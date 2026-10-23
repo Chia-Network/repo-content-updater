@@ -1,13 +1,20 @@
-"""Exact-version grammar shared by the manifest parsers and the coverage scan.
+"""The one version model: exact-version grammar, npm ranges, release-tag spellings and version jumps.
 
-Each mode names where a token comes from and so which prefix it may drop
-and which version shape is exact. A range, wildcard or tag name is never an
-exact version in any mode.
+The manifest parsers, the coverage scan and the upstream scan shell all read
+versions here. Each mode names where a token comes from and so which prefix
+it may drop and which version shape is exact. A range, wildcard, tag name or
+moving major such as an action's `v4` is never an exact version in any mode.
+
+The shell calls the command line:
+  versions.py release-tag REPO VERSION   prints "<sha>\\t<tag>"; exit 2 when spellings disagree, 1 when none peels
+  versions.py jump FROM TO               exit 0 when the bump is a version-jump anomaly
 """
 
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 from typing import Literal
 
 # A PEP 440 pre/post/dev release (`1.2.3rc1`, `1.2.3.post1`, `1.2.3.dev0`)
@@ -30,6 +37,8 @@ _EXACT_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*" + _SUFFIX)
 _SPEC_VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+" + _SUFFIX)
 # A Dependabot version such as 2024.2 or 1.2.3.4 is exact; a bare `1` or `v4` is a moving major.
 _RAW_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)+" + _SUFFIX)
+# An npm registry version as it appears in a tarball URL or a residue spec.
+NPM_SEMVER = r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?"
 # An npm semver: up to three numeric release parts, an optional prerelease and build metadata.
 _RANGE_VERSION_RE = re.compile(
     r"(?P<release>[0-9]+(?:\.[0-9]+){0,2})(?:-(?P<pre>[0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?"
@@ -141,3 +150,85 @@ def _reached_listed_version(
     if not old_body or not new_body:
         return False
     return any(_exact_body(frm) == old_body and _exact_body(to) == new_body for frm, to in listed.get(name, ()))
+
+
+DISAGREE = "disagree"
+
+
+def _tag_name_ok(name: str) -> bool:
+    proc = subprocess.run(
+        ["git", "check-ref-format", "--allow-onelevel", f"refs/tags/{name}"], capture_output=True, check=False
+    )
+    return proc.returncode == 0
+
+
+def _peel(repo: str, name: str) -> str:
+    """The commit `refs/tags/<name>` peels to, or "" when it is not a valid, existing tag."""
+    if not _tag_name_ok(name):
+        return ""
+    proc = subprocess.run(
+        ["git", "-C", repo, "rev-parse", "--verify", "--quiet", "--end-of-options", f"refs/tags/{name}" + "^{commit}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def release_tag(repo: str, version: str) -> tuple[str, str] | str | None:
+    """The (commit, tag name) of the release tag for `version` in `repo`.
+
+    One leading `v` or `V` is noted. Every existing spelling of the bare
+    version (`<bare>`, `v<bare>`, `V<bare>`) must peel to the same commit.
+    A `V` version takes only `V<bare>`; any other version takes `<bare>`,
+    then `v<bare>`. DISAGREE means the spellings peel to different commits,
+    or a prefixed version would be satisfied only by the other case. None
+    means no accepted spelling peels; branches and raw revisions are not tags.
+    """
+    lead = version[:1] if version[:1] in {"v", "V"} else ""
+    bare = version[len(lead) :]
+    if not bare or not _tag_name_ok(bare):
+        return None
+    found = {name: _peel(repo, name) for name in (bare, f"v{bare}", f"V{bare}")}
+    if len({commit for commit in found.values() if commit}) > 1:
+        return DISAGREE
+    for name in (f"V{bare}",) if lead == "V" else (bare, f"v{bare}"):
+        if found[name]:
+            return found[name], name
+    return DISAGREE if lead and any(found.values()) else None
+
+
+# The version-jump heuristic reads major and minor: one `v` and any `-`/`+`
+# suffix are dropped, and a missing or empty minor or patch part is 0.
+_JUMP_RE = re.compile(r"([0-9]+)(?:\.([0-9]*)(?:\.([0-9]*)\.?)?)?")
+
+
+def _jump_parts(version: str) -> tuple[int, int] | None:
+    match = _JUMP_RE.fullmatch(re.split(r"[-+]", version.removeprefix("v"), maxsplit=1)[0])
+    return (int(match.group(1)), int(match.group(2) or 0)) if match else None
+
+
+def version_jump(frm: str, to: str) -> bool:
+    """True for a major bump, or for more than five minors within one major."""
+    old, new = _jump_parts(frm), _jump_parts(to)
+    if old is None or new is None:
+        return False
+    return new[0] > old[0] or (new[0] == old[0] and new[1] - old[1] > 5)
+
+
+def main(argv: list[str]) -> int:
+    command, args = argv[:1], argv[1:]
+    if command == ["release-tag"] and len(args) == 2:
+        found = release_tag(*args)
+        if isinstance(found, tuple):
+            print("\t".join(found))
+            return 0
+        return 2 if found == DISAGREE else 1
+    if command == ["jump"] and len(args) == 2:
+        return 0 if version_jump(*args) else 1
+    print("usage: versions.py release-tag REPO VERSION | jump FROM TO", file=sys.stderr)
+    return 64
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

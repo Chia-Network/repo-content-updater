@@ -87,30 +87,50 @@ for (const { name, env, want } of BIND_CASES) {
   });
 }
 
-function bindReviewScript() {
+// The bind_review step as the workflow wires it: its env: block maps step
+// outputs to variables, and an output the run did not set reads as ''.
+function bindReviewStep() {
   const workflow = fs.readFileSync(
     path.join(__dirname, '..', '..', 'templates', 'dependency-cursor-review.yml'),
     'utf8',
   );
   const step = workflow.split('\n      - name: ').find((block) => block.includes('id: bind_review'));
   assert.ok(step, 'bind_review step is present');
-  const [, script] = step.split('script: |\n');
-  return script
+  const [, envBlock] = step.split('\n        env:\n');
+  const wiring = envBlock
+    .split('\n        with:\n')[0]
     .split('\n')
-    .filter((line) => line.startsWith('            ') || !line.trim())
-    .map((line) => line.slice(12))
-    .join('\n');
+    .map((line) => {
+      const match = /^ {10}([A-Z_]+): \$\{\{`\{\{ steps\.(\w+)\.outputs\.(\w+) \}\}`\}\}$/.exec(line);
+      assert.ok(match, `bind_review env line reads a step output: ${line}`);
+      return match.slice(1);
+    });
+  const [, script] = step.split('script: |\n');
+  return {
+    env: (outputs) => Object.fromEntries(wiring.map(([name, id, key]) => [name, outputs[id]?.[key] ?? ''])),
+    script: script
+      .split('\n')
+      .filter((line) => line.startsWith('            ') || !line.trim())
+      .map((line) => line.slice(12))
+      .join('\n'),
+  };
 }
 
-test('the bind_review workflow step publishes bindReviewOutputs for its env', () => {
+test('the bind_review workflow step publishes bindReviewOutputs for the step outputs it reads', () => {
+  const step = bindReviewStep();
   const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'dcr-bind-'));
   fs.symlinkSync(__dirname, path.join(runnerTemp, 'trusted-dcr-scripts'));
+  const target_pr = { patch_id: PATCH, reviewed_shas: RESOLVED };
   try {
-    for (const { env, want } of [BIND_CASES[0], BIND_CASES[2]]) {
+    for (const [resolved_to, want] of [
+      [RESOLVED, BIND_CASES[0].want],
+      [MOVED, BIND_CASES[2].want],
+    ]) {
       const outputs = {};
       const core = { setOutput: (name, value) => { outputs[name] = value; } };
+      const env = step.env({ target_pr, malware_scan: { resolved_to } });
       const fakeProcess = { env: { ...env, RUNNER_TEMP: runnerTemp } };
-      new Function('core', 'process', 'require', bindReviewScript())(core, fakeProcess, require);
+      new Function('core', 'process', 'require', step.script)(core, fakeProcess, require);
       assert.deepEqual(outputs, want);
     }
   } finally {

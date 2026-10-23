@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import dependency_manifest_diff as _diff
-import dependency_manifest_versions as _versions
+import versions as _versions
 
 _REPO_RE = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
