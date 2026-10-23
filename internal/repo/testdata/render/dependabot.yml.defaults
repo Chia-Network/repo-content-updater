@@ -11,7 +11,7 @@ registries:
     url: https://download.chia.net/simple/
 updates:
   - package-ecosystem: "gomod"
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -34,7 +34,7 @@ updates:
       - chia-pypi
       - chia-downloads
     insecure-external-code-execution: allow
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -64,7 +64,7 @@ updates:
     reviewers: ["cameroncooper", "emlowe"]
 
   - package-ecosystem: "npm"
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -79,7 +79,7 @@ updates:
     reviewers: ["emlowe", "seeden"]
 
   - package-ecosystem: cargo
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -91,9 +91,10 @@ updates:
       - dependencies
       - rust
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
 
   - package-ecosystem: swift
-    directory: /
+    directories: ["/"]
     schedule:
       interval: "weekly"
       day: "tuesday"
@@ -101,6 +102,7 @@ updates:
       default-days: 7
     open-pull-requests-limit: 10
     rebase-strategy: auto
+    reviewers: ["cameroncooper", "emlowe"]
 
   - package-ecosystem: docker
     directories: ["/"]
@@ -115,6 +117,7 @@ updates:
       - dependencies
       - docker
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
 
   - package-ecosystem: terraform
     directories: ["/"]
@@ -129,6 +132,7 @@ updates:
       - dependencies
       - terraform
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]
 
   - package-ecosystem: nuget
     directories: ["/"]
@@ -143,3 +147,4 @@ updates:
       - dependencies
       - dotnet
       - "Changed"
+    reviewers: ["cameroncooper", "emlowe"]

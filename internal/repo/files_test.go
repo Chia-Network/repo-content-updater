@@ -40,7 +40,7 @@ func TestTemplateInputsForFile(t *testing.T) {
 		for key, want := range map[string]string{
 			"BASE_VAR":                 "base",
 			"OVERRIDE_VAR":             "override",
-			"DEPENDABOT_PIP_DIRECTORY": "pkg/nested",
+			"DEPENDABOT_PIP_DIRECTORY": `["pkg/nested"]`,
 			"DEPENDABOT_PIP_ENABLED":   "1",
 			"DEPENDABOT_NPM_ENABLED":   "1",
 		} {
@@ -71,11 +71,13 @@ func TestTemplateInputsForFile(t *testing.T) {
 func TestExistingFileState(t *testing.T) {
 	dir := t.TempDir()
 	fileinfo := &config.File{
-		RepoPath:       ".github/dependabot.yml",
-		AlternatePaths: []string{".github/dependabot.yaml"},
-		AdoptionMarker: "repo-content-updater:dependabot-actions",
+		RepoPath:                ".github/dependabot.yml",
+		AlternatePaths:          []string{".github/dependabot.yaml"},
+		AdoptionMarker:          "repo-content-updater:dependabot",
+		PreviousAdoptionMarkers: []string{"repo-content-updater:dependabot-actions"},
 	}
 	markerLine := "# " + fileinfo.AdoptionMarker
+	previousMarkerLine := "# " + fileinfo.PreviousAdoptionMarkers[0]
 	fullManaged := "# This file is managed by the repo-content-updater project.\nversion: 2\n"
 	unmarked := *fileinfo
 	unmarked.AdoptionMarker = ""
@@ -90,6 +92,7 @@ func TestExistingFileState(t *testing.T) {
 		{name: "unmarked", fileinfo: fileinfo, files: map[string]string{fileinfo.RepoPath: "version: 2\n"}, want: fileUnowned},
 		{name: "generic managed marker only", fileinfo: fileinfo, files: map[string]string{fileinfo.RepoPath: fullManaged}, want: fileUnowned},
 		{name: "marked", fileinfo: fileinfo, files: map[string]string{fileinfo.RepoPath: markerLine + "\nversion: 2\n"}, want: fileMarked},
+		{name: "marked previous", fileinfo: fileinfo, files: map[string]string{fileinfo.RepoPath: previousMarkerLine + "\nversion: 2\n"}, want: fileMarked},
 		{name: "marked alternate", fileinfo: fileinfo, files: map[string]string{fileinfo.AlternatePaths[0]: "  " + markerLine + "  \n"}, want: fileMarked},
 		{name: "unmarked alternate beside marked", fileinfo: fileinfo, files: map[string]string{fileinfo.RepoPath: markerLine + "\n", fileinfo.AlternatePaths[0]: "version: 2\n"}, want: fileUnowned},
 		{name: "no marker absent", fileinfo: &unmarked, want: fileAbsent},

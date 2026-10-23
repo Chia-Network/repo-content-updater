@@ -241,7 +241,9 @@ files:
   - name: dependabot-actions
     template_name: dependabot.yml
     repo_path: .github/dependabot.yml
-    adoption_marker: "repo-content-updater:dependabot-actions"
+    adoption_marker: "repo-content-updater:dependabot"
+    previous_adoption_markers:
+      - "repo-content-updater:dependabot-actions"
     alternate_paths:
       - .github/dependabot.yaml
     requires_paths:
@@ -289,12 +291,12 @@ variables:
   DEPENDABOT_DENY_LICENSES: "AGPL-1.0-only, AGPL-1.0-or-later, AGPL-1.0-or-later, AGPL-3.0-or-later, GPL-1.0-only, GPL-1.0-or-later, GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later"
   DEPENDABOT_GOMOD_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_GOMOD_REBASE_STRATEGY: "auto"
-  DEPENDABOT_GOMOD_DIRECTORY: "/"
+  DEPENDABOT_GOMOD_DIRECTORY: "[\"/\"]"
   DEPENDABOT_GOMOD_REVIEWERS: "[\"cameroncooper\", \"emlowe\"]"
   DEPENDABOT_GOMOD_GROUP_UPDATES: "1"
   DEPENDABOT_PIP_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_PIP_REBASE_STRATEGY: "auto"
-  DEPENDABOT_PIP_DIRECTORY: "/"
+  DEPENDABOT_PIP_DIRECTORY: "[\"/\"]"
   DEPENDABOT_PIP_REVIEWERS: "[\"emlowe\"]"
   DEPENDABOT_PIP_GROUP_UPDATES: "0"
   DEPENDABOT_ACTIONS_PULL_REQUEST_LIMIT: "10"
@@ -304,15 +306,15 @@ variables:
   DEPENDABOT_ACTIONS_GROUP_UPDATES: "0"
   DEPENDABOT_NPM_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_NPM_REBASE_STRATEGY: "auto"
-  DEPENDABOT_NPM_DIRECTORY: "/"
+  DEPENDABOT_NPM_DIRECTORY: "[\"/\"]"
   DEPENDABOT_NPM_REVIEWERS: "[\"emlowe\", \"seeden\"]"
   DEPENDABOT_NPM_GROUP_UPDATES: "0"
-  DEPENDABOT_CARGO_DIRECTORY: "/"
+  DEPENDABOT_CARGO_DIRECTORY: "[\"/\"]"
   DEPENDABOT_CARGO_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_CARGO_REBASE_STRATEGY: "auto"
   DEPENDABOT_CARGO_GROUP_UPDATES: "0"
   DEPENDENCY_REVIEW_ALLOW_DEPENDENCIES_LICENSES: pkg:pypi/pyinstaller
-  DEPENDABOT_SWIFT_DIRECTORY: "/"
+  DEPENDABOT_SWIFT_DIRECTORY: "[\"/\"]"
   DEPENDABOT_SWIFT_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_SWIFT_REBASE_STRATEGY: "auto"
   DEPENDABOT_SWIFT_GROUP_UPDATES: "0"

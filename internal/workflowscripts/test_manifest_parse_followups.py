@@ -41,6 +41,14 @@ class VersionOperatorTest(unittest.TestCase):
             self.assertTrue(version_manifest._reached_listed_version("tool", old, new, listed), (old, new))
         self.assertFalse(version_manifest._reached_listed_version("tool", "^1.0", "1.1", listed))
 
+    def test_x_wildcard_parts_are_not_exact(self) -> None:
+        for token in ("1.x", "2.x", "1.2.x", "1.X", "1.x.3", "X", "*", "1.*", "1.2.*"):
+            self.assertEqual(version_manifest._exact_body(token), "", token)
+        self.assertFalse(version_manifest._reached_listed_version("tool", "1.x", "2.x", {"tool": {("1.x", "2.x")}}))
+        self.assertEqual(version_manifest._exact_body("1.2.3-xyz"), "1.2.3-xyz")
+        self.assertEqual(version_manifest._exact_body("v1.2.3-xyz"), "1.2.3-xyz")
+        self.assertEqual(version_manifest._exact_body("1.2.3+build.x"), "1.2.3+build.x")
+
 
 class PythonManifestTest(unittest.TestCase):
     def test_python_manifests_are_requirements(self) -> None:
@@ -164,6 +172,37 @@ class ChangedPathGapTest(unittest.TestCase):
             gaps = {item["package_name"] for item in _gaps_at(root, base, [])}
             self.assertIn("requirements.txt", gaps)
 
+    def test_deleted_lockfile_after_a_caret_bump_is_a_gap(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            _git_repo(root)
+            _commit(root, "package.json", json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n", "base manifest")
+            _commit(
+                root,
+                "package-lock.json",
+                json.dumps({"lockfileVersion": 3, "packages": {"node_modules/lodash": {"version": "4.17.20"}}}) + "\n",
+                "base lock",
+            )
+            base = _git(root, "rev-parse", "HEAD")
+            _commit(root, "package.json", json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n", "caret bump")
+            _git(root, "rm", "-q", "package-lock.json")
+            _git(root, "commit", "-qm", "delete lock")
+            gaps = {item["package_name"] for item in _gaps_at(root, base, [_update("lodash", "4.17.20", "4.17.21")])}
+            self.assertIn("package-lock.json", gaps, msg=gaps)
+
+    def test_deleted_poetry_lock_after_an_exact_pin_is_a_gap(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            _git_repo(root)
+            _commit(root, "requirements.txt", "requests==2.31.0\n", "base manifest")
+            _commit(root, "poetry.lock", "[[package]]\nname = 'requests'\nversion = '2.31.0'\n", "base lock")
+            base = _git(root, "rev-parse", "HEAD")
+            _commit(root, "requirements.txt", "requests==2.32.0\n", "exact pin bump")
+            _git(root, "rm", "-q", "poetry.lock")
+            _git(root, "commit", "-qm", "delete lock")
+            gaps = {item["package_name"] for item in _gaps_at(root, base, [_update("requests", "2.31.0", "2.32.0")])}
+            self.assertIn("poetry.lock", gaps, msg=gaps)
+
 
 class PackageJsonSectionsTest(unittest.TestCase):
     def test_bump_in_one_section_is_not_hidden_by_another(self) -> None:
@@ -220,16 +259,12 @@ class RenamedManifestTest(unittest.TestCase):
             self.assertIn("shady", {item["package_name"] for item in gaps}, msg=gaps)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ScannableTest(unittest.TestCase):
     def test_only_exact_versions_with_a_github_repository_are_scannable(self) -> None:
         def update(frm: str, to: str, repo: str = "o/r") -> dict:
             return {"packageName": "p", "fromVersion": frm, "toVersion": to, "upstreamRepo": repo}
 
-        for frm, to in (("1.0", "1.1"), ("v1.0", "V1.1"), ("", "1.1")):
+        for frm, to in (("1.0", "1.1"), ("v1.0", "V1.1"), ("", "1.1"), ("1.0", "1.2.3-xyz")):
             self.assertTrue(coverage.scannable(update(frm, to)), (frm, to))
         for frm, to in (
             (">=1.0", "1.1"),
@@ -237,7 +272,13 @@ class ScannableTest(unittest.TestCase):
             ("1.0", "^1.1"),
             ("1.0", "~=1.1"),
             ("1.0", "1.*"),
+            ("1.0", "1.x"),
+            ("1.0", "1.2.x"),
             ("1.0", "latest"),
         ):
             self.assertFalse(coverage.scannable(update(frm, to)), (frm, to))
         self.assertFalse(coverage.scannable(update("1.0", "1.1", "")))
+
+
+if __name__ == "__main__":
+    unittest.main()

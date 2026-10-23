@@ -49,10 +49,11 @@ type dependabotEcosystem struct {
 
 var dependabotEcosystems = []dependabotEcosystem{
 	{
-		name:           "gomod",
-		enabledVar:     "DEPENDABOT_GOMOD_ENABLED",
-		directoriesVar: "DEPENDABOT_GOMOD_DIRECTORY",
-		manifests:      []string{"go.mod"},
+		name:            "gomod",
+		enabledVar:      "DEPENDABOT_GOMOD_ENABLED",
+		directoriesVar:  "DEPENDABOT_GOMOD_DIRECTORY",
+		manifests:       []string{"go.mod"},
+		listDirectories: true,
 	},
 	{
 		name:           "pip",
@@ -70,6 +71,7 @@ var dependabotEcosystems = []dependabotEcosystem{
 			"*requirements*/*.txt",
 			"*requirements*/*.in",
 		},
+		listDirectories: true,
 	},
 	{
 		name:               "github-actions",
@@ -81,22 +83,25 @@ var dependabotEcosystems = []dependabotEcosystem{
 		listDirectories:    true,
 	},
 	{
-		name:           "npm",
-		enabledVar:     "DEPENDABOT_NPM_ENABLED",
-		directoriesVar: "DEPENDABOT_NPM_DIRECTORY",
-		manifests:      []string{"package.json"},
+		name:            "npm",
+		enabledVar:      "DEPENDABOT_NPM_ENABLED",
+		directoriesVar:  "DEPENDABOT_NPM_DIRECTORY",
+		manifests:       []string{"package.json"},
+		listDirectories: true,
 	},
 	{
-		name:           "cargo",
-		enabledVar:     "DEPENDABOT_CARGO_ENABLED",
-		directoriesVar: "DEPENDABOT_CARGO_DIRECTORY",
-		manifests:      []string{"Cargo.toml"},
+		name:            "cargo",
+		enabledVar:      "DEPENDABOT_CARGO_ENABLED",
+		directoriesVar:  "DEPENDABOT_CARGO_DIRECTORY",
+		manifests:       []string{"Cargo.toml"},
+		listDirectories: true,
 	},
 	{
-		name:           "swift",
-		enabledVar:     "DEPENDABOT_SWIFT_ENABLED",
-		directoriesVar: "DEPENDABOT_SWIFT_DIRECTORY",
-		manifests:      []string{"Package.swift"},
+		name:            "swift",
+		enabledVar:      "DEPENDABOT_SWIFT_ENABLED",
+		directoriesVar:  "DEPENDABOT_SWIFT_DIRECTORY",
+		manifests:       []string{"Package.swift"},
+		listDirectories: true,
 	},
 	{
 		name:            "docker",

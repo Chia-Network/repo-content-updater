@@ -361,8 +361,17 @@ func (c *Content) renderManagedFile(repoName string, selected config.SelectedFil
 	}
 
 	content, err := ProcessTemplate(tmplContent, templateVars, templateOverrides)
-	if err != nil || selected.Origin != config.OriginDefault || fileinfo.TemplateName != dependabotTemplateName {
-		return content, err == nil, err
+	if err != nil {
+		return nil, false, err
+	}
+	if fileinfo.TemplateName == dependabotTemplateName {
+		content, err = pruneDependabotRegistries(content)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	if selected.Origin != config.OriginDefault || fileinfo.TemplateName != dependabotTemplateName {
+		return content, true, nil
 	}
 	merged, ok, err := mergeDependabotConfig(repoDir(repoName), fileinfo, content)
 	if err == nil && !ok {

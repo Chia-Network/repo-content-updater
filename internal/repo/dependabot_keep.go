@@ -2,6 +2,7 @@ package repo
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"slices"
 	"strings"
@@ -11,8 +12,10 @@ import (
 	"github.com/chia-network/repo-content-updater/internal/config"
 )
 
-// actionsReviewers are the reviewers every github-actions block requests.
-var actionsReviewers = []string{"cameroncooper", "emlowe"}
+// errConflictingDependabotEntries marks two existing update entries that share
+// an ecosystem and directories key but configure them differently. The merge
+// leaves the existing file untouched rather than silently dropping one.
+var errConflictingDependabotEntries = errors.New("conflicting Dependabot update entries share a key")
 
 // mergeDependabotConfig folds the update entries of an existing default
 // Dependabot file into rendered so adopting a repo never removes an
@@ -20,8 +23,10 @@ var actionsReviewers = []string{"cameroncooper", "emlowe"}
 // plus directories: a directory the rendered file already covers for that
 // ecosystem is taken from the rendered entry, and each remaining
 // (ecosystem, directories) key from the existing file is kept as one block.
-// Every github-actions block is weekly with actionsReviewers. ok is false when
-// either file cannot be read as YAML; the existing file then stays as it is.
+// Identical duplicate blocks collapse; two blocks that share a key but
+// configure it differently abort the merge. Every github-actions block stays
+// weekly. ok is false when either file cannot be read as YAML or two existing
+// blocks conflict; the existing file then stays as it is.
 func mergeDependabotConfig(dir string, fileinfo *config.File, rendered []byte) ([]byte, bool, error) {
 	var doc yaml.Node
 	updates, ok := dependabotUpdates(rendered, &doc)
@@ -33,7 +38,7 @@ func mergeDependabotConfig(dir string, fileinfo *config.File, rendered []byte) (
 		eco, dirs := entryKey(entry)
 		covered[eco] = append(covered[eco], dirs...)
 	}
-	seen := map[string]bool{}
+	seen := map[string]string{}
 	appended := false
 	for _, repoPath := range managedPaths(fileinfo) {
 		existing, err := readRegularConfined(dir, repoPath)
@@ -49,7 +54,11 @@ func mergeDependabotConfig(dir string, fileinfo *config.File, rendered []byte) (
 			return nil, false, nil
 		}
 		for _, entry := range oldUpdates.Content {
-			if keep := uncoveredEntry(entry, covered, seen); keep != nil {
+			keep, err := uncoveredEntry(entry, covered, seen)
+			if err != nil {
+				return nil, false, nil
+			}
+			if keep != nil {
 				updates.Content = append(updates.Content, keep)
 				appended = true
 			}
@@ -83,11 +92,20 @@ func readRegularConfined(dir, repoPath string) ([]byte, error) {
 }
 
 // uncoveredEntry returns entry narrowed to the directories covered does not
-// yet hold for its ecosystem, or nil when nothing is left or its key was
-// already kept. An entry without directories is kept only when its
-// ecosystem is not covered at all.
-func uncoveredEntry(entry *yaml.Node, covered map[string][]string, seen map[string]bool) *yaml.Node {
+// yet hold for its ecosystem, or nil when nothing is left. An entry without
+// directories is kept only when its ecosystem is not covered at all. Two
+// entries sharing an ecosystem and directories key collapse only when they
+// are identical; differing settings return errConflictingDependabotEntries so
+// the merge leaves the existing file untouched.
+func uncoveredEntry(entry *yaml.Node, covered map[string][]string, seen map[string]string) (*yaml.Node, error) {
 	eco, dirs := entryKey(entry)
+	key := dependabotEntryKey(eco, dirs)
+	if previous, ok := seen[key]; ok {
+		if previous == encodeDependabotEntry(entry) {
+			return nil, nil
+		}
+		return nil, errConflictingDependabotEntries
+	}
 	var rest []string
 	for _, d := range dirs {
 		if !slices.Contains(covered[eco], d) && !slices.Contains(rest, d) {
@@ -96,19 +114,34 @@ func uncoveredEntry(entry *yaml.Node, covered map[string][]string, seen map[stri
 	}
 	_, ecoCovered := covered[eco]
 	if len(rest) == 0 && (len(dirs) > 0 || ecoCovered) {
-		return nil
+		return nil, nil
 	}
 	slices.Sort(rest)
-	key := eco + "\x00" + strings.Join(rest, "\x00")
-	if seen[key] {
-		return nil
-	}
-	seen[key] = true
+	seen[key] = encodeDependabotEntry(entry)
 	covered[eco] = append(covered[eco], rest...)
 	if len(rest) != len(dirs) {
 		setDirectories(entry, rest)
 	}
-	return entry
+	return entry, nil
+}
+
+// dependabotEntryKey is the ecosystem plus sorted normalized directories.
+func dependabotEntryKey(eco string, dirs []string) string {
+	sorted := slices.Clone(dirs)
+	slices.Sort(sorted)
+	return eco + "\x00" + strings.Join(sorted, "\x00")
+}
+
+// encodeDependabotEntry renders one update entry back to YAML for comparison.
+func encodeDependabotEntry(entry *yaml.Node) string {
+	var out bytes.Buffer
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	if err := enc.Encode(entry); err != nil {
+		return ""
+	}
+	_ = enc.Close()
+	return out.String()
 }
 
 // dependabotUpdates decodes raw into doc and returns its updates sequence.
@@ -154,13 +187,12 @@ func normalizeDependabotDir(d string) string {
 func setDirectories(entry *yaml.Node, dirs []string) {
 	removeMapKey(entry, "directory")
 	removeMapKey(entry, "directories")
-	if len(dirs) == 1 {
-		setMapValue(entry, "directory", scalarNode(dirs[0]))
-		return
-	}
 	setMapValue(entry, "directories", stringSeq(dirs))
 }
 
+// setActionsDefaults keeps a github-actions block on a weekly interval. Its
+// reviewers are left alone: the rendered template sets them and merged blocks
+// keep their own.
 func setActionsDefaults(entry *yaml.Node) {
 	schedule := mapValue(entry, "schedule")
 	if schedule == nil || schedule.Kind != yaml.MappingNode {
@@ -168,7 +200,6 @@ func setActionsDefaults(entry *yaml.Node) {
 		setMapValue(entry, "schedule", schedule)
 	}
 	setMapValue(schedule, "interval", scalarNode("weekly"))
-	setMapValue(entry, "reviewers", stringSeq(actionsReviewers))
 }
 
 func mapValue(m *yaml.Node, key string) *yaml.Node {
@@ -223,4 +254,53 @@ func dependabotEcosystemNames(raw []byte) ([]string, bool) {
 		names = append(names, eco)
 	}
 	return names, true
+}
+
+// pruneDependabotRegistries drops top-level registries no update block
+// references, so a repo without pip does not carry the python-index entries.
+// Content that is not readable as a Dependabot file is returned unchanged.
+func pruneDependabotRegistries(raw []byte) ([]byte, error) {
+	var doc yaml.Node
+	if yaml.Unmarshal(raw, &doc) != nil || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return raw, nil
+	}
+	root := doc.Content[0]
+	registries := mapValue(root, "registries")
+	if registries == nil || registries.Kind != yaml.MappingNode {
+		return raw, nil
+	}
+	referenced := map[string]bool{}
+	if updates := mapValue(root, "updates"); updates != nil && updates.Kind == yaml.SequenceNode {
+		for _, entry := range updates.Content {
+			if entry.Kind != yaml.MappingNode {
+				continue
+			}
+			if refs := mapValue(entry, "registries"); refs != nil && refs.Kind == yaml.SequenceNode {
+				for _, item := range refs.Content {
+					referenced[item.Value] = true
+				}
+			}
+		}
+	}
+	var kept []*yaml.Node
+	for i := 0; i+1 < len(registries.Content); i += 2 {
+		if referenced[registries.Content[i].Value] {
+			kept = append(kept, registries.Content[i], registries.Content[i+1])
+		}
+	}
+	if len(kept) == len(registries.Content) {
+		return raw, nil
+	}
+	if len(kept) == 0 {
+		removeMapKey(root, "registries")
+	} else {
+		registries.Content = kept
+	}
+	var out bytes.Buffer
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return raw, err
+	}
+	return out.Bytes(), enc.Close()
 }

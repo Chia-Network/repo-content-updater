@@ -21,7 +21,7 @@ _REPO_RE = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
 
 
-_EXACT_RE = re.compile(r"\A[vV]?[0-9][0-9A-Za-z.+_-]*\Z")
+_EXACT_RE = re.compile(r"\A[vV]?[0-9]+(?:\.[0-9]+)*(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?\Z")
 
 
 def scannable(update: dict) -> bool:
@@ -410,10 +410,10 @@ def _base_commit(token: str = "") -> str | None:
     return _verify_commit(ref) or _verify_commit(f"origin/{ref}") or ""
 
 
-def _changed_paths(base: str) -> list[tuple[str, str, bool]] | None:
-    """(before path, after path, retyped) for each file added, modified, renamed, copied or retyped since base."""
+def _changed_paths(base: str) -> list[tuple[str, str, str]] | None:
+    """(before path, after path, status letter) for each file changed since base, deletions included."""
     diff = subprocess.run(
-        ["git", "diff", "--name-status", "-z", "-M", "--diff-filter=AMRCT", base, "HEAD"],
+        ["git", "diff", "--name-status", "-z", "-M", "--diff-filter=AMRCTD", base, "HEAD"],
         check=False,
         capture_output=True,
         text=True,
@@ -421,17 +421,33 @@ def _changed_paths(base: str) -> list[tuple[str, str, bool]] | None:
     if diff.returncode != 0:
         return None
     fields = diff.stdout.split("\0")
-    changed: list[tuple[str, str, bool]] = []
+    changed: list[tuple[str, str, str]] = []
     index = 0
     while index + 1 < len(fields):
-        status = fields[index]
-        if status[:1] in "RC":
-            changed.append((fields[index + 1], fields[index + 2], False))
+        status = fields[index][:1]
+        if status in "RC":
+            changed.append((fields[index + 1], fields[index + 2], status))
             index += 3
         else:
-            changed.append((fields[index + 1], fields[index + 1], status == "T"))
+            changed.append((fields[index + 1], fields[index + 1], status))
             index += 2
     return changed
+
+
+# Lockfiles that can witness the version a package.json range resolves to.
+_RANGE_WITNESS_LOCKS = (("package-lock.json", "json"), ("npm-shrinkwrap.json", "json"), ("yarn.lock", "yarn"))
+
+
+def _head_locked_versions(manifest_path: str) -> dict[str, frozenset[str]]:
+    """Versions the npm or Yarn locks beside manifest_path in HEAD resolve each package to."""
+    if Path(manifest_path).name != "package.json":
+        return {}
+    found: dict[str, frozenset[str]] = {}
+    for lock_name, kind in _RANGE_WITNESS_LOCKS:
+        lock_path = str(Path(manifest_path).with_name(lock_name))
+        for name, versions in _diff._locked_versions(kind, _git_text("HEAD", lock_path)).items():
+            found[name] = found.get(name, frozenset()) | versions
+    return found
 
 
 def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
@@ -443,8 +459,10 @@ def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
     package with that path as its name does not hide the path. A dependency
     with more than one unexplained entry is named as well.
 
-    A missing base, an opaque lockfile, and any changed path this grammar does
-    not parse are unresolved under their path. Unlisted names in a npm or Yarn
+    A missing base, an opaque lockfile, a deleted path, and any changed path
+    this grammar does not parse are unresolved under their path. A shared
+    `^` or `~` package.json bump is explained only when a lockfile beside it
+    in HEAD resolves the package to the listed version. Unlisted names in a npm or Yarn
     lock are transitive residue when every listed name in that lock moved to
     its listed version and each unlisted entry was bumped, added or removed as
     a registry tarball.
@@ -458,16 +476,20 @@ def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
         return [uncovered({"packageName": "manifest-diff"}, "unresolved")]
     gaps: list[dict] = []
     seen = set(listed)
-    for old_path, path, retyped in changed:
+    for old_path, path, status in changed:
         kind = _diff._manifest_kind(path)
-        if retyped or not kind or kind == "opaque":
+        if status in "DT" or not kind or kind == "opaque":
             for label in dict.fromkeys((old_path, path)):
                 gaps.append(uncovered({"packageName": label}, "unresolved"))
             continue
         before = _git_text(base, old_path)
         after = _git_text("HEAD", path)
         names = _diff._changed_names(kind, before, after)
-        explained = names is not None and _diff._entries_explain(kind, before, after, updates)
+        locked = _head_locked_versions(path)
+        if Path(path).name in _diff.TRANSITIVE_LOCK_NAMES:
+            for name, versions in _diff._locked_versions(kind, after).items():
+                locked[name] = locked.get(name, frozenset()) | versions
+        explained = names is not None and _diff._entries_explain(kind, before, after, updates, locked)
         file_unresolved = names is None or (before != after and not explained)
         if (
             Path(path).name in _diff.TRANSITIVE_LOCK_NAMES
@@ -484,7 +506,7 @@ def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
                 gaps.append(uncovered({"packageName": label}, "unresolved"))
                 seen.add(label)
         if names is not None and file_unresolved:
-            for label in sorted(_diff._multi_entry_names(kind, before, after, updates)):
+            for label in sorted(_diff._multi_entry_names(kind, before, after, updates, locked)):
                 if _diff._names_listed(kind, {label}, seen):
                     continue
                 gaps.append(uncovered({"packageName": label}, "unresolved"))

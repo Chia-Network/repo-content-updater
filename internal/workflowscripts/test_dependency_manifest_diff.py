@@ -381,9 +381,35 @@ class DependencyManifestDiffTest(unittest.TestCase):
         self.assertEqual(report["package_name"], "github.com/spf13/cobra")
 
     def test_listed_npm_range_bump_is_conclusive(self) -> None:
+        base_lock = {
+            "lockfileVersion": 3,
+            "packages": {
+                "node_modules/lodash": {
+                    "version": "4.17.20",
+                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",
+                    "integrity": "sha512-lodash-old",
+                }
+            },
+        }
+        head_lock = {
+            "lockfileVersion": 3,
+            "packages": {
+                "node_modules/lodash": {
+                    "version": "4.17.21",
+                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+                    "integrity": "sha512-lodash-new",
+                }
+            },
+        }
         report = _run_listed_scan(
-            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n"},
-            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n"},
+            {
+                "package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n",
+                "package-lock.json": json.dumps(base_lock) + "\n",
+            },
+            {
+                "package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n",
+                "package-lock.json": json.dumps(head_lock) + "\n",
+            },
             [
                 {
                     "packageName": "lodash",
@@ -395,6 +421,41 @@ class DependencyManifestDiffTest(unittest.TestCase):
         )
         self.assertIs(report["scan_conclusive"], True)
         self.assertEqual(report["status"], "clean")
+
+    def test_listed_npm_range_bump_without_a_lockfile_is_unresolved(self) -> None:
+        report = _run_listed_scan(
+            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n"},
+            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n"},
+            [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")],
+        )
+        names = {item["package_name"] for item in report["dependencies"]}
+        self.assertIn("package.json", names)
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
+
+    def test_listed_npm_range_bump_is_unresolved_when_the_lock_keeps_the_old_version(self) -> None:
+        lock = {
+            "lockfileVersion": 3,
+            "packages": {
+                "node_modules/lodash": {
+                    "version": "4.17.20",
+                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",
+                    "integrity": "sha512-lodash-old",
+                }
+            },
+        }
+        report = _run_listed_scan(
+            {
+                "package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n",
+                "package-lock.json": json.dumps(lock) + "\n",
+            },
+            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n"},
+            [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")],
+        )
+        names = {item["package_name"] for item in report["dependencies"]}
+        self.assertIn("package.json", names)
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertNotEqual(report["status"], "clean")
 
     def test_changed_range_prefix_is_unresolved(self) -> None:
         report = _run_listed_scan(

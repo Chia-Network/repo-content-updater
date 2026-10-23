@@ -110,6 +110,7 @@ def _blocks_explain(
     listed: dict[str, set[tuple[str, str]]],
     *,
     keyed: bool,
+    locked: frozenset[str] = frozenset(),
 ) -> bool:
     old_left = list(old_blocks)
     new_left = list(new_blocks)
@@ -124,11 +125,11 @@ def _blocks_explain(
         new_map = _stanza_entries(new_left)
         if old_map is None or new_map is None or set(old_map) != set(new_map):
             return False
-        return all(_pair_explained(name, old_map[key], new_map[key], listed) for key in old_map)
+        return all(_pair_explained(name, old_map[key], new_map[key], listed, locked) for key in old_map)
     pairs = _pair_blocks(old_left, new_left)
     if pairs is None:
         return False
-    return all(_pair_explained(name, old, new, listed) for old, new in pairs)
+    return all(_pair_explained(name, old, new, listed, locked) for old, new in pairs)
 
 
 def _name_explained(
@@ -137,10 +138,11 @@ def _name_explained(
     old_blocks: list[tuple[str, str]],
     new_blocks: list[tuple[str, str]],
     listed: dict[str, set[tuple[str, str]]],
+    locked: frozenset[str] = frozenset(),
 ) -> bool:
     if kind == "go.sum":
         return _go_sum_explained(name, old_blocks, new_blocks, listed)
-    return _blocks_explain(name, old_blocks, new_blocks, listed, keyed=kind == "yarn")
+    return _blocks_explain(name, old_blocks, new_blocks, listed, keyed=kind == "yarn", locked=locked)
 
 
 def _single_version(entry: object) -> str | None:
@@ -256,9 +258,12 @@ def _pair_explained(
     old: tuple[str, str],
     new: tuple[str, str],
     listed: dict[str, set[tuple[str, str]]],
+    locked: frozenset[str] = frozenset(),
 ) -> bool:
-    npm_range = _payload_kind(old[1]) == "spec" and _payload_kind(new[1]) == "spec"
-    return _reached_listed_version(name, old[0], new[0], listed, npm_range=npm_range) and _payload_ok([old], [new])
+    """A package.json spec pair may use a shared range prefix when `locked` witnesses the listed version."""
+    specs = _payload_kind(old[1]) == "spec" and _payload_kind(new[1]) == "spec"
+    witness = locked if specs else frozenset()
+    return _reached_listed_version(name, old[0], new[0], listed, locked=witness) and _payload_ok([old], [new])
 
 
 def _lock_covers_listed(kind: str, before: str, after: str, updates: list[dict], names: set[str]) -> bool:
@@ -343,7 +348,9 @@ def _changed_names(kind: str, before: str, after: str) -> set[str] | None:
     return changed
 
 
-def _multi_entry_names(kind: str, before: str, after: str, updates: list[dict]) -> set[str]:
+def _multi_entry_names(
+    kind: str, before: str, after: str, updates: list[dict], locked: dict[str, frozenset[str]] | None = None
+) -> set[str]:
     """Multi-entry names whose own blocks are not the listed change.
 
     Several Yarn descriptors for one package are normal. They are a gap
@@ -362,19 +369,24 @@ def _multi_entry_names(kind: str, before: str, after: str, updates: list[dict]) 
         new_blocks = _entry_blocks(new_entries.get(name))
         if len(old_blocks) <= 1 and len(new_blocks) <= 1:
             continue
-        if _name_explained(kind, name, old_blocks, new_blocks, listed):
+        if _name_explained(kind, name, old_blocks, new_blocks, listed, (locked or {}).get(name, frozenset())):
             continue
         found.add(name)
     return found
 
 
-def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) -> bool:
+def _entries_explain(
+    kind: str, before: str, after: str, updates: list[dict], locked: dict[str, frozenset[str]] | None = None
+) -> bool:
     """True when every changed entry moved to its listed version.
 
     A lock entry is explained when it moves to the listed version and the
     rest is unchanged aside from registry locators. A same-version entry,
     an unlisted package, a replace line, a yarn key that appears or
     disappears, or any other residue is not.
+
+    `locked` maps a package name to the versions a lockfile in HEAD
+    resolves it to; a shared `^` or `~` spec bump needs the listed version there.
 
     go.sum keeps one block per version. The listed bump matches when `to`
     is present and `from` was present before, including when `from` was removed.
@@ -396,6 +408,20 @@ def _entries_explain(kind: str, before: str, after: str, updates: list[dict]) ->
             _entry_blocks(old_entries.get(name)),
             _entry_blocks(new_entries.get(name)),
             listed,
+            (locked or {}).get(name, frozenset()),
         )
         for name in names
     )
+
+
+def _locked_versions(kind: str, text: str) -> dict[str, frozenset[str]]:
+    """Versions each package resolves to in an npm or Yarn lock. Manifest specs in the lock do not count."""
+    split = _split_entries(kind, text) if kind in {"json", "yarn"} else None
+    if split is None:
+        return {}
+    found: dict[str, frozenset[str]] = {}
+    for name, entry in split[0].items():
+        versions = {version for version, payload in _entry_blocks(entry) if _payload_kind(payload) != "spec"}
+        if versions:
+            found[name] = frozenset(versions)
+    return found

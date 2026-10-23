@@ -68,6 +68,9 @@ type File struct {
 	Aliases        []string `yaml:"aliases"`
 	CompanionFiles []string `yaml:"companion_files"`
 	AdoptionMarker string   `yaml:"adoption_marker"`
+	// PreviousAdoptionMarkers are older marker spellings that existing files
+	// may still carry and that count as owned, so a rename never abandons them.
+	PreviousAdoptionMarkers []string `yaml:"previous_adoption_markers"`
 	// RequiresPaths lists repo-relative paths that must exist in the cloned repo
 	// for this file to be applied as a default. It is ignored for explicit selections.
 	RequiresPaths []string `yaml:"requires_paths"`
@@ -193,6 +196,15 @@ func (c *Config) validateAdoptionMarkers() error {
 			return fmt.Errorf("adoption_marker %q is used by both %q and %q", marker, previous, file.Name)
 		}
 		seen[marker] = file.Name
+		for _, previous := range file.PreviousAdoptionMarkers {
+			previous = strings.TrimSpace(previous)
+			if previous == "" {
+				continue
+			}
+			if !adoptionMarkerPattern.MatchString(previous) {
+				return fmt.Errorf("previous_adoption_marker %q for %q must use only letters, digits and . _ : / -", previous, file.Name)
+			}
+		}
 	}
 	return nil
 }
