@@ -231,7 +231,8 @@ class NpmTest(unittest.TestCase):
             "package.json": _package(dependencies={"lodash": "^4.17.21"}),
             "package-lock.json": _npm_lock({"node_modules/lodash": "4.17.21"}, {"lodash": "^4.17.21"}),
         }
-        self.assertEqual(_plan(base, head), diff.Plan(primary=(Change("npm", ".", "lodash", "4.17.20", "4.17.21"),)))
+        primary = (Change("npm", ".", "lodash", "4.17.20", "4.17.21"),)
+        self.assertEqual(_plan(base, head), diff.Plan(primary=primary, hashed=("package-lock.json",)))
 
     def test_manifest_text_outside_the_dependency_entries_is_a_gap(self) -> None:
         base = {"package.json": _package(dependencies={"a": "1.0.0"}, scripts={"test": "jest"})}
@@ -342,7 +343,9 @@ class GoTest(unittest.TestCase):
         self.assertEqual(_plan({"go.sum": "a\n"}, {"go.sum": "b\n"}), diff.Plan(gaps=(("go.sum", "unresolved"),)))
         module = "github.com/spf13/cobra"
         plan = _plan({"go.sum": self._sum((module, "v1.8.0"))}, {"go.sum": self._sum((module, "v1.8.1"))})
-        self.assertEqual(plan, diff.Plan(unchecked=(Change("go", ".", module, "v1.8.0", "v1.8.1"),)))
+        self.assertEqual(
+            plan, diff.Plan(unchecked=(Change("go", ".", module, "v1.8.0", "v1.8.1"),), hashed=("go.sum",))
+        )
 
     def test_a_directive_or_replace_change_is_a_gap(self) -> None:
         base = {"go.mod": self._MOD.format("v1.8.0", "v0.20.0")}
@@ -379,6 +382,16 @@ class PythonTest(unittest.TestCase):
         base = {"requirements.txt": "requests==2.31.0 --hash=sha256:aaa\n"}
         head = {"requirements.txt": "requests==2.31.0 --hash=sha256:bbb\n"}
         self.assertEqual(_plan(base, head).gaps, (("requirements.txt", "unresolved"),))
+
+    def test_a_requirement_pinned_with_hashes_moves_its_hashes_with_its_version(self) -> None:
+        line = "requests==2.31.0 \\\n    --hash=sha256:aaa \\\n    --hash=sha256:bbb\n    # via app\n"
+        base = {"requirements.txt": line}
+        head = {"requirements.txt": "requests==2.32.0 \\\n    --hash=sha256:ccc\n    # via app\n"}
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, (Change("pip", ".", "requests", "==2.31.0", "==2.32.0"),))
+        self.assertEqual((plan.gaps, plan.hashed), ((), ("requirements.txt",)))
+        marked = head["requirements.txt"].replace(" \\\n    --hash", " ; os_name == 'nt' \\\n    --hash")
+        self.assertEqual(_plan(base, {"requirements.txt": marked}).gaps, (("requirements.txt", "unresolved"),))
 
     def test_a_poetry_lock_supplies_the_versions_of_the_names_the_pyproject_declares(self) -> None:
         """A Poetry 1.1 lock, with its files in `[metadata.files]`, moves the same way."""
@@ -421,7 +434,8 @@ class PythonTest(unittest.TestCase):
         base = {**pipfile, "Pipfile.lock": pipfile_lock_text({"requests": "2.31.0"}, meta_hash="a")}
         head = {**pipfile, "Pipfile.lock": pipfile_lock_text({"requests": "2.32.0"}, meta_hash="b")}
         self.assertEqual(
-            _plan(base, head), diff.Plan(primary=(Change("pip", ".", "requests", "==2.31.0", "==2.32.0"),))
+            _plan(base, head),
+            diff.Plan(primary=(Change("pip", ".", "requests", "==2.31.0", "==2.32.0"),), hashed=("Pipfile.lock",)),
         )
 
 

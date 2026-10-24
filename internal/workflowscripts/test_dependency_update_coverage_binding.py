@@ -199,12 +199,32 @@ class PypiBindingTest(_Diff):
         report, summary = self._run({"requirements.txt": ("sigstore==3.5.0\n", "sigstore==3.6.1\n")})
         _inconclusive(self, report, summary, "no_lock_hash")
 
+    def _requirements(self, sha256: str) -> dict[str, tuple[str, str]]:
+        pin = "sigstore=={0} \\\n    --hash=sha256:{1}\n    # via app\n"
+        return {"requirements/base.txt": (pin.format("3.5.0", "0" * 64), pin.format("3.6.1", sha256))}
+
+    def test_a_requirements_hash_with_provenance_for_the_scan_is_benign(self) -> None:
+        report, _summary = self._run(self._requirements(_SDIST_SHA256))
+        self.assertEqual(report["binding"], {"kind": "provenance", "reason": ""})
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
+        self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+
+    def test_a_requirements_hash_that_is_not_the_registry_file_is_inconclusive(self) -> None:
+        report, summary = self._run(self._requirements("1" * 64))
+        _inconclusive(self, report, summary, "hash_mismatch")
+
+    def test_a_requirements_pin_beside_a_hashed_one_without_a_hash_is_inconclusive(self) -> None:
+        files = self._requirements(_SDIST_SHA256)
+        files["requirements/dev.txt"] = ("sigstore==3.5.0\n", "sigstore==3.6.1\n")
+        report, summary = self._run(files)
+        _inconclusive(self, report, summary, "no_lock_hash")
+
 
 class PooledBindingTest(_Diff):
     def test_each_covered_scan_gets_its_own_binding_once_every_scan_is_done(self) -> None:
         bound: list[str] = []
 
-        def bind(_change: object, target: coverage.Target, record: dict) -> binding.Binding:
+        def bind(_change: object, target: coverage.Target, record: dict, _hashed: tuple) -> binding.Binding:
             self.assertEqual(len(self.scanned), 3, "a binding ran before every scan was done")
             bound.append(target.package)
             return binding.Binding("unbound", f"for-{target.package}")

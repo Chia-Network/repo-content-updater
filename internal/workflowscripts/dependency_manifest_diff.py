@@ -19,6 +19,9 @@ version move ends up in one of:
 - unparsed_locks: a lockfile with no grammar beside a primary change. With no
   primary change beside it, it is a gap.
 
+hashed lists each changed file read whose row records artifact hashes, such as
+a requirements file, for the binding to read the hashes beside a change from.
+
 A name with several entries compares as a set of versions. old and new are the
 versions removed and added, joined with ", ", so a name that moved more than
 one copy is never an exact version.
@@ -51,6 +54,7 @@ class Plan(NamedTuple):
     unchecked: tuple[Change, ...] = ()
     gaps: tuple[tuple[str, str], ...] = ()
     unparsed_locks: tuple[str, ...] = ()
+    hashed: tuple[str, ...] = ()  # each changed path read whose row records artifact hashes (ecosystems.locked)
 
 
 # Each (change, whether it is the top copy) one file moved.
@@ -72,6 +76,10 @@ class _File(NamedTuple):
     moves: tuple[tuple[Change, bool], ...] = ()  # (change, whether it is primary)
 
 
+def _fixed(fixed: Callable[[str], str], texts: dict[str, set[str]]) -> set[str]:
+    return {fixed(text) for each in texts.values() for text in each}
+
+
 def _moves(row: ecosystems.FileKind, directory: str, before: list[Entry], after: list[Entry]) -> Moves | None:
     """Each (name, top) whose set of versions differs, with whether it is the top copy.
 
@@ -85,7 +93,7 @@ def _moves(row: ecosystems.FileKind, directory: str, before: list[Entry], after:
     for (name, top), (old, new) in sorted(sides.items()):
         if any(old[version] != new[version] for version in old.keys() & new.keys()):
             return None
-        if not row.records and old and new and set().union(*old.values()) != set().union(*new.values()):
+        if row.fixed and old and new and _fixed(row.fixed, old) != _fixed(row.fixed, new):
             return None
         if old.keys() != new.keys():
             removed, added = ", ".join(sorted(old.keys() - new.keys())), ", ".join(sorted(new.keys() - old.keys()))
@@ -189,4 +197,6 @@ def plan(changed: list[tuple[str, str, str]], read: Read, base: str) -> Plan:
     files = [file for old_path, path, status in changed for file in _read(old_path, path, status, read, base)]
     changes = [move for file in files if file.kind == _VERSIONS for move in file.moves]
     parts = [_resolve(file, changes) for file in files]
+    hashed = [file.path for file in files if file.kind != _GAP and ecosystems.file_kind(file.path).hashes]
+    parts.append(Plan(hashed=tuple(hashed)))
     return Plan(*(tuple(dict.fromkeys(item for items in column for item in items)) for column in zip(*parts)))

@@ -42,6 +42,12 @@ class FileKindTest(unittest.TestCase):
                 self.assertIsNotNone(row)
                 self.assertEqual((row.ecosystem.name, row.role, row.parse is not None), (ecosystem, role, parsed))
 
+    def test_a_requirements_file_is_a_manifest_that_records_hashes_and_other_python_manifests_are_not(self) -> None:
+        self.assertIsNotNone(ecosystems.file_kind("requirements/base.txt").hashes)
+        for path in ("pyproject.toml", "setup.py", "setup.cfg", "Pipfile"):
+            with self.subTest(path=path):
+                self.assertIsNone(ecosystems.file_kind(path).hashes)
+
     def test_other_paths_are_not_dependency_files(self) -> None:
         for path in ("README.md", "notes.txt", "workflows/ci.yml", "docs/requirements.md", "src/index.js"):
             with self.subTest(path=path):
@@ -193,6 +199,26 @@ class BindTest(unittest.TestCase):
         self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.31.0", read), ())
         files = {"poetry.lock": poetry_lock_text({"requests": "2.32.0"}, legacy=True)}
         self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.32.0", read), (poetry,))
+
+    def test_locked_reads_the_hashes_of_a_changed_requirements_file_beside_the_change(self) -> None:
+        sha_a, sha_b = (f"sha256:{digit * 64}" for digit in "ab")
+        files = {
+            "app/requirements.txt": f"requests==2.32.0 \\\n    --hash={sha_b} \\\n    --hash={sha_a}\nidna==3.7\n",
+            "app/poetry.lock": poetry_lock_text({"requests": "2.32.0"}),
+            "requirements.txt": f"requests==2.32.0 --hash={sha_a}\n",
+        }
+
+        def read(path: str) -> str:
+            return files.get(path, "")
+
+        changed = ("app/requirements.txt", "requirements.txt", "app/README.md")
+        found = ecosystems.locked("pip", "app", "requests", "2.32.0", read, changed)
+        self.assertEqual(len(found), 2)
+        self.assertIn(f"{sha_a} {sha_b}", found)
+        self.assertEqual(ecosystems.locked("pip", "app", "idna", "3.7", read, changed), ("",))
+        self.assertEqual(ecosystems.locked("pip", "app", "requests", "2.31.0", read, changed), ())
+        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.32.0", read), ())
+        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.32.0", read, changed), (sha_a,))
 
     def test_every_lock_and_checksum_grammar_reads_its_own_hashes(self) -> None:
         """locked() has no per-role case: each row says which entries are installed copies and what they record."""

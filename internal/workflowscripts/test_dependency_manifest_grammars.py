@@ -21,6 +21,9 @@ from dependency_manifest_python import (
     poetry_lock,
     poetry_lock_hashes,
     requirements,
+    requirements_hashes,
+    requirements_line,
+    requirements_txt,
 )
 
 
@@ -301,6 +304,42 @@ class PythonGrammarTest(unittest.TestCase):
             'rich = { version = "13.7.0", extras = ["jupyter"] }\n'
         )
         self.assertEqual(_entries(requirements(text)), {("httpx", "==0.27.0", True), ("rich", "13.7.0", True)})
+
+
+_A, _B = (f"sha256:{digit * 64}" for digit in "ab")
+
+
+class RequirementsTxtGrammarTest(unittest.TestCase):
+    def test_a_file_without_continuations_reads_as_the_line_grammar(self) -> None:
+        text = "Django[argon2]==4.2.7 ; python_version >= '3.10'\nurllib3>=2,<3\n# comment \\\n-r base.txt\n"
+        self.assertEqual(requirements_txt(text), requirements(text))
+
+    def test_continued_lines_join_into_one_entry_with_every_hash(self) -> None:
+        text = f"# via pip-compile\nrequests==2.32.0 \\\n    --hash={_A} \\\n    --hash={_B}\n    # via app\n"
+        parsed = requirements_txt(text)
+        self.assertEqual(_entries(parsed), {("requests", "==2.32.0", True)})
+        self.assertEqual(parsed[1], "# via pip-compile\n    # via app\n")
+        (entry,) = parsed[0]
+        self.assertEqual(requirements_hashes(entry[3]), f"{_A} {_B}")
+        self.assertEqual(requirements_line(entry[3]), "requests\0")
+        self.assertEqual(_entries(requirements_txt("requests==2.32.0 \\\n")), {("requests", "==2.32.0", True)})
+
+    def test_extras_markers_comments_and_both_option_spellings_keep_their_hashes(self) -> None:
+        text = f"Django[argon2]==4.2.7 ; python_version >= '3.10' \\\n  --hash {_B} --hash={_A} --hash={_A}  # pinned\n"
+        (entry,) = requirements_txt(text)[0]
+        self.assertEqual(entry[:3], ("django", "==4.2.7", True))
+        self.assertEqual(requirements_hashes(entry[3]), f"{_A} {_B}")
+        self.assertEqual(requirements_line(entry[3]), "Django[argon2]\0 ; python_version >= '3.10'  # pinned")
+
+    def test_a_hash_in_a_comment_is_not_the_entry_s(self) -> None:
+        (entry,) = requirements_txt(f"requests==2.32.0  # --hash={_A}\n")[0]
+        self.assertEqual(requirements_hashes(entry[3]), "")
+        self.assertEqual(requirements_line(entry[3]), entry[3])
+
+    def test_a_comment_line_ends_its_continuation_as_pip_ends_it(self) -> None:
+        parsed = requirements_txt("# note \\\nrequests==2.32.0\n")
+        self.assertEqual(_entries(parsed), {("requests", "==2.32.0", True)})
+        self.assertEqual(parsed[1], "# note \\\n")
 
 
 class PythonLockGrammarTest(unittest.TestCase):
