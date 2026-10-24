@@ -129,6 +129,22 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         )
         self.assertIn("needs.dependency-review-scan.outputs.report_sha256", verdict)
 
+    def test_agent_inputs_are_prepared_before_anything_reads_them(self) -> None:
+        workflow = _WORKFLOW.read_text(encoding="utf-8")
+        agent = workflow.split("\n  dependency-review-agent:\n", 1)[1].split("\n  dependency-review:\n", 1)[0]
+        steps = re.findall(r"^      - name: (.+)$", agent, re.MULTILINE)
+        self.assertEqual(steps[:2], ["Checkout repository", "Clear review paths from the checkout"])
+        clear = agent.split("- name: Clear review paths from the checkout\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("rm -rf -- .dcr-strip .upstream-dependency dcr-scan-input", clear)
+        prepare = steps.index("Prepare agent inputs")
+        self.assertEqual(steps[prepare - 1], "Download scan prompts")
+        self.assertLess(prepare, steps.index("Fetch upstream commits and version tags"))
+        self.assertLess(prepare, steps.index("Run Cursor agent"))
+        step = agent.split("- name: Prepare agent inputs\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertNotIn("if:", step, "the scan input is checked even when there is no release to review")
+        self.assertIn("bash .dcr-strip/.github/scripts/upstream_release_checkout.sh", step)
+        self.assertEqual(agent.count("upstream_release_checkout.sh"), 2)
+
     def test_prompts_name_fetched_commits_and_tags(self) -> None:
         from_sha = "a" * 40
         to_sha = "b" * 40

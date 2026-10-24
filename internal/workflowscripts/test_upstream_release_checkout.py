@@ -1,4 +1,4 @@
-"""upstream_release_checkout.sh detaches the release, then strips instruction files."""
+"""upstream_release_checkout.sh refuses linked review paths, detaches the release, unlinks and strips it."""
 
 from __future__ import annotations
 
@@ -186,7 +186,7 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
                 self.assertFalse(repo.exists())
                 self.assertFalse((work / ".malware-scan").exists())
 
-    def test_symlinks_are_unlinked_without_touching_targets(self) -> None:
+    def test_every_symlink_is_unlinked_without_touching_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             outside = root / "outside"
@@ -200,6 +200,8 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
             (repo / "AGENTS.md").symlink_to(outside / "AGENTS.md")
             (repo / ".codex").symlink_to(outside, target_is_directory=True)
             (repo / "ext").symlink_to(outside, target_is_directory=True)
+            (repo / "pkg" / "alias.js").symlink_to("index.js")
+            (repo / "pkg" / "up").symlink_to("../..", target_is_directory=True)
             _commit(repo, "release")
             release = _git(repo, "rev-parse", "HEAD")
             _write(repo, "pkg/index.js", "main code\n")
@@ -209,7 +211,10 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
             self.assertFalse((repo / "AGENTS.md").exists())
             self.assertFalse((repo / ".codex").exists())
             self.assertFalse((repo / "pkg" / "AGENTS.md").exists())
-            self.assertTrue((repo / "ext").is_symlink())
+            for rel in ("ext", "pkg/alias.js", "pkg/up"):
+                self.assertFalse((repo / rel).is_symlink(), rel)
+                self.assertFalse((repo / rel).exists(), rel)
+            self.assertEqual((repo / "pkg" / "index.js").read_text(encoding="utf-8"), "release code\n")
             self.assertEqual((outside / "AGENTS.md").read_text(encoding="utf-8"), "outside agents\n")
             self.assertEqual((outside / "keep.txt").read_text(encoding="utf-8"), "keep\n")
 
@@ -228,47 +233,63 @@ class UpstreamReleaseCheckoutTest(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), data)
             self.assertEqual(_git(repo, "rev-parse", "HEAD"), release)
 
-    def test_containment_failure_exits_nonzero(self) -> None:
+    def _outside(self, root: Path) -> Path:
+        outside = root / "outside"
+        _write(outside, "AGENTS.md", "outside agents\n")
+        _write(outside, "cursor_prompt_malware.txt", "outside prompt\n")
+        return outside
+
+    def _assert_refused(self, proc: subprocess.CompletedProcess[str], outside: Path, why: str) -> None:
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn(why, proc.stderr)
+        self.assertEqual(sorted(path.name for path in outside.iterdir()), ["AGENTS.md", "cursor_prompt_malware.txt"])
+        self.assertEqual((outside / "AGENTS.md").read_text(encoding="utf-8"), "outside agents\n")
+
+    def test_a_linked_review_path_is_refused_before_anything_is_read(self) -> None:
+        for name in (".upstream-dependency", "dcr-scan-input", ".dcr-strip"):
+            for resolved_to in ("release", ""):
+                with self.subTest(name=name, resolved_to=resolved_to), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    outside = self._outside(root)
+                    work, repo, release = self._tree(root)
+                    if name == ".upstream-dependency":
+                        shutil.rmtree(repo)
+                    (work / name).symlink_to(outside, target_is_directory=True)
+                    proc = self._script(work, resolved_to=release if resolved_to else "")
+                    self._assert_refused(proc, outside, f"Refusing {name}: it is a symbolic link.")
+                    self.assertTrue((work / name).is_symlink())
+
+    def test_scan_input_must_hold_only_regular_files(self) -> None:
+        for planted in ("prompt link", "dir link", "subdirectory", "file"):
+            with self.subTest(planted=planted), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                outside = self._outside(root)
+                work, repo, release = self._tree(root)
+                scan_input = work / "dcr-scan-input"
+                if planted == "file":
+                    scan_input.write_text("not a directory\n", encoding="utf-8")
+                else:
+                    _write(scan_input, "malware_scan_report.json", "{}\n")
+                prompt = scan_input / "cursor_prompt_malware.txt"
+                if planted == "prompt link":
+                    prompt.symlink_to(outside / "cursor_prompt_malware.txt")
+                elif planted == "dir link":
+                    (scan_input / "nested").symlink_to(outside, target_is_directory=True)
+                elif planted == "subdirectory":
+                    _write(scan_input / "nested", "cursor_prompt_malware.txt", "nested\n")
+                proc = self._script(work, resolved_to=release)
+                self._assert_refused(proc, outside, "Refusing dcr-scan-input")
+                self.assertEqual((repo / "AGENTS.md").read_text(encoding="utf-8"), "main agents\n")
+
+    def test_regular_scan_input_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            work, repo, release = self._tree(root)
-            realpath = shutil.which("realpath")
-            self.assertIsNotNone(realpath)
-            bindir = root / "bin"
-            bindir.mkdir()
-            stub = bindir / "realpath"
-            stub.write_text(
-                "#!/bin/sh\n"
-                "path=\n"
-                'for arg in "$@"; do\n'
-                '  case "$arg" in\n'
-                "  -*) ;;\n"
-                "  *) path=$arg ;;\n"
-                "  esac\n"
-                "done\n"
-                'case "$path" in\n'
-                ".upstream-dependency)\n"
-                f'  exec {realpath} "$@"\n'
-                "  ;;\n"
-                ".upstream-dependency/*)\n"
-                "  echo /outside/escaped\n"
-                "  ;;\n"
-                "*)\n"
-                f'  exec {realpath} "$@"\n'
-                "  ;;\n"
-                "esac\n",
-                encoding="utf-8",
-            )
-            stub.chmod(0o755)
-            proc = self._script(
-                work,
-                extra_env={"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"},
-                resolved_to=release,
-            )
-            self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("realpath leaves .upstream-dependency", proc.stderr)
-            self.assertEqual((repo / "AGENTS.md").read_text(encoding="utf-8"), "release agents\n")
+            work, repo, release = self._tree(Path(tmp))
+            for name in ("cursor_prompt_malware.txt", "cursor_prompt_compatibility.txt", "malware_scan_report.json"):
+                _write(work / "dcr-scan-input", name, "input\n")
+            proc = self._script(work, resolved_to=release)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(_git(repo, "rev-parse", "HEAD"), release)
+            self.assertEqual((work / "dcr-scan-input" / "cursor_prompt_malware.txt").read_text(), "input\n")
 
     def test_annotated_tag_object_and_branch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

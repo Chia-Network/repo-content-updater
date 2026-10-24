@@ -232,6 +232,11 @@ jobs:
           ref: ${{`{{ needs.dependency-review-scan.outputs.head_sha }}`}}
           persist-credentials: false
 
+      # Only the trusted steps below create these paths, so none of them writes through a link.
+      - name: Clear review paths from the checkout
+        shell: bash
+        run: rm -rf -- .dcr-strip .upstream-dependency dcr-scan-input
+
       - name: Checkout trusted instruction strip
         uses: actions/checkout@v7
         with:
@@ -257,6 +262,15 @@ jobs:
         with:
           name: dcr-scan-${{`{{ github.run_id }}`}}
           path: dcr-scan-input
+
+      # Before anything reads them: refuse linked review paths and a non-regular
+      # scan input, delete every symlink in the release, and drop agent instructions.
+      - name: Prepare agent inputs
+        shell: bash
+        env:
+          RESOLVED_TO: ${{`{{ needs.dependency-review-scan.outputs.resolved_to }}`}}
+        run: |
+          bash .dcr-strip/.github/scripts/upstream_release_checkout.sh
 
       - name: Fetch upstream commits and version tags
         if: ${{`{{ needs.dependency-review-scan.outputs.resolved_to != '' }}`}}
@@ -371,14 +385,6 @@ jobs:
           token="$(slot_token)"
           note_tag "from tag" "$verified_from" "$token"
           note_tag "to tag" "$verified_to" "$token"
-
-      - name: Drop agent instructions
-        if: ${{`{{ needs.dependency-review-scan.outputs.resolved_to != '' }}`}}
-        shell: bash
-        env:
-          RESOLVED_TO: ${{`{{ needs.dependency-review-scan.outputs.resolved_to }}`}}
-        run: |
-          bash .dcr-strip/.github/scripts/upstream_release_checkout.sh
 
       - name: Install Cursor CLI
         shell: bash
