@@ -393,6 +393,7 @@ def any_read(report: dict) -> bool:
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
 _REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
 _REGISTRY_FIELD_RE = re.compile(r"""^    (type|url|replaces-base):\s*(["']?)([^"'\s#]+)\2\s*(#.*)?$""")
+_SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
 
 
@@ -444,10 +445,18 @@ def _configured_indexes() -> Indexes:
 _MAX_REQUIREMENTS_FILES = 64
 
 
+def _repo_include(base: str, item: str) -> str | None:
+    """`item` joined to `base` as a repository path, or None when it is not a plain relative path inside the tree."""
+    if not item or item.startswith(("/", "~")) or "\\" in item or _SCHEME_RE.match(item):
+        return None
+    joined = posixpath.normpath(posixpath.join(base, item))
+    return joined if joined not in {"", ".", ".."} and not joined.startswith("../") else None
+
+
 def _requirements_indexes(directory: str, configured: Indexes) -> Indexes:
     """`configured` with the indexes of the requirements files in `directory` at HEAD and each file they include.
 
-    A file listing that fails, an include outside the repository, or another package source trusts none.
+    A file listing that fails, an include that is not a plain repository path, or another package source trusts none.
     """
     files = _git_files(directory)
     if files is None:
@@ -463,14 +472,13 @@ def _requirements_indexes(directory: str, configured: Indexes) -> Indexes:
             continue
         seen.add(path)
         options = _python.requirements_index_options(_git_text("HEAD", path))
-        included = [posixpath.normpath(posixpath.join(posixpath.dirname(path), item)) for item in options.includes]
-        outside = any("://" in item or item.startswith(("/", "../")) or item == ".." for item in included)
-        if options.unread or outside or len(seen) > _MAX_REQUIREMENTS_FILES:
+        included = [_repo_include(posixpath.dirname(path), item) for item in options.includes]
+        if options.unread or None in included or len(seen) > _MAX_REQUIREMENTS_FILES:
             return Indexes(other=True)
         urls += options.urls
         replaces = replaces or options.replaces_pypi
         extra = extra or options.extra_index_url
-        pending += included
+        pending += [item for item in included if item is not None]
     return _indexes(urls, False, replaces and not extra, configured)
 
 

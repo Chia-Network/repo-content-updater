@@ -753,6 +753,25 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             )
             self.assertEqual(coverage._requirements_indexes("plain", coverage.Indexes(other=True)).other, True)
 
+    def test_an_include_that_is_not_a_repository_path_is_unread(self) -> None:
+        texts = {
+            "url": "-r https://example.com/r.txt\n",
+            "constraint": "-c https://example.com/c.txt\n",
+            "network": "-r //example.com/r.txt\n",
+            "absolute": "-r /tmp/r.txt\n",
+            "home": "-r ~/r.txt\n",
+            "backslash": "-r '..\\r.txt'\n",
+            "escape": "-r ../../r.txt\n",
+            "empty": '-r ""\n',
+        }
+        with (
+            patch.object(coverage, "_git_files", lambda directory: [f"{directory}/requirements.txt"]),
+            patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path.split("/")[0], "")),
+        ):
+            for directory in texts:
+                with self.subTest(directory):
+                    self.assertTrue(coverage._requirements_indexes(directory, coverage.Indexes()).other)
+
     def test_a_requirements_extra_index_means_the_index_does_not_replace_pypi(self) -> None:
         chia = "https://pypi.chia.net/simple/"
         cases = {
