@@ -3,8 +3,9 @@
 The Dependabot config can select among the organization's trusted indexes, and a
 requirements file can name indexes for its directory and the files it includes.
 A directory is read when every source it names is a trusted index or PyPI's own
-simple index. Any other source or an unreadable config leaves the directory
-unread, so no change there is trusted.
+simple index. Any other source, an unreadable config, or a requirements file or
+include that is not a blob leaves the directory unread, so no change there is
+trusted.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import dependency_cursor_review_upstream as _upstream
 import dependency_manifest_python as _python
 
 _Read = Callable[[str, str], str]
-_ListFiles = Callable[[str], list[str] | None]
+_ListFiles = Callable[[str], list[tuple[str, str]] | None]
 
 _REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
 _REGISTRY_FIELD_RE = re.compile(r"""^    (type|url|replaces-base):\s*(["']?)([^"'\s#]+)\2\s*(#.*)?$""")
@@ -121,16 +122,32 @@ def _repo_include(base: str, item: str) -> str | None:
     return joined if joined not in {"", ".", ".."} and not joined.startswith("../") else None
 
 
+def _is_blob(mode: str) -> bool:
+    return mode.startswith("100")
+
+
+def _included_mode(list_files: _ListFiles, path: str) -> str | None:
+    """The mode of `path` from the listing of its directory, or None when it is not listed."""
+    entries = list_files(posixpath.dirname(path))
+    return None if entries is None else next((mode for name, mode in entries if name == path), None)
+
+
 def for_directory(directory: str, configured: Indexes, read: _Read, list_files: _ListFiles) -> Indexes:
     """`configured` with the indexes of the requirements files in `directory` at HEAD and each file they include.
 
-    A file listing that fails, an include that is not a plain repository path, or another package source trusts none.
-    Any --extra-index-url keeps PyPI as a source.
+    A file listing that fails, a requirements file or include that is not a blob, an include that is not a plain
+    repository path, or another package source trusts none. Any --extra-index-url keeps PyPI as a source.
     """
     files = list_files(directory)
     if files is None:
         return Indexes(other=True)
-    pending = [path for path in files if (row := _ecosystems.file_kind(path)) and row.parse is _python.requirements_txt]
+    pending: list[str] = []
+    for path, mode in files:
+        row = _ecosystems.file_kind(path)
+        if row and row.parse is _python.requirements_txt:
+            if not _is_blob(mode):
+                return Indexes(other=True)
+            pending.append(path)
     seen: set[str] = set()
     urls: list[str] = []
     replaces = False
@@ -141,11 +158,15 @@ def for_directory(directory: str, configured: Indexes, read: _Read, list_files: 
             continue
         seen.add(path)
         options = _python.requirements_index_options(read("HEAD", path))
-        included = [_repo_include(posixpath.dirname(path), item) for item in options.includes]
-        if options.unread or None in included or len(seen) > _MAX_REQUIREMENTS_FILES:
+        if options.unread or len(seen) > _MAX_REQUIREMENTS_FILES:
             return Indexes(other=True)
+        for item in options.includes:
+            included = _repo_include(posixpath.dirname(path), item)
+            mode = None if included is None else _included_mode(list_files, included)
+            if included is None or mode is None or not _is_blob(mode):
+                return Indexes(other=True)
+            pending.append(included)
         urls += options.urls
         replaces = replaces or options.replaces_pypi
         extra = extra or options.extra_index_url
-        pending += [item for item in included if item is not None]
     return _indexes(urls, False, replaces, configured, extra=extra)

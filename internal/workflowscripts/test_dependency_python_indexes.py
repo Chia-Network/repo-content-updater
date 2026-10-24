@@ -14,16 +14,16 @@ def _read(texts: dict[str, str]):
     return lambda _rev, path: texts.get(path, "")
 
 
-def _listing(*paths: str):
-    tree: dict[str, list[str]] = {}
+def _listing(*paths: str, mode: str = "100644"):
+    tree: dict[str, list[tuple[str, str]]] = {}
     for path in paths:
         directory = path.rsplit("/", 1)[0] if "/" in path else ""
-        tree.setdefault(directory, []).append(path)
+        tree.setdefault(directory, []).append((path, mode))
     return tree.get
 
 
-def _requirements():
-    return lambda directory: [f"{directory}/requirements.txt"]
+def _requirements(mode: str = "100644"):
+    return lambda directory: [(f"{directory}/requirements.txt", mode)]
 
 
 class PythonIndexesTest(unittest.TestCase):
@@ -192,6 +192,21 @@ class PythonIndexesTest(unittest.TestCase):
             indexes.Indexes(frozenset({_CHIA})),
         )
 
+    def test_a_linked_requirements_file_is_unread(self) -> None:
+        for mode in ("120000", "160000", "040000"):
+            with self.subTest(mode):
+                self.assertTrue(indexes.for_directory("app", indexes.Indexes(), _read({}), _requirements(mode)).other)
+
+    def test_a_linked_include_is_unread(self) -> None:
+        texts = {"app/requirements.txt": "-r base/base.txt\n"}
+        for mode in ("120000", "160000", "040000"):
+            with self.subTest(mode):
+                tree = {
+                    "app": [("app/requirements.txt", "100644")],
+                    "app/base": [("app/base/base.txt", mode)],
+                }
+                self.assertTrue(indexes.for_directory("app", indexes.Indexes(), _read(texts), tree.get).other)
+
     def test_only_listed_indexes_are_trusted_and_anything_else_trusts_none(
         self,
     ) -> None:
@@ -224,7 +239,10 @@ class PythonIndexesTest(unittest.TestCase):
                 True,
             ),
             "beside unknown": (
-                config(("python-index", _CHIA), ("python-index", "https://example.com/simple/")),
+                config(
+                    ("python-index", _CHIA),
+                    ("python-index", "https://example.com/simple/"),
+                ),
                 set(),
                 True,
             ),
@@ -236,7 +254,10 @@ class PythonIndexesTest(unittest.TestCase):
         }
         for label, (text, trusted, other) in cases.items():
             with self.subTest(label):
-                self.assertEqual(indexes._dependabot_indexes(text), indexes.Indexes(frozenset(trusted), other))
+                self.assertEqual(
+                    indexes._dependabot_indexes(text),
+                    indexes.Indexes(frozenset(trusted), other),
+                )
 
 
 if __name__ == "__main__":

@@ -392,16 +392,24 @@ def any_read(report: dict) -> bool:
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
 
 
-def _git_files(directory: str) -> list[str] | None:
-    """The paths of the files directly in `directory` at HEAD, or None when git cannot list them."""
+def _git_files(directory: str) -> list[tuple[str, str]] | None:
+    """The (path, mode) of each entry directly in `directory` at HEAD, or None when git cannot list them."""
     prefix = "" if directory in {"", "."} else f"{directory}/"
     proc = subprocess.run(
-        ["git", "ls-tree", "-z", "--name-only", "HEAD", "--", prefix or "."],
+        ["git", "ls-tree", "-z", "HEAD", "--", prefix or "."],
         check=False,
         capture_output=True,
         text=True,
     )
-    return [path for path in proc.stdout.split("\0") if path] if proc.returncode == 0 else None
+    if proc.returncode != 0:
+        return None
+    entries: list[tuple[str, str]] = []
+    for record in proc.stdout.split("\0"):
+        if not record:
+            continue
+        meta, _separator, path = record.partition("\t")
+        entries.append((path, meta.split(" ", 1)[0]))
+    return entries
 
 
 def _git_text(rev: str, path: str) -> str:

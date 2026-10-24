@@ -718,8 +718,10 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             _commit(repo, "app/requirements.txt", "six==1.0\n", "app")
             _commit(repo, "app/deep/requirements.txt", "six==1.0\n", "deep")
             with contextlib.chdir(repo):
-                self.assertEqual(coverage._git_files("."), ["app", "requirements.txt"])
-                self.assertEqual(coverage._git_files("app"), ["app/deep", "app/requirements.txt"])
+                self.assertEqual(coverage._git_files("."), [("app", "040000"), ("requirements.txt", "100644")])
+                self.assertEqual(
+                    coverage._git_files("app"), [("app/deep", "040000"), ("app/requirements.txt", "100644")]
+                )
             with contextlib.chdir(tmp):
                 self.assertIsNone(coverage._git_files("."))
 
@@ -737,7 +739,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 plan,
                 repo=repo,
                 scan=lambda target, *_args: _clean(target.package, target.repo.slug),
-                files=lambda directory: [f"{directory}/requirements.txt"],
+                files=lambda directory: [(f"{directory}/requirements.txt", "100644")],
             )
         self.assertEqual(looked_up, ["six"])
         self.assertIs(report["scan_conclusive"], False)
