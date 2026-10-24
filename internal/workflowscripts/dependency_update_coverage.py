@@ -306,7 +306,7 @@ def _bound(record: dict) -> bool:
 
 
 def _verified(record: dict) -> bool:
-    return record.get("repo_source") in _upstream.VERIFIED
+    return _upstream.verified(record.get("repo_source"))
 
 
 def _weakest(records: list[dict], key: str, holds: Callable[[dict], bool]) -> object:

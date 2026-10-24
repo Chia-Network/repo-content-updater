@@ -44,6 +44,11 @@ PUBLISHER = "publisher"  # registry or go-get metadata the publisher writes
 VERIFIED = frozenset({IDENTITY, ATTESTED, ALLOWLISTED})
 
 
+def verified(source: object) -> bool:
+    """A repo_source names a verified repository; a list or object from the JSON never does."""
+    return isinstance(source, str) and source in VERIFIED
+
+
 class Repo(NamedTuple):
     slug: str = ""  # owner/repo, "" when none was found
     source: str = ""  # IDENTITY, ATTESTED, ALLOWLISTED or PUBLISHER; "" with no slug
