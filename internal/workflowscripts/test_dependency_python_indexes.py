@@ -213,6 +213,18 @@ class PythonIndexesTest(unittest.TestCase):
         found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree, _search(texts))
         self.assertEqual(found.for_path("requirements.txt"), indexes.Indexes(frozenset({_CHIA}), index=_CHIA))
 
+    def test_an_unresolved_include_in_a_candidate_leaves_the_base_unread(self) -> None:
+        texts = {
+            "requirements.txt": f"-i {_CHIA}\nchiapos==2.0.4\n",
+            "dev.txt": "-r link/requirements.txt\n",
+        }
+        tree = {
+            ".": [("requirements.txt", "100644"), ("dev.txt", "100644")],
+            "link": [("link/requirements.txt", "120000")],
+        }
+        found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree.get, _search(texts))
+        self.assertEqual(found.for_path("requirements.txt"), indexes.Indexes(other=True))
+
     def test_an_unread_requirements_file_leaves_every_replacement_unread(self) -> None:
         texts = {
             "app/requirements.txt": f"-i {_CHIA}\nchiapos==2.0.4\n",

@@ -140,6 +140,11 @@ def _include_text(base: str, item: str) -> str | None:
     return posixpath.normpath(posixpath.join(base, item))
 
 
+def _inside(path: str | None) -> bool:
+    """Whether `path` is a repository path, not the root and not outside the tree."""
+    return path is not None and path not in {"", ".", ".."} and not path.startswith("../")
+
+
 def _repo_include(base: str, item: str) -> str | None:
     """`item` joined to `base` as a repository path, or None when it is not a plain relative path inside the tree.
 
@@ -155,7 +160,7 @@ def _repo_include(base: str, item: str) -> str | None:
                 return None
         else:
             leading_parents = False
-    return joined if joined not in {"", ".", ".."} and not joined.startswith("../") else None
+    return joined if _inside(joined) else None
 
 
 def _is_blob(mode: str) -> bool:
@@ -257,7 +262,7 @@ class _Requirements:
                 pending.append(candidate)
             return
         if any(
-            target is None and _include_text(posixpath.dirname(candidate), option.value) == path
+            target is None and _inside(_include_text(posixpath.dirname(candidate), option.value))
             for option, target in zip(includes, included)
         ):
             self._broken.add(path)
