@@ -168,14 +168,14 @@ def fetch_archive(url: str, limit: int, follow: Mapping[str, str] | None = None)
     return _fetch(url, limit, follow) or None
 
 
-def _sha256_download(url: str, host: str, limit: int = _MAX_INDEX_FILE) -> str | None:
-    """The sha256 of an https GET body from `host`, or None when it is not a 200 or exceeds `limit` bytes.
+def _sha256_download(url: str, hosts: frozenset[str], limit: int = _MAX_INDEX_FILE) -> str | None:
+    """The sha256 of an https GET body from a host in `hosts`, or None when it is not a 200 or exceeds `limit` bytes.
 
-    The body is read in chunks. A redirect is followed only to `host`, and at most _MAX_REDIRECTS times.
+    The body is read in chunks. A redirect is followed only to a host in `hosts`, and at most _MAX_REDIRECTS times.
     """
     for _hop in range(_MAX_REDIRECTS + 1):
         parts = urllib.parse.urlsplit(url)
-        if parts.scheme != "https" or parts.hostname != host:
+        if parts.scheme != "https" or parts.hostname not in hosts:
             return None
         opened = _get_response(url, "application/octet-stream")
         if opened is None:
@@ -293,6 +293,11 @@ def go(module: str, _version: str) -> Repo:
 # among them, but nothing a repository or a package says can add one; any other configured index leaves pip changes
 # inconclusive.
 TRUSTED_PYTHON_INDEXES = ("https://pypi.chia.net/simple/", "https://download.chia.net/simple/")
+# A trusted index may serve its files from another host. A link and a download redirect may reach only the index's
+# own host or a host listed here.
+TRUSTED_PYTHON_INDEX_FILE_HOSTS: Mapping[str, frozenset[str]] = {
+    "https://pypi.chia.net/simple/": frozenset({"download.chia.net"}),
+}
 _INDEX_LINK_RE = re.compile(r"""<a\s[^>]*?href=["']([^"']+)["']""", re.IGNORECASE)
 _SDIST_SUFFIXES = (".tar.gz", ".zip", ".tar.bz2")
 
@@ -313,19 +318,25 @@ def _release(filename: str) -> tuple[str, str]:
     return ("", "")
 
 
+def _index_hosts(index: str) -> frozenset[str]:
+    """The hosts a trusted index may serve its page and files from."""
+    host = urllib.parse.urlsplit(index).hostname
+    return frozenset({host, *TRUSTED_PYTHON_INDEX_FILE_HOSTS.get(index, ())}) if host else frozenset()
+
+
 def _index_files(index: str, name: str, version: str) -> tuple[str, ...] | None:
     """The urls of the files a simple index page lists for `name` at `version`, or None.
 
     Versions are compared in their canonical PEP 440 form. The page is read with a bounded regex scan, following
-    redirects only to the index host over https. A page that cannot be read, lists no file for the version, or lists
-    more than _MAX_INDEX_FILES of them, leaves the package untrusted.
+    redirects only to the index's hosts over https. A page that cannot be read, lists no file for the version, or
+    lists more than _MAX_INDEX_FILES of them, leaves the package untrusted.
     """
     wanted = versions.pep440_key(version)
     if not wanted:
         return None
     page_url = f"{index}{_canonical(name)}/"
-    host = urllib.parse.urlsplit(index).hostname
-    body = _fetch(page_url, accept="text/html", follow={host: ""} if host else None)
+    hosts = _index_hosts(index)
+    body = _fetch(page_url, accept="text/html", follow={host: "" for host in hosts})
     if not body:
         return None
     files: list[str] = []
@@ -335,7 +346,7 @@ def _index_files(index: str, name: str, version: str) -> tuple[str, ...] | None:
         found_name, found_version = _release(urllib.parse.unquote(parts.path.rsplit("/", 1)[-1]))
         if found_name != _canonical(name) or versions.pep440_key(found_version) != wanted:
             continue
-        if parts.scheme != "https" or not host or parts.hostname != host:
+        if parts.scheme != "https" or parts.hostname not in hosts:
             return None
         files.append(urllib.parse.urlunsplit(parts._replace(fragment="")))
     return tuple(files) if files and len(files) <= _MAX_INDEX_FILES else None
@@ -358,7 +369,7 @@ def trusted_python_index(
 
     An unhashed occurrence must name the trusted index its file installs from, and every such index must serve
     `name` at this version. Each sha256 a hashed occurrence records must match a file downloaded from a trusted
-    index at this version. A file link outside the index host is not downloaded.
+    index at this version. A file link outside the index's hosts is not downloaded.
     """
     if not _PYPI_NAME_RE.fullmatch(name) or not version:
         return ""
@@ -379,11 +390,11 @@ def trusted_python_index(
         files = pages[index]
         if not files:
             continue
-        host = urllib.parse.urlsplit(index).hostname or ""
+        hosts = _index_hosts(index)
         if index in required:
             served.add(index)
         if wanted:
-            downloaded = [_sha256_download(url, host) for url in files]
+            downloaded = [_sha256_download(url, hosts) for url in files]
             if all(digest is not None for digest in downloaded) and wanted <= {
                 digest for digest in downloaded if digest
             }:

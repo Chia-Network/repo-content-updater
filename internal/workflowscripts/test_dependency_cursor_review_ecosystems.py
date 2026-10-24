@@ -494,10 +494,10 @@ class TrustedPythonIndexTest(unittest.TestCase):
             urls.append(url)
             return fetched.get(url)
 
-        def download(url: str, host: str) -> str | None:
+        def download(url: str, _hosts: frozenset[str]) -> str | None:
             downloaded.append(url)
             body = served.get(url)
-            return _sha(body) if isinstance(body, bytes) and host == _HOST else None
+            return _sha(body) if isinstance(body, bytes) else None
 
         with patch.object(upstream, "_fetch", fetch), patch.object(upstream, "_sha256_download", download):
             found = upstream.trusted_python_index(name, version, facts, configured)
@@ -528,6 +528,20 @@ class TrustedPythonIndexTest(unittest.TestCase):
         page = b'<a href="https://example.com/chiapos-2.0.4.tar.gz">x</a>\n'
         self.assertEqual(self.trusted("2.0.4", (f"sha256:{_sha(_SDIST)}",), pages={f"{_CHIA}chiapos/": page}), "")
         self.assertEqual(self.downloaded, [])
+
+    def test_a_file_link_on_the_indexes_allowed_file_host_is_downloaded(self) -> None:
+        file_url = "https://download.chia.net/files/chiapos-2.0.4.tar.gz"
+        page = f'<a href="{file_url}">s</a>\n'.encode()
+        self.assertEqual(
+            self.trusted(
+                "2.0.4",
+                (f"sha256:{_sha(_SDIST)}",),
+                pages={f"{_CHIA}chiapos/": page},
+                downloads={file_url: _SDIST},
+            ),
+            _HOST,
+        )
+        self.assertEqual(self.downloaded, [file_url])
 
     def test_an_unhashed_pin_is_trusted_only_when_its_file_replaces_pypi(self) -> None:
         self.assertEqual(self.trusted("2.0.4"), "")
@@ -588,7 +602,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
 
         with (
             patch.object(upstream, "_get", get),
-            patch.object(upstream, "_sha256_download", lambda _url, _host: _sha(_SDIST)),
+            patch.object(upstream, "_sha256_download", lambda _url, _hosts: _sha(_SDIST)),
         ):
             found = upstream.trusted_python_index(
                 "ChiaPos", version, (upstream.Locked(f"sha256:{_sha(_SDIST)}"),), frozenset({_CHIA})
@@ -617,12 +631,13 @@ class TrustedPythonIndexTest(unittest.TestCase):
 
 
 class _Reply:
-    def __init__(self, chunks: list[bytes], status: int = 200) -> None:
+    def __init__(self, chunks: list[bytes], status: int = 200, location: str = "") -> None:
         self.status = status
         self.chunks = chunks
+        self.location = location
 
-    def getheader(self, _name: str) -> str | None:
-        return None
+    def getheader(self, name: str) -> str | None:
+        return self.location if name == "Location" else None
 
     def read(self, _size: int) -> bytes:
         return self.chunks.pop(0) if self.chunks else b""
@@ -637,11 +652,24 @@ class Sha256DownloadTest(unittest.TestCase):
     def download(self, chunks: list[bytes], limit: int = 8) -> str | None:
         reply = _Reply(chunks)
         with patch.object(upstream, "_get_response", lambda _url, _accept: (_Connection(), reply)):
-            return upstream._sha256_download(f"https://{_HOST}/x", _HOST, limit)
+            return upstream._sha256_download(f"https://{_HOST}/x", frozenset({_HOST}), limit)
 
     def test_a_body_over_the_limit_has_no_digest(self) -> None:
         self.assertIsNone(self.download([b"1234", b"5678", b"9"]))
         self.assertEqual(self.download([b"1234", b"5678"]), _sha(b"12345678"))
 
     def test_a_download_from_another_host_is_not_read(self) -> None:
-        self.assertIsNone(upstream._sha256_download("https://example.com/x", _HOST))
+        self.assertIsNone(upstream._sha256_download("https://example.com/x", frozenset({_HOST})))
+
+    def test_a_download_redirect_may_reach_an_allowed_file_host_only(self) -> None:
+        target = "https://download.chia.net/x"
+        hosts = frozenset({_HOST, "download.chia.net"})
+
+        def get_response(url: str, _accept: str) -> tuple[_Connection, _Reply]:
+            if url == f"https://{_HOST}/x":
+                return _Connection(), _Reply([], status=302, location=target)
+            return _Connection(), _Reply([b"abc"])
+
+        with patch.object(upstream, "_get_response", get_response):
+            self.assertEqual(upstream._sha256_download(f"https://{_HOST}/x", hosts), _sha(b"abc"))
+            self.assertIsNone(upstream._sha256_download(f"https://{_HOST}/x", frozenset({_HOST})))
