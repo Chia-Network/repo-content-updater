@@ -27,6 +27,27 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v7
 
+      # check_node_runtime.sh reads workflows with yq; a pinned, checksummed copy does not depend on the runner image.
+      - name: Install yq
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=v4.54.1
+          case "${RUNNER_ARCH:-}" in
+          X64) arch=amd64 sum=8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f ;;
+          ARM64) arch=arm64 sum=189088da0c6429ec5178dfaab1a114805f6cab0b61b165ab236efedf1d57a71b ;;
+          *)
+            echo "No pinned yq for runner architecture ${RUNNER_ARCH:-unknown}." >&2
+            exit 1
+            ;;
+          esac
+          dir="${RUNNER_TEMP}/yq-bin"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/yq" "https://github.com/mikefarah/yq/releases/download/${version}/yq_linux_${arch}"
+          printf '%s  %s\n' "$sum" "$dir/yq" | sha256sum -c --quiet -
+          chmod +x "$dir/yq"
+          echo "$dir" >>"$GITHUB_PATH"
+
       - name: Check action Node runtime
         shell: bash
         env:

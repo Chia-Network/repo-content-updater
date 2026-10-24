@@ -44,6 +44,11 @@ class SourceTest(unittest.TestCase):
             with self.subTest(cut=cut), self.assertRaises(ValueError):
                 certificate.source(der[:cut])
 
+    def test_a_length_der_does_not_allow_is_a_value_error(self) -> None:
+        for der in (b"\x30\x80", b"\x30\x85" + bytes(5), b"\x30\xff" + bytes(127)):
+            with self.subTest(der=der[:2]), self.assertRaises(ValueError):
+                certificate.source(der)
+
 
 if __name__ == "__main__":
     unittest.main()

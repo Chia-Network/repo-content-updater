@@ -12,6 +12,7 @@ from typing import NamedTuple
 
 _FULCIO = bytes.fromhex("2b0601040183bf3001")
 _SOURCE_REPO, _SOURCE_COMMIT = _FULCIO + b"\x0c", _FULCIO + b"\x0d"
+_MAX_LENGTH_BYTES = 4
 
 
 class Source(NamedTuple):
@@ -28,6 +29,9 @@ def _tlvs(data: bytes) -> list[tuple[int, bytes]]:
         tag, length, index = data[index], data[index + 1], index + 2
         if length & 0x80:
             width = length & 0x7F
+            # DER has no indefinite length (width 0), and four length bytes cover any certificate.
+            if not 1 <= width <= _MAX_LENGTH_BYTES or index + width > len(data):
+                raise ValueError("unsupported DER length")
             length, index = int.from_bytes(data[index : index + width], "big"), index + width
         if index + length > len(data):
             raise ValueError("truncated DER")

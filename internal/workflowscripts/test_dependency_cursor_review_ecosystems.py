@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import unittest
+import urllib.parse
 from unittest.mock import patch
 
 import dependency_cursor_review_binding as binding
@@ -265,7 +266,7 @@ class UpstreamRepoTest(unittest.TestCase):
                 self.assertEqual(self._repo(ecosystem, name, "1.0.0", {}), (upstream.Repo(want, upstream.IDENTITY), []))
 
     def test_npm_repository_spellings(self) -> None:
-        url = "https://registry.npmjs.org/@babel/core/7.24.0"
+        url = "https://registry.npmjs.org/@babel%2Fcore/7.24.0"
         for repository in (
             "git+https://github.com/babel/babel.git",
             {"type": "git", "url": "https://github.com/babel/babel/tree/main/packages/babel-core"},
@@ -379,6 +380,37 @@ class UpstreamRepoTest(unittest.TestCase):
         for url in ("http://registry.npmjs.org/a/1.0.0", "file:///etc/passwd", "ftp://example.com/x", "https:///x"):
             with self.subTest(url=url):
                 self.assertIsNone(upstream._fetch(url))
+
+    def _follow(self, answers: dict[str, tuple[int, str, bytes]], url: str, follow: frozenset[str]) -> object:
+        self.requested: list[str] = []
+
+        def get(url: str, _limit: int) -> tuple[int, str, bytes]:
+            self.requested.append(url)
+            return answers[url]
+
+        with patch.object(upstream, "_get", get):
+            return upstream.fetch_archive(url, 100, follow)
+
+    def test_a_redirect_is_followed_only_to_a_listed_https_host(self) -> None:
+        zip_url, stored = "https://proxy.golang.org/m/@v/v1.zip", "https://storage.googleapis.com/p/m.zip"
+        for location, follow, want in (
+            (stored, binding._GO_PROXY_HOSTS, b"zip"),
+            ("/other/m.zip", binding._GO_PROXY_HOSTS, b"zip"),
+            (stored, frozenset(), None),
+            ("https://evil.example/m.zip", binding._GO_PROXY_HOSTS, None),
+            ("http://storage.googleapis.com/p/m.zip", binding._GO_PROXY_HOSTS, None),
+            ("", binding._GO_PROXY_HOSTS, None),
+        ):
+            target = urllib.parse.urljoin(zip_url, location)
+            answers = {target: (200, "", b"zip"), zip_url: (302, location, b"")}
+            with self.subTest(location=location, follow=sorted(follow)):
+                self.assertEqual(self._follow(answers, zip_url, follow), want)
+                self.assertEqual(self.requested, [zip_url, target] if want else [zip_url])
+
+    def test_a_redirect_loop_is_no_answer(self) -> None:
+        url = "https://proxy.golang.org/m/@v/v1.zip"
+        self.assertIsNone(self._follow({url: (302, url, b"")}, url, binding._GO_PROXY_HOSTS))
+        self.assertEqual(len(self.requested), upstream._MAX_REDIRECTS + 1)
 
     def test_fetch_json_tells_an_unreadable_answer_from_a_404(self) -> None:
         url = "https://registry.npmjs.org/a/1.0.0"

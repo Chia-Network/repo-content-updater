@@ -61,6 +61,8 @@ REASONS = frozenset(
 
 _SLSA_V1 = "https://slsa.dev/provenance/v1"
 _GO_PROXY = "https://proxy.golang.org"
+# The proxy may serve a module zip from its storage; the zip must still hash to the go.sum entry.
+_GO_PROXY_HOSTS = frozenset({"proxy.golang.org", "storage.googleapis.com"})
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
@@ -154,14 +156,13 @@ def npm(subject: Subject) -> Binding:
         digest = base64.b64decode(integrity.removeprefix("sha512-"), validate=True).hex()
     except binascii.Error:
         return _unbound(NO_LOCK_HASH)
-    version = urllib.parse.quote(subject.version, safe="")
-    registered = _dig(upstream.fetch_json(f"https://registry.npmjs.org/{subject.name}/{version}"), "dist", "integrity")
+    name, version = upstream.npm_path(subject.name), urllib.parse.quote(subject.version, safe="")
+    registered = _dig(upstream.fetch_json(f"https://registry.npmjs.org/{name}/{version}"), "dist", "integrity")
     if not isinstance(registered, str) or not registered:
         return _UNAVAILABLE
     if registered != integrity:
         return _unbound(HASH_MISMATCH)
-    escaped = urllib.parse.quote(subject.name, safe="@")
-    found = upstream.fetch_json(f"https://registry.npmjs.org/-/npm/v1/attestations/{escaped}@{version}")
+    found = upstream.fetch_json(f"https://registry.npmjs.org/-/npm/v1/attestations/{name}@{version}")
     if found is None:
         return _UNAVAILABLE
     bundles = [
@@ -196,7 +197,7 @@ def go(subject: Subject) -> Binding:
     if not want.startswith("h1:"):
         return _unbound(NO_LOCK_HASH)
     base = f"{_GO_PROXY}/{_go_escaped(subject.name)}/@v/{_go_escaped('v' + subject.version)}"
-    archive = upstream.fetch_archive(base + ".zip", GO_ZIP_LIMIT)
+    archive = upstream.fetch_archive(base + ".zip", GO_ZIP_LIMIT, _GO_PROXY_HOSTS)
     found = go_zip_hash(archive) if archive else ""
     if not found:
         return _UNAVAILABLE

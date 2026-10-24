@@ -71,11 +71,12 @@ def github_repo(url: object) -> str:
     return _repo(match.group(1), match.group(2)) if match else ""
 
 
-def _fetch(url: str, limit: int = _LIMIT) -> bytes | None:
-    """The body of a 200 response to an https GET, b"" for a 404, or None when there is no readable answer.
+_REDIRECTS = frozenset({301, 302, 303, 307, 308})
+_MAX_REDIRECTS = 5
 
-    Redirects are not followed.
-    """
+
+def _get(url: str, limit: int) -> tuple[int, str, bytes] | None:
+    """The status, Location header and first `limit + 1` body bytes of an https GET, or None when there is none."""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != "https" or not parts.hostname:
         return None
@@ -84,19 +85,42 @@ def _fetch(url: str, limit: int = _LIMIT) -> bytes | None:
     try:
         connection.request("GET", target, headers={"Accept": "application/json", "User-Agent": "dependency-review"})
         response = connection.getresponse()
-        status, body = response.status, response.read(limit + 1)
+        return response.status, response.getheader("Location") or "", response.read(limit + 1)
     except (OSError, http.client.HTTPException):
         return None
     finally:
         connection.close()
+
+
+def _fetch(url: str, limit: int = _LIMIT, follow: frozenset[str] = frozenset()) -> bytes | None:
+    """The body of a 200 response to an https GET, b"" for a 404, or None when there is no readable answer.
+
+    A redirect is followed only to an https URL on a host in `follow`, and at most _MAX_REDIRECTS times.
+    """
+    for _hop in range(_MAX_REDIRECTS + 1):
+        answer = _get(url, limit)
+        if answer is None:
+            return None
+        status, location, body = answer
+        if status not in _REDIRECTS:
+            break
+        url = urllib.parse.urljoin(url, location)
+        parts = urllib.parse.urlsplit(url)
+        if not location or parts.scheme != "https" or parts.hostname not in follow:
+            return None
+    else:
+        return None
     if status == 404:
         return b""
     return body if status == 200 and len(body) <= limit else None
 
 
-def fetch_archive(url: str, limit: int) -> bytes | None:
-    """The body of a 200 response to an https GET of at most `limit` bytes, or None for anything else."""
-    return _fetch(url, limit) or None
+def fetch_archive(url: str, limit: int, follow: frozenset[str] = frozenset()) -> bytes | None:
+    """The body of a 200 response to an https GET of at most `limit` bytes, or None for anything else.
+
+    A redirect is followed only to a host in `follow`.
+    """
+    return _fetch(url, limit, follow) or None
 
 
 def fetch_json(url: str) -> dict | None:
@@ -117,10 +141,15 @@ def action(name: str, _version: str) -> Repo:
     return _found(_repo(owner, rest.split("/", 1)[0]) if re.fullmatch(_PART, owner) and rest else "", IDENTITY)
 
 
+def npm_path(name: str) -> str:
+    """A package name as one registry URL path segment: a scope's `/` is `%2F`."""
+    return urllib.parse.quote(name, safe="@")
+
+
 def _npm_repository(name: str, version: str) -> str:
     if not _NPM_NAME_RE.fullmatch(name):
         return ""
-    doc = fetch_json(f"https://registry.npmjs.org/{name}/{urllib.parse.quote(version, safe='')}") or {}
+    doc = fetch_json(f"https://registry.npmjs.org/{npm_path(name)}/{urllib.parse.quote(version, safe='')}") or {}
     repository = doc.get("repository")
     url = repository.get("url") if isinstance(repository, dict) else repository
     if not isinstance(url, str):
