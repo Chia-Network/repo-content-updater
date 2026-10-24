@@ -46,17 +46,22 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
   cannot add one. A config naming any other Python index, or one the
   scripts cannot read, leaves every pip change inconclusive.
 - A requirements file's `--index-url`, `-i` and `--extra-index-url` options
-  select indexes the same way for the pip changes in its directory, along
-  with the files it includes. Any other index, `--find-links`, `--no-index`,
-  an option filled from the environment, or an include outside the
-  repository leaves those changes inconclusive.
+  select indexes for that file and the files it includes, read in pip's
+  order. The last `--index-url` is its effective index, and any
+  `--extra-index-url` keeps PyPI as a source. Any other index,
+  `--find-links`, `--no-index`, an option filled from the environment, or an
+  include outside the repository leaves that file inconclusive.
+- A Dependabot `replaces-base` setting describes Dependabot's own resolution.
+  It never makes an index replace PyPI for pip; only a requirements file's
+  effective index does.
 - pip configuration outside the repository, such as `pip.conf` or
   `PIP_INDEX_URL`, is out of scope: the review reads only the pull request's
   tree.
 - A pip change is trusted only when a listed, configured index serves that
   exact version and either every file hash its lock records matches a file
-  downloaded from that index's own links, or the lock records no hashes and
-  that index replaces PyPI for the change's directory. Otherwise it is
+  downloaded from that index's own links, or every unhashed occurrence is in
+  a requirements file whose effective index is a listed index that names no
+  other source, so that index replaces PyPI for that file. Otherwise it is
   looked up and scanned as usual.
 - Trusted changes are disclosed in the review summary. They never block,
   and they are not counted as scanned.

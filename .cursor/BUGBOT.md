@@ -19,7 +19,8 @@ adversarial.
 - Anything that lets repository or upstream content add a trusted package
   index, or trust a package that a listed index does not serve at that
   exact version with matching downloaded file hashes, or, for an unhashed
-  pin, with an index that replaces PyPI (see "Trusted package indexes" in
+  occurrence, without a requirements file whose effective index replaces
+  PyPI and names no other source (see "Trusted package indexes" in
   `AGENTS.md`).
 
 ## Do not raise

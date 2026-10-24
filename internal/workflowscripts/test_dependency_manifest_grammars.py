@@ -16,6 +16,7 @@ from dependency_manifest_go import go_mod, go_sum, go_sum_hash, go_zip_hash
 from dependency_manifest_lines import Pin, dockerfile_from, terraform_config, terraform_lock, workflow_uses
 from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
 from dependency_manifest_python import (
+    IndexOption,
     IndexOptions,
     pipfile_lock,
     pipfile_lock_hashes,
@@ -635,18 +636,23 @@ if __name__ == "__main__":
 
 class RequirementsIndexOptionsTest(unittest.TestCase):
     def test_every_form_pip_accepts_names_an_index(self) -> None:
-        index = {"replaces_pypi": True}
-        extra = {"extra_index_url": True}
+        index = IndexOption("index", "https://a/")
+        extra = IndexOption("extra", "https://b/")
         cases = {
-            "-i https://a/\nattrs==1.0\n": IndexOptions(("https://a/",), **index),
-            "-ihttps://a/": IndexOptions(("https://a/",), **index),
-            "--index-url=https://a/": IndexOptions(("https://a/",), **index),
-            "--index-url \\\n  https://a/  # note": IndexOptions(("https://a/",), **index),
-            "--extra-index-url https://b/": IndexOptions(("https://b/",), **extra),
-            "--extra=https://b/": IndexOptions(("https://b/",), **extra),
-            "--ind https://a/ --pre": IndexOptions(("https://a/",), **index),
-            "-r ../base.txt\n--constraint=c.txt": IndexOptions(includes=("../base.txt", "c.txt")),
+            "-i https://a/\nattrs==1.0\n": IndexOptions((index,)),
+            "-ihttps://a/": IndexOptions((index,)),
+            "--index-url=https://a/": IndexOptions((index,)),
+            "--index-url \\\n  https://a/  # note": IndexOptions((index,)),
+            "--extra-index-url https://b/": IndexOptions((extra,)),
+            "--extra=https://b/": IndexOptions((extra,)),
+            "--ind https://a/ --pre": IndexOptions((index,)),
+            "-r ../base.txt\n--constraint=c.txt": IndexOptions(
+                (IndexOption("include", "../base.txt"), IndexOption("include", "c.txt"))
+            ),
             "--trusted-host h --pre\n# -i https://x/\nattrs==1.0 --hash=sha256:aa": IndexOptions(),
+            "-i https://a/\n-r base.txt\n--extra-index-url https://b/": IndexOptions(
+                (index, IndexOption("include", "base.txt"), extra)
+            ),
         }
         unread = (
             "-i",

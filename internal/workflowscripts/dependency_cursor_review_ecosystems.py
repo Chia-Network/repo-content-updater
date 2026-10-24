@@ -279,24 +279,32 @@ def hash_sources(ecosystem: Ecosystem, directory: str, hashed: tuple[str, ...]) 
     return sources
 
 
-def locked(
+def locked_occurrences(
     ecosystem: str, directory: str, name: str, version: str, read: Callable[[str], str], hashed: tuple[str, ...]
-) -> tuple[str, ...]:
-    """The hash each installed copy of `name` at exact `version` records in the hash_sources beside `directory`.
+) -> tuple[tuple[str, str], ...]:
+    """Each (path, recorded hash) of an installed copy of `name` at exact `version` in the hash_sources beside
+    `directory`.
 
     Each row's `hashes` reads which entries are installed copies and what they record. "" is a copy with no hash.
     """
     row = _BY_NAME.get(ecosystem)
     if row is None or not version:
         return ()
-    found: list[str] = []
+    found: list[tuple[str, str]] = []
     for path, kind in hash_sources(row, directory, hashed).items():
         parsed = kind.parse(read(path)) if kind.hashes else None
         for entry in parsed[0] if parsed else ():
             recorded = kind.hashes(entry)
             if recorded is not None and entry[0] == name and exact_body(entry[1], mode=ecosystem) == version:
-                found.append(recorded)
+                found.append((path, recorded))
     return tuple(found)
+
+
+def locked(
+    ecosystem: str, directory: str, name: str, version: str, read: Callable[[str], str], hashed: tuple[str, ...]
+) -> tuple[str, ...]:
+    """The hash each installed copy of `name` at exact `version` records in the hash_sources beside `directory`."""
+    return tuple(recorded for _path, recorded in locked_occurrences(ecosystem, directory, name, version, read, hashed))
 
 
 def warn_reason(ecosystem: str, old: str, new: str) -> str:

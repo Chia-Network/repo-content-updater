@@ -305,14 +305,23 @@ def pipfile_lock_hashes(text: str) -> str:
     return _locked_hashes(record.get("hashes"))
 
 
-class IndexOptions(NamedTuple):
-    """The package index options of a requirements file."""
+class IndexOption(NamedTuple):
+    """One package source option of a requirements file, in pip's order."""
 
-    urls: tuple[str, ...] = ()  # each --index-url and --extra-index-url
-    includes: tuple[str, ...] = ()  # each --requirement and --constraint, as written
+    kind: str  # INDEX, EXTRA or INCLUDE
+    value: str  # the URL or the included file, as written
+
+
+class IndexOptions(NamedTuple):
+    """The package source options of a requirements file, in the order pip reads them."""
+
+    options: tuple[IndexOption, ...] = ()
     unread: bool = False  # whether a line may name another package source the review does not read
-    replaces_pypi: bool = False  # an --index-url or -i is given and no --extra-index-url, so it replaces PyPI
-    extra_index_url: bool = False  # whether an --extra-index-url is given
+
+
+INDEX = "index"  # an --index-url option
+EXTRA = "extra"  # an --extra-index-url option
+INCLUDE = "include"  # a --requirement or --constraint option
 
 
 class _Option(NamedTuple):
@@ -345,11 +354,8 @@ def _option(word: str, words: list[str]) -> _Option:
 
 
 def requirements_index_options(text: str) -> IndexOptions:
-    """The index URLs and included files a requirements file names, read as pip reads its option lines."""
-    urls: list[str] = []
-    includes: list[str] = []
-    index_url = False
-    extra_index_url = False
+    """The package source options a requirements file names, read in pip's order."""
+    found: list[IndexOption] = []
     for line, original in _pip_lines(text):
         if not line.startswith("-"):
             # A line pip fills from the environment may be any option; only a plain requirement line is read.
@@ -368,10 +374,10 @@ def requirements_index_options(text: str) -> IndexOptions:
                 continue
             if option.value is None or option.name in _PIP_OTHER_SOURCES:
                 return IndexOptions(unread=True)
-            if option.name in _PIP_INDEXES:
-                urls.append(option.value)
-                index_url = index_url or option.name == "--index-url"
-                extra_index_url = extra_index_url or option.name == "--extra-index-url"
+            if option.name == "--index-url":
+                found.append(IndexOption(INDEX, option.value))
+            elif option.name == "--extra-index-url":
+                found.append(IndexOption(EXTRA, option.value))
             elif option.name in _PIP_INCLUDES:
-                includes.append(option.value)
-    return IndexOptions(tuple(urls), tuple(includes), False, index_url and not extra_index_url, extra_index_url)
+                found.append(IndexOption(INCLUDE, option.value))
+    return IndexOptions(tuple(found))

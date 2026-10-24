@@ -84,13 +84,20 @@ def _found(slug: str) -> upstream.Repo:
     return upstream.Repo(slug, upstream.IDENTITY) if slug else upstream.Repo()
 
 
-def _plan(*primary: tuple[str, ...], unchecked: tuple = (), gaps: tuple = (), unparsed_locks: tuple = ()) -> diff.Plan:
+def _plan(
+    *primary: tuple[str, ...],
+    unchecked: tuple = (),
+    gaps: tuple = (),
+    unparsed_locks: tuple = (),
+    hashed: tuple[str, ...] = (),
+) -> diff.Plan:
     """A Plan of (ecosystem, dir, name, old, new) changes."""
     return diff.Plan(
         tuple(diff.Change(*change) for change in primary),
         tuple(diff.Change(*change) for change in unchecked),
         tuple(gaps),
         tuple(unparsed_locks),
+        hashed,
     )
 
 
@@ -651,37 +658,40 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertNotEqual(published["verdict"], "benign")
 
     def test_a_pip_change_a_trusted_index_serves_is_trusted_and_the_rest_are_looked_up(self) -> None:
-        config = (
-            "registries:\n  chia:\n    type: python-index\n    url: https://pypi.chia.net/simple\n"
-            "    replaces-base: true\n"
-        )
+        config = "registries:\n  chia:\n    type: python-index\n    url: https://pypi.chia.net/simple\n"
         looked_up: list[str] = []
-        asked: list[tuple[str, str, frozenset[str], bool]] = []
+        asked: list[tuple[str, str, frozenset[str], tuple[upstream.Locked, ...]]] = []
 
         def repo(_ecosystem: str, name: str, _version: str) -> upstream.Repo:
             looked_up.append(name)
             return _found(f"upstream/{name}")
 
-        def trusted(
-            name: str, version: str, _locked: tuple[str, ...], configured: frozenset[str], replaces_pypi: bool
-        ) -> str:
-            asked.append((name, version, configured, replaces_pypi))
+        def trusted(name: str, version: str, locked: tuple[upstream.Locked, ...], configured: frozenset[str]) -> str:
+            asked.append((name, version, configured, locked))
             return "pypi.chia.net" if name == "chiapos" else ""
 
         plan = _plan(
             ("pip", ".", "chiapos", "2.0.3", "2.0.4"),
             ("pip", ".", "attrs", "23.1.0", "23.2.0"),
             ("npm", ".", "lodash", "4.17.20", "4.17.21"),
+            hashed=("requirements.txt",),
         )
-        texts = {".github/dependabot.yml": config}
+        texts = {
+            ".github/dependabot.yml": config,
+            "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\nattrs==23.2.0\n",
+        }
         with (
             patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path, "")),
             patch.object(upstream, "trusted_python_index", trusted),
         ):
             report, summary, _output = _run_main(
-                plan, repo=repo, scan=lambda target, *_args: _clean(target.package, target.repo.slug)
+                plan,
+                repo=repo,
+                scan=lambda target, *_args: _clean(target.package, target.repo.slug),
+                files=lambda directory: [("requirements.txt", "100644")] if directory == "." else [],
             )
         self.assertEqual(sorted(looked_up), ["attrs", "lodash"])
+        occurrence = (upstream.Locked("", "https://pypi.chia.net/simple/"),)
         self.assertEqual(
             sorted(asked),
             [
@@ -689,7 +699,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                     name,
                     "2.0.4" if name == "chiapos" else "23.2.0",
                     frozenset({"https://pypi.chia.net/simple/"}),
-                    True,
+                    occurrence,
                 )
                 for name in ("attrs", "chiapos")
             ],
@@ -709,6 +719,79 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             "COMPATIBILITY_RECOMMENDATION: Merge\n",
         )
         self.assertEqual((published["verdict"], published["check"]), (without["verdict"], without["check"]))
+
+    def test_pip_index_trust_follows_each_requirements_file(self) -> None:
+        digest = "a" * 64
+        page = b'<a href="../../files/chiapos-2.0.4.tar.gz">s</a>\n'
+        config = (
+            "registries:\n  chia:\n    type: python-index\n    url: https://pypi.chia.net/simple/\n"
+            "    replaces-base: true\n"
+        )
+        hashed_pin = f"chiapos==2.0.4 --hash=sha256:{digest}\n"
+        cases = {
+            "dependabot replaces-base alone": (
+                {"requirements.txt": "chiapos==2.0.4\n"},
+                ("requirements.txt",),
+                False,
+            ),
+            "last index is pypi": (
+                {
+                    "requirements.txt": (
+                        "-i https://pypi.chia.net/simple/\n-i https://pypi.org/simple/\nchiapos==2.0.4\n"
+                    )
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "trusted index in another file": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "requirements-dev.txt": "chiapos==2.0.4\n",
+                },
+                ("requirements.txt", "requirements-dev.txt"),
+                False,
+            ),
+            "hashed and unhashed occurrence": (
+                {"requirements.txt": hashed_pin, "requirements-dev.txt": "chiapos==2.0.4\n"},
+                ("requirements.txt", "requirements-dev.txt"),
+                False,
+            ),
+            "every unhashed occurrence replaces": (
+                {
+                    "requirements.txt": hashed_pin,
+                    "requirements-dev.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                },
+                ("requirements.txt", "requirements-dev.txt"),
+                True,
+            ),
+        }
+        for label, (texts, hashed, trusted) in cases.items():
+            with self.subTest(label):
+                looked_up: list[str] = []
+
+                def repo(_ecosystem: str, name: str, _version: str, seen: list[str] = looked_up) -> upstream.Repo:
+                    seen.append(name)
+                    return _found(f"upstream/{name}")
+
+                plan = _plan(("pip", ".", "chiapos", "2.0.3", "2.0.4"), hashed=hashed)
+                all_texts = {".github/dependabot.yml": config, **texts}
+                files = [("requirements.txt", "100644"), ("requirements-dev.txt", "100644")]
+                with (
+                    patch.object(coverage, "_git_text", lambda _rev, path, texts=all_texts: texts.get(path, "")),
+                    patch.object(upstream, "_fetch", lambda *_args, **_kwargs: page),
+                    patch.object(upstream, "_sha256_download", lambda *_args, **_kwargs: digest),
+                ):
+                    report, _summary, _output = _run_main(
+                        plan,
+                        repo=repo,
+                        scan=lambda target, *_args: _clean(target.package, target.repo.slug),
+                        files=lambda directory, entries=files: entries if directory == "." else [],
+                    )
+                self.assertEqual(looked_up, [] if trusted else ["chiapos"])
+                self.assertEqual(
+                    [(item["name"], item["index"]) for item in report["trusted_packages"]],
+                    [("chiapos", "pypi.chia.net")] if trusted else [],
+                )
 
     def test_git_files_lists_one_directory_at_head(self) -> None:
         with TemporaryDirectory() as tmp:

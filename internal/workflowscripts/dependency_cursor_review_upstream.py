@@ -275,9 +275,10 @@ def go(module: str, _version: str) -> Repo:
 
 # Deliberate trust decision (AGENTS.md, "Trusted package indexes"): a Python package that one of the organization's
 # own indexes below serves at the exact version is trusted and is not scanned when every file hash the lock records
-# matches a file downloaded from it, or, for an unhashed pin, when that index replaces PyPI. This tuple is the only
-# list of trusted indexes. A repository's Dependabot config can select among them, but nothing a repository or a
-# package says can add one; any other configured index leaves pip changes inconclusive.
+# matches a file downloaded from it, or, for an unhashed occurrence, when the requirements file that pins it replaces
+# PyPI with that index. This tuple is the only list of trusted indexes. A repository's Dependabot config can select
+# among them, but nothing a repository or a package says can add one; any other configured index leaves pip changes
+# inconclusive.
 TRUSTED_PYTHON_INDEXES = ("https://pypi.chia.net/simple/", "https://download.chia.net/simple/")
 _INDEX_LINK_RE = re.compile(r"""<a\s[^>]*?href=["']([^"']+)["']""", re.IGNORECASE)
 _SDIST_SUFFIXES = (".tar.gz", ".zip", ".tar.bz2")
@@ -327,34 +328,54 @@ def _index_files(index: str, name: str, version: str) -> tuple[str, ...] | None:
     return tuple(files) if files and len(files) <= _MAX_INDEX_FILES else None
 
 
+class Locked(NamedTuple):
+    """One occurrence of a package in a lock or requirements file."""
+
+    hashes: str = ""  # space-separated sha256 values, "" when the occurrence records none
+    index: str = ""  # the trusted index its file replaces PyPI with, "" when it does not
+
+
 def trusted_python_index(
     name: str,
     version: str,
-    locked: tuple[str, ...],
+    locked: tuple[Locked, ...],
     configured: frozenset[str],
-    replaces_pypi: bool = False,
 ) -> str:
-    """The host of the first trusted index in `configured` that serves `name` at `version`, or "".
+    """The host of a trusted index in `configured` that serves `name` at `version`, or "".
 
-    With a hashed lock, each sha256 the lock records (`locked`, as binding.Subject.locked) must match a file
-    downloaded from that index at this version. With an unhashed pin, the index must replace PyPI (`replaces_pypi`).
-    A file link outside the index host is not downloaded.
+    An unhashed occurrence must name the trusted index its file installs from, and every such index must serve
+    `name` at this version. Each sha256 a hashed occurrence records must match a file downloaded from a trusted
+    index at this version. A file link outside the index host is not downloaded.
     """
     if not _PYPI_NAME_RE.fullmatch(name) or not version:
         return ""
-    wanted = {digest.removeprefix("sha256:").lower() for hashes in locked for digest in hashes.split()}
-    if not wanted and not replaces_pypi:
+    required = {item.index for item in locked if not item.hashes}
+    if any(not item.hashes and not item.index for item in locked):
         return ""
+    wanted = {digest.removeprefix("sha256:").lower() for item in locked for digest in item.hashes.split()}
+    if not wanted and not required:
+        return ""
+    pages: dict[str, tuple[str, ...] | None] = {}
+    served: set[str] = set()
+    matched = ""
     for index in TRUSTED_PYTHON_INDEXES:
         if index not in configured:
             continue
-        files = _index_files(index, name, version)
+        if index not in pages:
+            pages[index] = _index_files(index, name, version)
+        files = pages[index]
         if not files:
             continue
         host = urllib.parse.urlsplit(index).hostname or ""
-        if not wanted:
-            return host
-        downloaded = [_sha256_download(url, host) for url in files]
-        if all(digest is not None for digest in downloaded) and wanted <= {digest for digest in downloaded if digest}:
-            return host
-    return ""
+        if index in required:
+            served.add(index)
+        if wanted:
+            downloaded = [_sha256_download(url, host) for url in files]
+            if all(digest is not None for digest in downloaded) and wanted <= {
+                digest for digest in downloaded if digest
+            }:
+                matched = matched or index
+    if required - served or (wanted and not matched):
+        return ""
+    chosen = next(index for index in TRUSTED_PYTHON_INDEXES if index in required) if required else matched
+    return urllib.parse.urlsplit(chosen).hostname or ""

@@ -1,11 +1,12 @@
 """Python package indexes a pip change may install from.
 
-The Dependabot config can select among the organization's trusted indexes, and a
-requirements file can name indexes for its directory and the files it includes.
-A directory is read when every source it names is a trusted index or PyPI's own
-simple index. Any other source, an unreadable config, or a requirements file or
-include that is not a blob leaves the directory unread, so no change there is
-trusted.
+The Dependabot config selects the organization's trusted indexes. A requirements
+file names its effective index with the last --index-url it reads, applying
+included files in place, and any extra source keeps PyPI in play. A trusted
+effective index with no extra source replaces PyPI for that file alone. A
+requirements file or include that is not a blob, an option the review cannot
+read, or a source that is not a trusted index or PyPI leaves that file unread,
+so no change in it is trusted.
 """
 
 from __future__ import annotations
@@ -31,51 +32,41 @@ _MAX_REQUIREMENTS_FILES = 64
 
 
 class Indexes(NamedTuple):
-    """The Python package indexes pip may install from besides PyPI, named by the Dependabot config or a
-    requirements file."""
+    """The package indexes one Python file may install from."""
 
     trusted: frozenset[str] = frozenset()  # each one in upstream.TRUSTED_PYTHON_INDEXES
-    other: bool = False  # whether it names any other one, or one this cannot read
-    replaces_pypi: bool = False  # whether a trusted index replaces PyPI rather than adding to it
+    other: bool = False  # whether it names a source this cannot read
+    index: str = ""  # the trusted index its effective --index-url replaces PyPI with, "" when PyPI stays
+
+
+class DirectoryIndexes(NamedTuple):
+    """The index facts of a pip directory: the configured indexes and each requirements file in it."""
+
+    configured: Indexes = Indexes()
+    files: tuple[tuple[str, Indexes], ...] = ()  # each requirements file at HEAD and its facts
+
+    def for_path(self, path: str) -> Indexes:
+        """The facts of `path`, or the configured indexes for a file with no pip options."""
+        return next((found for name, found in self.files if name == path), self.configured)
 
 
 def _normalized(url: str) -> str:
     return url if url.endswith("/") else f"{url}/"
 
 
-def _indexes(
-    urls: list[str],
-    unread: bool,
-    replaces_pypi: bool = False,
-    *more: Indexes,
-    extra: bool = False,
-) -> Indexes:
-    """Indexes of `urls` and `more`.
-
-    PyPI's own simple index is neither trusted nor other. Any index that is not in TRUSTED_PYTHON_INDEXES, or
-    `unread`, trusts none. An extra index keeps PyPI as a source, so no index replaces it.
-    """
-    urls = [_normalized(url) for url in urls if _normalized(url) not in _PYPI_INDEXES]
-    trusted = frozenset(url for url in urls if url in _upstream.TRUSTED_PYTHON_INDEXES)
-    other = unread or len(trusted) != len(set(urls)) or any(item.other for item in more)
-    replaces = (
-        not other
-        and not extra
-        and bool(trusted or any(item.trusted for item in more))
-        and (replaces_pypi or any(item.replaces_pypi for item in more))
-    )
-    return Indexes(
-        frozenset() if other else trusted.union(*(item.trusted for item in more)),
-        other,
-        replaces,
-    )
+def _merge(*items: Indexes) -> Indexes:
+    """The trusted indexes of `items`; any other source leaves the result unread."""
+    other = any(item.other for item in items)
+    trusted = frozenset() if other else frozenset().union(*(item.trusted for item in items))
+    return Indexes(trusted, other)
 
 
 def _dependabot_indexes(text: str) -> Indexes:
     """The python-index registries of one Dependabot config. Only a URL in TRUSTED_PYTHON_INDEXES is trusted.
 
     Inside `registries:` every line must be a registry key or a recognised field under one, and every mention of
-    `python-index` must be a parsed type field. Anything else leaves the config unread.
+    `python-index` must be a parsed type field. Anything else leaves the config unread. `replaces-base` describes
+    Dependabot's resolution only, so it never makes an index replace PyPI for pip.
     """
     in_registries = False
     fields: dict[str, str] | None = None
@@ -104,22 +95,17 @@ def _dependabot_indexes(text: str) -> Indexes:
                 unread = True
         if not registry_key:
             mentions += content.count("python-index")
-    urls = [block.get("url", "") for block in blocks if block.get("type") == "python-index"]
-    replaces = any(
-        block.get("type") == "python-index" and block.get("replaces-base", "").lower() == "true" for block in blocks
-    )
+    urls = [_normalized(block.get("url", "")) for block in blocks if block.get("type") == "python-index"]
+    named = set(urls)
+    trusted = frozenset(named & set(_upstream.TRUSTED_PYTHON_INDEXES))
     typed = sum(block.get("type") == "python-index" for block in blocks)
-    return _indexes(urls, unread or mentions != typed, replaces)
+    other = unread or mentions != typed or bool(named - trusted - _PYPI_INDEXES)
+    return Indexes(frozenset() if other else trusted, other)
 
 
 def configured(read: _Read) -> Indexes:
     """The trusted indexes the repository's Dependabot configs name."""
-    return _indexes(
-        [],
-        False,
-        False,
-        *(_dependabot_indexes(read("HEAD", path)) for path in _DEPENDABOT_CONFIGS),
-    )
+    return _merge(*(_dependabot_indexes(read("HEAD", path)) for path in _DEPENDABOT_CONFIGS))
 
 
 def _repo_include(base: str, item: str) -> str | None:
@@ -140,43 +126,86 @@ def _included_mode(list_files: _ListFiles, path: str) -> str | None:
     return None if entries is None else next((mode for name, mode in entries if name == path), None)
 
 
-def for_directory(directory: str, configured: Indexes, read: _Read, list_files: _ListFiles) -> Indexes:
-    """`configured` with the indexes of the requirements files in `directory` at HEAD and each file they include.
+class _Effective(NamedTuple):
+    """What a requirements file and its includes leave for the next file pip reads."""
 
-    A file listing that fails, a requirements file or include that is not a blob, an include that is not a plain
-    repository path, or another package source trusts none. Any --extra-index-url keeps PyPI as a source.
+    index: str | None = None  # the effective --index-url, None when the files name none
+    extra: bool = False  # whether an --extra-index-url is given
+    trusted: frozenset[str] = frozenset()  # each trusted index the files name
+    other: bool = False  # whether a source or include cannot be read
+
+
+def _source(url: str, trusted: set[str]) -> str | None:
+    """The normalized `url` when it is PyPI or a trusted index, adding it to `trusted`; None otherwise."""
+    normalized = _normalized(url)
+    if normalized in _PYPI_INDEXES:
+        return normalized
+    if normalized in _upstream.TRUSTED_PYTHON_INDEXES:
+        trusted.add(normalized)
+        return normalized
+    return None
+
+
+def _effective_file(
+    path: str, configured: Indexes, read: _Read, list_files: _ListFiles, seen: frozenset[str]
+) -> _Effective:
+    """The effective indexes `path` and its includes leave, reading the includes in place as pip does."""
+    if configured.other or path in seen or len(seen) >= _MAX_REQUIREMENTS_FILES:
+        return _Effective(other=True)
+    options = _python.requirements_index_options(read("HEAD", path))
+    if options.unread:
+        return _Effective(other=True)
+    index: str | None = None
+    extra = False
+    trusted = set(configured.trusted)
+    for option in options.options:
+        if option.kind == _python.INCLUDE:
+            included = _repo_include(posixpath.dirname(path), option.value)
+            mode = None if included is None else _included_mode(list_files, included)
+            if included is None or mode is None or not _is_blob(mode):
+                return _Effective(other=True)
+            child = _effective_file(included, configured, read, list_files, seen | {path})
+            if child.other:
+                return child
+            if child.index is not None:
+                index = child.index
+            extra = extra or child.extra
+            trusted |= child.trusted
+            continue
+        url = _source(option.value, trusted)
+        if url is None:
+            return _Effective(other=True)
+        if option.kind == _python.EXTRA:
+            extra = True
+        else:
+            index = url
+    return _Effective(index, extra, frozenset(trusted))
+
+
+def _file_indexes(path: str, configured: Indexes, read: _Read, list_files: _ListFiles) -> Indexes:
+    """The indexes of one requirements file, with the index that replaces PyPI for that file alone."""
+    effective = _effective_file(path, configured, read, list_files, frozenset())
+    if effective.other:
+        return Indexes(other=True)
+    index = effective.index or ""
+    replaces = index if not effective.extra and index in _upstream.TRUSTED_PYTHON_INDEXES else ""
+    return Indexes(effective.trusted, False, replaces)
+
+
+def for_directory(directory: str, configured: Indexes, read: _Read, list_files: _ListFiles) -> DirectoryIndexes:
+    """The index facts of each requirements file in `directory` at HEAD and each file they include.
+
+    A file listing that fails, or a requirements file that is not a blob, trusts none in the directory. An include
+    that is not a plain repository path, an include cycle, or another package source leaves that file unread.
     """
     files = list_files(directory)
     if files is None:
-        return Indexes(other=True)
-    pending: list[str] = []
+        return DirectoryIndexes(Indexes(other=True))
+    found: dict[str, Indexes] = {}
     for path, mode in files:
         row = _ecosystems.file_kind(path)
         if row and row.parse is _python.requirements_txt:
             if not _is_blob(mode):
-                return Indexes(other=True)
-            pending.append(path)
-    seen: set[str] = set()
-    urls: list[str] = []
-    replaces = False
-    extra = False
-    while pending:
-        path = pending.pop()
-        if path in seen:
-            continue
-        seen.add(path)
-        options = _python.requirements_index_options(read("HEAD", path))
-        if options.unread or len(seen) > _MAX_REQUIREMENTS_FILES:
-            return Indexes(other=True)
-        for item in options.includes:
-            included = _repo_include(posixpath.dirname(path), item)
-            mode = None if included is None else _included_mode(list_files, included)
-            if included is None or mode is None or not _is_blob(mode):
-                return Indexes(other=True)
-            pending.append(included)
-        urls += options.urls
-        replaces = replaces or (
-            options.replaces_pypi and any(_normalized(url) in _upstream.TRUSTED_PYTHON_INDEXES for url in options.urls)
-        )
-        extra = extra or options.extra_index_url
-    return _indexes(urls, False, replaces, configured, extra=extra)
+                return DirectoryIndexes(Indexes(other=True))
+            found[path] = _file_indexes(path, configured, read, list_files)
+    return DirectoryIndexes(configured, tuple(sorted(found.items())))

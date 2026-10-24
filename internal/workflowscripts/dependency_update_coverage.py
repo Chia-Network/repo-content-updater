@@ -582,35 +582,55 @@ class Exact(NamedTuple):
     index: str = ""  # the host of the trusted index that serves it, or ""
 
 
-def _exact(change: _diff.Change, indexes: dict[str, _python_indexes.Indexes], hashed: tuple[str, ...]) -> Exact:
+def _exact(
+    change: _diff.Change,
+    indexes: dict[str, _python_indexes.DirectoryIndexes],
+    configured: _python_indexes.Indexes,
+    hashed: tuple[str, ...],
+) -> Exact:
     """The Target of one primary change, why it is not scanned, and any trusted index that serves it.
 
     An empty from version stays inconclusive. A range, wildcard, tag name, operator or moving major could resolve to a
-    tree other than the one installed, so it is never scanned. A pip change is "configured_index" when its directory
-    names a Python package index that is not trusted: the lookups read PyPI, which may not be where pip installs it.
-    Packages from the organization's configured package indexes are trusted and not scanned (AGENTS.md).
+    tree other than the one installed, so it is never scanned. A pip change is "configured_index" when a file that
+    pins it names a Python package index that is not trusted: the lookups read PyPI, which may not be where pip
+    installs it. Packages from the organization's configured package indexes are trusted and not scanned (AGENTS.md).
     """
     old = _versions.exact_body(change.old, mode=change.ecosystem)
     new = _versions.exact_body(change.new, mode=change.ecosystem)
     target = Target(package=change.name, old=old or change.old, new=new or change.new)
     if not (new and (old or not change.old)):
         return Exact(change, target, "unresolved")
-    found = indexes.get(change.dir, _python_indexes.Indexes())
-    if change.ecosystem != "pip" or not found.trusted:
-        return Exact(change, target, "configured_index" if change.ecosystem == "pip" and found.other else "")
-    locked = _ecosystems.locked(
+    if change.ecosystem != "pip":
+        return Exact(change, target)
+    found = indexes.get(change.dir, _python_indexes.DirectoryIndexes(configured))
+    if found.configured.other:
+        return Exact(change, target, "configured_index")
+    occurrences = _ecosystems.locked_occurrences(
         change.ecosystem, change.dir, change.name, new, lambda path: _git_text("HEAD", path), hashed
     )
-    host = _upstream.trusted_python_index(change.name, new, locked, found.trusted, found.replaces_pypi)
+    if occurrences:
+        facts = tuple(found.for_path(path) for path, _recorded in occurrences)
+    elif any(fact.other for _path, fact in found.files):
+        return Exact(change, target, "configured_index")
+    else:
+        facts = ()
+    if any(fact.other for fact in facts):
+        return Exact(change, target, "configured_index")
+    trusted = frozenset().union(*(fact.trusted for fact in facts)) if facts else configured.trusted
+    locked = tuple(_upstream.Locked(recorded, fact.index) for (_path, recorded), fact in zip(occurrences, facts))
+    host = _upstream.trusted_python_index(change.name, new, locked, trusted)
     return Exact(change, target, index=host)
 
 
 def _exact_all(
-    changes: list[_diff.Change], indexes: dict[str, _python_indexes.Indexes], hashed: tuple[str, ...]
+    changes: list[_diff.Change],
+    indexes: dict[str, _python_indexes.DirectoryIndexes],
+    configured: _python_indexes.Indexes,
+    hashed: tuple[str, ...],
 ) -> list[Exact]:
     """`_exact` for each change; the index lookups run concurrently."""
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
-        return list(pool.map(lambda change: _exact(change, indexes, hashed), changes))
+        return list(pool.map(lambda change: _exact(change, indexes, configured, hashed), changes))
 
 
 def _targets(exact: list[Exact]) -> list[tuple[_diff.Change, Target, str]]:
@@ -787,7 +807,7 @@ def main() -> None:
     indexes = {
         directory: _python_indexes.for_directory(directory, configured, _git_text, _git_files) for directory in pip_dirs
     }
-    exact = _exact_all(changes, indexes, plan.hashed)
+    exact = _exact_all(changes, indexes, configured, plan.hashed)
     trusted = tuple({**item.change._asdict(), "index": item.index} for item in exact if item.index)
     exact = [item for item in exact if not item.index]
     work = Path(".dcr-dependency-scans")

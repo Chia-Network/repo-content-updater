@@ -468,13 +468,16 @@ class TrustedPythonIndexTest(unittest.TestCase):
         configured: frozenset[str] = frozenset({_CHIA}),
         pages: dict[str, bytes] | None = None,
         downloads: dict[str, bytes | None] | None = None,
-        replaces_pypi: bool = False,
+        replaces: str = "",
         name: str = "ChiaPos",
     ) -> str:
         urls: list[str] = []
         fetched = {f"{_CHIA}chiapos/": _PAGE} if pages is None else pages
         served = {_WHEEL_URL: _WHEEL, _SDIST_URL: _SDIST} if downloads is None else downloads
         downloaded: list[str] = []
+        facts = tuple(upstream.Locked(hashes) for hashes in locked)
+        if replaces:
+            facts += (upstream.Locked("", replaces),)
 
         def fetch(url: str, **_kwargs: object) -> bytes | None:
             urls.append(url)
@@ -486,7 +489,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
             return _sha(body) if isinstance(body, bytes) and host == _HOST else None
 
         with patch.object(upstream, "_fetch", fetch), patch.object(upstream, "_sha256_download", download):
-            found = upstream.trusted_python_index(name, version, locked, configured, replaces_pypi)
+            found = upstream.trusted_python_index(name, version, facts, configured)
         self.urls = urls
         self.downloaded = downloaded
         return found
@@ -512,31 +515,32 @@ class TrustedPythonIndexTest(unittest.TestCase):
 
     def test_an_off_host_file_link_is_not_downloaded(self) -> None:
         page = b'<a href="https://example.com/chiapos-2.0.4.tar.gz">x</a>\n'
-        self.assertEqual(
-            self.trusted("2.0.4", (f"sha256:{_sha(_SDIST)}",), pages={f"{_CHIA}chiapos/": page}), ""
-        )
+        self.assertEqual(self.trusted("2.0.4", (f"sha256:{_sha(_SDIST)}",), pages={f"{_CHIA}chiapos/": page}), "")
         self.assertEqual(self.downloaded, [])
 
-    def test_an_unhashed_pin_is_trusted_only_when_the_index_replaces_pypi(self) -> None:
+    def test_an_unhashed_pin_is_trusted_only_when_its_file_replaces_pypi(self) -> None:
         self.assertEqual(self.trusted("2.0.4"), "")
-        self.assertEqual(self.trusted("2.0.4", replaces_pypi=True), _HOST)
-        self.assertEqual(self.trusted("2.0.4", ("",), replaces_pypi=True), _HOST)
+        self.assertEqual(self.trusted("2.0.4", replaces=_CHIA), _HOST)
         self.assertEqual(self.trusted("2.0.4", ("",)), "")
+        self.assertEqual(self.trusted("2.0.4", ("",), replaces=_CHIA), "")
+
+    def test_every_unhashed_occurrence_must_replace_pypi(self) -> None:
+        facts = (upstream.Locked("", _CHIA), upstream.Locked("", ""))
+        with patch.object(upstream, "_fetch", lambda *_args, **_kwargs: _PAGE):
+            self.assertEqual(upstream.trusted_python_index("ChiaPos", "2.0.4", facts, frozenset({_CHIA})), "")
 
     def test_a_version_the_index_does_not_serve_is_not_trusted(self) -> None:
-        self.assertEqual(self.trusted("2.0.5", replaces_pypi=True), "")
-        self.assertEqual(self.trusted("2.0.4", replaces_pypi=True, pages={}), "")
+        self.assertEqual(self.trusted("2.0.5", replaces=_CHIA), "")
+        self.assertEqual(self.trusted("2.0.4", replaces=_CHIA, pages={}), "")
 
     def test_only_a_listed_index_is_ever_read(self) -> None:
         evil = "https://pypi.chia.net.evil/simple/"
         self.assertEqual(
-            self.trusted(
-                "2.0.4", configured=frozenset({evil}), pages={f"{evil}chiapos/": _PAGE}, replaces_pypi=True
-            ),
+            self.trusted("2.0.4", configured=frozenset({evil}), pages={f"{evil}chiapos/": _PAGE}, replaces=_CHIA),
             "",
         )
         self.assertEqual(self.urls, [])
-        self.assertEqual(self.trusted("2.0.4", configured=frozenset(), replaces_pypi=True), "")
+        self.assertEqual(self.trusted("2.0.4", configured=frozenset(), replaces=_CHIA), "")
         self.assertEqual(self.urls, [])
 
     def test_versions_compare_in_canonical_pep440_form(self) -> None:
@@ -561,8 +565,8 @@ class TrustedPythonIndexTest(unittest.TestCase):
     def test_a_post_release_does_not_match_the_plain_version(self) -> None:
         page = b'<a href="../../files/chiapos-2.0.4.post0.tar.gz">s</a>\n'
         page_url = f"{_CHIA}chiapos/"
-        self.assertEqual(self.trusted("2.0.4", replaces_pypi=True, pages={page_url: page}), "")
-        self.assertEqual(self.trusted("2.0.4.post0", replaces_pypi=True, pages={page_url: page}), _HOST)
+        self.assertEqual(self.trusted("2.0.4", replaces=_CHIA, pages={page_url: page}), "")
+        self.assertEqual(self.trusted("2.0.4.post0", replaces=_CHIA, pages={page_url: page}), _HOST)
 
     def _redirect_result(self, answers: dict[str, tuple[int, str, bytes]], version: str) -> str:
         requested: list[str] = []
@@ -576,7 +580,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
             patch.object(upstream, "_sha256_download", lambda _url, _host: _sha(_SDIST)),
         ):
             found = upstream.trusted_python_index(
-                "ChiaPos", version, (f"sha256:{_sha(_SDIST)}",), frozenset({_CHIA})
+                "ChiaPos", version, (upstream.Locked(f"sha256:{_sha(_SDIST)}"),), frozenset({_CHIA})
             )
         self.requested = requested
         return found
