@@ -326,7 +326,7 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 
 	for _, write := range planned {
 		written := writtenPaths(write.fileinfo)
-		if err := removeConfined(repoDir(repoName), written[1:]); err != nil {
+		if err := removeConfined(repoDir(repoName), removedPaths(write.fileinfo)); err != nil {
 			return err
 		}
 		repoPath, err := managedWritePath(repoDir(repoName), write.fileinfo.RepoPath)
