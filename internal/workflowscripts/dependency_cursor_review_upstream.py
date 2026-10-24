@@ -446,8 +446,8 @@ def trusted_python_index(
         hosts = _index_hosts(index)
         if index in required:
             served.add(index)
-        if wanted and _serves_wanted(files, hosts, wanted, budget):
-            matched = matched or index
+        if wanted and not matched and _serves_wanted(files, hosts, wanted, budget):
+            matched = index
     if required - served or (wanted and not matched):
         return ""
     chosen = next(index for index in TRUSTED_PYTHON_INDEXES if index in required) if required else matched
