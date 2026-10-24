@@ -18,12 +18,6 @@ import dependency_update_coverage as coverage
 _HERE = Path(__file__).resolve().parent
 _WORKFLOW = _HERE.parents[1] / "templates" / "dependency-cursor-review.yml"
 _TARGET_TEXT = "outside the checkout\n"
-_UPDATE = {
-    "packageName": "left-pad",
-    "fromVersion": "1.2.3",
-    "toVersion": "1.2.4",
-    "upstreamRepo": "left-pad/left-pad",
-}
 
 
 def _step_script(step: str) -> str:
@@ -64,7 +58,6 @@ class _Checkout(unittest.TestCase):
 
 class CoverageOutputTest(_Checkout):
     def run_coverage(self) -> None:
-        (self.out / "dependency_updates.json").write_text(json.dumps([_UPDATE]), encoding="utf-8")
         with (
             patch.dict(os.environ, self.env(GITHUB_OUTPUT=str(self.outside / "github_output.txt"))),
             patch.object(coverage, "_clone", lambda *_args: False),
@@ -96,9 +89,8 @@ class CoverageOutputTest(_Checkout):
 
     def test_isolated_run_does_not_import_from_the_checkout(self) -> None:
         """python3 -I keeps the PR-head cwd off sys.path; siblings come from the script's own directory."""
-        Path("dependency_manifest_diff.py").write_text("raise SystemExit('PR head imported')\n", encoding="utf-8")
-        unlinked = {**_UPDATE, "upstreamRepo": ""}
-        (self.out / "dependency_updates.json").write_text(json.dumps([unlinked]), encoding="utf-8")
+        for name in ("dependency_manifest_diff.py", "dependency_cursor_review_ecosystems.py"):
+            Path(name).write_text("raise SystemExit('PR head imported')\n", encoding="utf-8")
         proc = subprocess.run(
             [sys.executable, "-I", str(_HERE / "dependency_update_coverage.py")],
             check=False,
@@ -108,7 +100,8 @@ class CoverageOutputTest(_Checkout):
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         report = json.loads((self.out / "malware_scan_report.json").read_text(encoding="utf-8"))
-        self.assertEqual(report["not_scanned_reason"], "no_upstream_link")
+        self.assertEqual(report["not_scanned_reason"], "unresolved")
+        self.assertEqual(report["path"], "pull request diff")
 
 
 class ScanJobOutputTest(_Checkout):
@@ -124,13 +117,12 @@ class ScanJobOutputTest(_Checkout):
     def test_dependabot_context_is_written_to_the_output_dir(self) -> None:
         script = _HERE / "dependency-cursor-review-dependabot-context.js"
         subprocess.run(
-            ["node", "-e", f"require({json.dumps(str(script))})({{core: {{warning() {{}}, setOutput() {{}}}}}})"],
+            ["node", "-e", f"require({json.dumps(str(script))})()"],
             check=True,
             capture_output=True,
-            env=self.env(PR_TITLE="Bump left-pad from 1.2.3 to 1.2.4"),
+            env=self.env(PR_BODY="Bumps left-pad from 1.2.3 to 1.2.4."),
         )
         self.assert_only_in_out(
-            "dependency_updates.json",
             "dependabot_comment_context.json",
             "dependabot_release_notes.md",
             "dependabot_commits.md",

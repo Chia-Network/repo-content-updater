@@ -21,6 +21,7 @@ class CombineCompleteTest(unittest.TestCase):
         malware: str | None,
         compatibility: str | None,
         report: dict | None = None,
+        warn_only: str = "0",
     ) -> dict:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -35,6 +36,9 @@ class CombineCompleteTest(unittest.TestCase):
                     "unread": [],
                     "verdict_token_in_tree": False,
                     "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+                    "policy_warnings": [],
+                    "unchecked_upgrades": [],
+                    "unparsed_locks": [],
                 }
             payload = (json.dumps(report) + "\n").encode()
             report_path = root / "sealed-scan-report.json"
@@ -45,8 +49,10 @@ class CombineCompleteTest(unittest.TestCase):
             env["DCR_COMPAT_JSON"] = str(root / "cursor_output_compatibility.json")
             env["DCR_COMBINED_JSON"] = str(root / "cursor_output.json")
             env["MALWARE_SCAN_REPORT_SHA256"] = hashlib.sha256(payload).hexdigest()
+            env["MALWARE_WARN_ONLY"] = warn_only
             proc = subprocess.run(
                 [sys.executable, "-I", str(_COMBINE)],
+                check=False,
                 cwd=root,
                 env=env,
                 capture_output=True,
@@ -130,7 +136,7 @@ class CombineCompleteTest(unittest.TestCase):
             "tag_spellings_disagree",
             "from_ref_unresolved",
             "to_ref_unresolved",
-            "untrusted_version_text",
+            "no_upstream_link",
             "tag_resolution_failed",
             "not_scanned",
             "not_conclusive",
@@ -465,7 +471,7 @@ class CombineCompleteTest(unittest.TestCase):
             "tag_spellings_disagree",
             "from_ref_unresolved",
             "to_ref_unresolved",
-            "untrusted_version_text",
+            "no_upstream_link",
             "tag_resolution_failed",
         )
         for reason in reasons:
@@ -559,6 +565,9 @@ class CombineCompleteTest(unittest.TestCase):
                 "unread": [],
                 "verdict_token_in_tree": False,
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": hits},
+                "policy_warnings": [],
+                "unchecked_upgrades": [],
+                "unparsed_locks": [],
             },
         )
         self.assertIn("**Verdict: benign**", written["result"])
@@ -585,6 +594,9 @@ class CombineCompleteTest(unittest.TestCase):
                 "unread": [],
                 "verdict_token_in_tree": False,
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+                "policy_warnings": [],
+                "unchecked_upgrades": [],
+                "unparsed_locks": [],
             },
         )
         body = written["compatibility_review"]["result"]

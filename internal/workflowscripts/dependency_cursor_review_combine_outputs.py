@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import malware_verdict_formatter as formatter
 
 _REPORT_SHA256_ENV = "MALWARE_SCAN_REPORT_SHA256"
+_WARN_ONLY_ENV = "MALWARE_WARN_ONLY"
 _TEXT_KEYS = ("result", "output", "text", "message")
 _FAILED_PREFIXES = ("Error: agent exited", "CURSOR_API_KEY is not set", "No Cursor output generated")
 
@@ -107,6 +108,11 @@ def _sealed_report() -> object:
     return report if isinstance(report, dict) else None
 
 
+def _warn_only() -> bool:
+    """The one read of MALWARE_WARN_ONLY, a policy input to decide(). Unset keeps the fleet default, warn-only."""
+    return os.environ.get(_WARN_ONLY_ENV, "").strip() not in {"0", "false", "False", "no"}
+
+
 class _Inputs(NamedTuple):
     malware: _AgentOutput
     compatibility: _AgentOutput
@@ -123,6 +129,7 @@ def _load_and_decide() -> _Inputs:
         malware.text,
         compatibility.final or compatibility.text,
         agent_final_text=malware.final or malware.text,
+        warn_only=_warn_only(),
     )
     return _Inputs(malware, compatibility, published)
 

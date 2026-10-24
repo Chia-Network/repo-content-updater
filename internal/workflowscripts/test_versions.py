@@ -1,8 +1,7 @@
-"""Release-tag spellings, version jumps, the npm registry grammar and the command line."""
+"""Per-ecosystem exact versions, moving action refs, release-tag spellings, version jumps and the command line."""
 
 from __future__ import annotations
 
-import re
 import subprocess
 import sys
 import unittest
@@ -10,7 +9,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import dependency_cursor_review_versions as versions
-from dependency_manifest_npm import _FOLD_SPEC_RE, _TARBALL_RE
 from upstream_malware_scan_case import _commit_file, _git, _init_repo
 
 _SCRIPT = Path(__file__).resolve().parent / "dependency_cursor_review_versions.py"
@@ -132,7 +130,7 @@ class VersionJumpTest(unittest.TestCase):
                 self.assertFalse(versions.version_jump(frm, to))
 
     def test_versions_the_scan_does_not_read_are_never_a_jump(self) -> None:
-        # The coverage gate scans only exact Dependabot versions, and an empty from version has no from tag.
+        # The coverage gate scans only exact versions, and an empty from version has no from tag.
         for frm, to in (
             ("", "2.0.0"),
             ("1", "2.0.0"),
@@ -145,23 +143,58 @@ class VersionJumpTest(unittest.TestCase):
                 self.assertFalse(versions.version_jump(frm, to))
 
 
-class NpmSemverTest(unittest.TestCase):
+class ExactVersionTest(unittest.TestCase):
+    def test_each_ecosystem_reads_its_own_exact_versions(self) -> None:
+        cases = {
+            "pip": {
+                "==2.31.0": "2.31.0",
+                "===2.0": "2.0",
+                "1.2.3rc1": "1.2.3rc1",
+                "1.2.3.post1": "1.2.3.post1",
+                "1.2.3.dev0": "1.2.3.dev0",
+                "V1.2": "1.2",
+                "1": "1",
+            },
+            "npm": {"1.2.3": "1.2.3", "v1.2.3": "1.2.3", "1.2.3-rc.1": "1.2.3-rc.1", "1.2.3+build.5": "1.2.3+build.5"},
+            "go": {"v1.8.1": "1.8.1", "v0.0.0-20240101000000-abcdef123456": "0.0.0-20240101000000-abcdef123456"},
+            "github-actions": {"v4.1.2": "4.1.2", "4.1.2": "4.1.2"},
+        }
+        for mode, exact in cases.items():
+            for token, body in exact.items():
+                with self.subTest(mode=mode, token=token):
+                    self.assertEqual(versions._exact_body(token, mode=mode), body)
+
+    def test_ranges_wildcards_and_moving_majors_are_never_exact(self) -> None:
+        cases = {
+            "pip": (">=2.31", "~=2.31", "!=1.0", "1.*", "1.x", "latest", ""),
+            "npm": ("^1.2.3", "~1.2.3", "1.2", "1", "1.x", "1.2.3.4", "==1.2.3", ">=1.0.0", "*", ""),
+            "go": ("v1", "1", "latest", ""),
+            "github-actions": ("v4", "v4.1", "main", "4", ""),
+            "docker": ("1.2.3",),
+            "terraform": ("5.31.0",),
+        }
+        for mode, tokens in cases.items():
+            for token in tokens:
+                with self.subTest(mode=mode, token=token):
+                    self.assertEqual(versions._exact_body(token, mode=mode), "")
+
     def test_only_ascii_digits(self) -> None:
         for digits in ("١.٢.٣", "１.２.３", "1.2.٣", "१.0.0"):
-            with self.subTest(version=digits):
-                self.assertIsNone(re.fullmatch(versions.NPM_SEMVER, digits))
-                self.assertIsNone(_FOLD_SPEC_RE.fullmatch(f"^{digits}"))
-                self.assertIsNone(_TARBALL_RE.fullmatch(f"https://registry.npmjs.org/a/-/a-{digits}.tgz"))
-                for mode in ("pin", "spec", "dependabot"):
-                    self.assertEqual(versions._exact_body(digits, mode=mode), "", mode)
+            for mode in ("pip", "npm", "go", "github-actions"):
+                with self.subTest(version=digits, mode=mode):
+                    self.assertEqual(versions._exact_body(digits, mode=mode), "")
 
-    def test_registry_versions(self) -> None:
-        for version in ("1.2.3", "0.0.0-rc.1", "1.2.3+build.5", "10.20.30-alpha-1"):
-            with self.subTest(version=version):
-                self.assertIsNotNone(re.fullmatch(versions.NPM_SEMVER, version))
-        for version in ("1.2", "1.2.3.4", "v1.2.3", "1.2.3-"):
-            with self.subTest(version=version):
-                self.assertIsNone(re.fullmatch(versions.NPM_SEMVER, version))
+
+class MovingRefTest(unittest.TestCase):
+    def test_a_major_or_major_minor_tag_or_a_branch_moves(self) -> None:
+        for ref in ("v4", "v4.1", "4", "4.1", "main", "releases/v1", "V5.0"):
+            with self.subTest(ref=ref):
+                self.assertTrue(versions.moving_ref(ref))
+
+    def test_a_full_release_tag_or_a_commit_sha_does_not_move(self) -> None:
+        for ref in ("v4.1.2", "4.1.2", "v4.1.2-beta.1", "0123456789abcdef0123456789abcdef01234567"):
+            with self.subTest(ref=ref):
+                self.assertFalse(versions.moving_ref(ref))
 
 
 class CommandLineTest(_TagRepo):

@@ -1,7 +1,10 @@
-"""Scan every Dependabot update.
+"""Scan every primary dependency change of a pull request.
 
-A dependency is covered only when its scan is conclusive and both from_tag and
-to_tag are set. Anything else makes the group inconclusive.
+The manifest diff (dependency_manifest_diff.plan) is the update list. A
+primary change is scanned unless its ecosystem's policy warns; a dependency is
+covered only when its scan is conclusive and both from_tag and to_tag are set.
+Anything else makes the group inconclusive. Policy warnings, other upgraded
+packages and unparsed lockfiles are disclosed in the report and the summary.
 """
 
 from __future__ import annotations
@@ -14,37 +17,56 @@ import shutil
 import subprocess
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import dependency_cursor_review_ecosystems as _ecosystems
 import dependency_cursor_review_versions as _versions
 import dependency_manifest_diff as _diff
+from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN
 
-_REPO_RE = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
+# Registry lookups run at once; each waits on the network, not on the others.
+_LOOKUPS = 8
 
 
-def scannable(update: dict) -> bool:
-    """An explicit GitHub repository and an exact destination version. An empty from stays inconclusive.
+class Target(NamedTuple):
+    """What one scan record is about: a primary change, or a path the diff could not account for."""
 
-    Both versions are read in the "dependabot" mode: a range, wildcard, tag
-    name, operator or bare major could resolve to a tree other than the one installed.
-    """
-    repo = str(update.get("upstreamRepo") or "")
-    from_version = str(update.get("fromVersion") or "")
-    to_version = str(update.get("toVersion") or "")
-    if not _REPO_RE.fullmatch(repo) or not _versions._exact_body(to_version, mode="dependabot"):
-        return False
-    return not from_version or bool(_versions._exact_body(from_version, mode="dependabot"))
+    package: str = ""
+    path: str = ""
+    repo: str = ""
+    old: str = ""
+    new: str = ""
 
 
-def _label(update: dict) -> str:
-    return str(update.get("packageName") or update.get("upstreamRepo") or "dependency")
+class Disclosure(NamedTuple):
+    """The changes the report lists and does not scan. Its fields are DISCLOSED_KEYS."""
+
+    policy_warnings: tuple[dict, ...] = ()
+    unchecked_upgrades: tuple[dict, ...] = ()
+    unparsed_locks: tuple[str, ...] = ()
 
 
-def uncovered(update: dict, reason: str) -> dict:
-    name = _label(update)
+_NONE_DISCLOSED = Disclosure()
+
+
+def _fields(target: Target) -> dict[str, str]:
+    """The record fields that name a target."""
+    return {
+        "package_name": target.package,
+        "path": target.path,
+        "upstream_repo": target.repo,
+        "from_version": target.old,
+        "to_version": target.new,
+    }
+
+
+def uncovered(target: Target, reason: str) -> dict:
+    fields = _fields(target)
     return {
         "status": "not_scanned",
         "scan_conclusive": False,
@@ -60,21 +82,14 @@ def uncovered(update: dict, reason: str) -> dict:
         "materialized_count": 0,
         "filtered_count": 0,
         "changed_files": [],
-        "errors": [f"{name}: {reason}"],
+        "errors": [f"{_record_label(fields)}: {reason}"],
         "findings": {key: [] for key in _FINDING_KEYS},
-        "package_name": str(update.get("packageName") or ""),
-        "upstream_repo": str(update.get("upstreamRepo") or ""),
-        "from_version": str(update.get("fromVersion") or ""),
-        "to_version": str(update.get("toVersion") or ""),
+        **fields,
     }
 
 
-def _tag(update: dict, report: dict) -> dict:
-    tagged = dict(report)
-    tagged["package_name"] = str(update.get("packageName") or tagged.get("package_name") or "")
-    tagged["upstream_repo"] = str(update.get("upstreamRepo") or tagged.get("upstream_repo") or "")
-    tagged["from_version"] = str(update.get("fromVersion") or "")
-    tagged["to_version"] = str(update.get("toVersion") or "")
+def _tag(target: Target, report: dict) -> dict:
+    tagged = {**report, **_fields(target)}
     if tagged.get("scan_conclusive") is not True:
         tagged["scan_conclusive"] = False
     return tagged
@@ -133,9 +148,10 @@ def _candidate(record: dict) -> dict:
     }
 
 
-def _stamp(report: dict, records: list[dict], target: tuple[str, str, str] | None) -> dict:
+def _stamp(report: dict, records: list[dict], target: tuple[str, str, str] | None, disclosed: Disclosure) -> dict:
     report["agent_candidates"] = [_candidate(record) for record in records]
     report["agent_target"] = list(target) if target else None
+    report.update({key: list(items) for key, items in zip(DISCLOSED_KEYS, disclosed, strict=True)})
     return report
 
 
@@ -186,25 +202,26 @@ def _unread_items(records: list[dict]) -> list[dict]:
     return found
 
 
-def _warn_only(records: list[dict]) -> bool:
-    """The MALWARE_WARN_ONLY policy each scan recorded. Strict when no scan ran or the records disagree."""
-    recorded = [record["warn_only"] for record in records if "warn_only" in record]
-    return bool(recorded) and all(value is True for value in recorded)
+def aggregate(records: list[dict], disclosed: Disclosure = _NONE_DISCLOSED) -> dict:
+    """Covered only when every record was scanned conclusively.
 
-
-def aggregate(records: list[dict]) -> dict:
-    """Covered only when every record was scanned conclusively."""
+    With no record, a change that was only disclosed (a policy warning, an
+    unchecked upgrade or an unparsed lockfile) is NOTHING_TO_SCAN. With
+    nothing at all, coverage is incomplete.
+    """
     target = agent_target(records)
     if len(records) == 1:
-        return _stamp(_apply_coverage(records[0]), records, target)
+        return _stamp(_apply_coverage(records[0]), records, target, disclosed)
     if not records:
-        return _stamp(uncovered({}, "incomplete_coverage"), records, None)
+        if any(disclosed):
+            return _stamp({**uncovered(Target(), NOTHING_TO_SCAN), "errors": []}, records, None, disclosed)
+        return _stamp(uncovered(Target(), "incomplete_coverage"), records, None, disclosed)
 
     findings = {key: [] for key in _FINDING_KEYS}
     errors: list[str] = []
     changed: list[str] = []
     for record in records:
-        name = str(record.get("package_name") or record.get("upstream_repo") or "dependency")
+        name = _record_label(record)
         if not _covered(record):
             reason = str(record.get("not_scanned_reason") or "not_conclusive")
             errors.append(f"{name}: {reason}")
@@ -233,7 +250,6 @@ def aggregate(records: list[dict]) -> dict:
     return _stamp(
         {
             "status": status,
-            "warn_only": _warn_only(records),
             "scan_conclusive": conclusive,
             "not_scanned_reason": "" if conclusive else "incomplete_coverage",
             "verdict_token_in_tree": any(record.get("verdict_token_in_tree") is True for record in records),
@@ -268,11 +284,43 @@ def aggregate(records: list[dict]) -> dict:
         },
         records,
         target,
+        disclosed,
     )
 
 
+def _record_label(record: dict) -> str:
+    return str(record.get("package_name") or record.get("path") or record.get("upstream_repo") or "dependency")
+
+
+def _code(text: object) -> str:
+    """Upstream text as one inline code span. Backticks and line breaks are dropped."""
+    return "`" + " ".join(str(text).replace("`", "").split()) + "`"
+
+
+def _change(item: dict) -> str:
+    name, old, new = item.get("name"), item.get("old") or "?", item.get("new") or "?"
+    return f"{item.get('ecosystem')} {_code(f'{name} {old} -> {new}')} in {_code(item.get('dir'))}"
+
+
+def _disclosure(report: dict) -> list[str]:
+    lines = [
+        f"- Not scanned by policy: {_change(item)} (`{item.get('reason')}`)"
+        for item in report.get("policy_warnings") or []
+    ]
+    unchecked = report.get("unchecked_upgrades") or []
+    if unchecked:
+        noun, verb = ("package", "was") if len(unchecked) == 1 else ("packages", "were")
+        lines.append(f"- {len(unchecked)} other {noun} {verb} upgraded and {verb} not checked by this run:")
+        lines.extend(f"  - {_change(item)}" for item in unchecked)
+    locks = report.get("unparsed_locks") or []
+    if locks:
+        lines.append("- These lockfiles were not parsed, so the packages they changed were not checked:")
+        lines.extend(f"  - {_code(path)}" for path in locks)
+    return lines
+
+
 def render_summary(report: dict, records: list[dict]) -> str:
-    lines = ["## Malware Scan Summary", "", f"- Status: **{report.get('status') or 'not_scanned'}**"]
+    lines = ["## Malware Scan Summary", ""]
     if report.get("scan_conclusive") is True:
         lines.append("- Scan coverage: **conclusive**.")
     else:
@@ -281,16 +329,17 @@ def render_summary(report: dict, records: list[dict]) -> str:
         lines.append("- A dependency is covered only when its scan is conclusive.")
         lines.append("- This is not a benign result.")
     for record in records:
-        name = record.get("package_name") or record.get("upstream_repo") or "dependency"
         span = f"{record.get('from_version') or '?'} -> {record.get('to_version') or '?'}"
+        label = _code(f"{_record_label(record)} {span}") if record.get("package_name") else _code(_record_label(record))
         repo = record.get("upstream_repo") or "no repository"
         if _covered(record):
-            lines.append(f"- {name} {span} ({repo}): covered")
+            lines.append(f"- {label} ({repo}): covered")
         else:
             reason = record.get("not_scanned_reason") or "not_conclusive"
-            lines.append(f"- {name} {span} ({repo}): not covered ({reason})")
+            lines.append(f"- {label} ({repo}): not covered ({reason})")
+    lines.extend(_disclosure(report))
     if not any_read(report):
-        lines.append("- This status is inconclusive. It is not evidence the package is benign.")
+        lines.append("- No release tree was read. This is not evidence the package is benign.")
     return "\n".join(lines) + "\n"
 
 
@@ -411,111 +460,28 @@ def _changed_paths(base: str) -> list[tuple[str, str, str]] | None:
     return changed
 
 
-# Lockfiles that can witness the version a package.json range resolves to.
-_RANGE_WITNESS_LOCKS = (("package-lock.json", "json"), ("npm-shrinkwrap.json", "json"), ("yarn.lock", "yarn"))
+def _plan(token: str = "") -> _diff.Plan | None:
+    """The diff's Plan, or None when the base is unnamed or unreadable.
 
-
-def _head_locked_versions(path: str) -> dict[str, frozenset[str]]:
-    """Versions the npm or Yarn locks beside a package.json or lockfile path in HEAD resolve each spec to.
-
-    A lockfile is beside itself, so the root specs a lock records are
-    witnessed by that lock in HEAD. Only the top-level `node_modules/<name>`
-    copy or the Yarn stanza for the exact spec witnesses a range, so a nested,
-    workspace or other-range copy never confirms a bump.
-    """
-    if Path(path).name not in {"package.json", *_diff.TRANSITIVE_LOCK_NAMES}:
-        return {}
-    found: dict[str, frozenset[str]] = {}
-    for lock_name, kind in _RANGE_WITNESS_LOCKS:
-        lock_path = str(Path(path).with_name(lock_name))
-        for name, versions in _diff._locked_versions(kind, _git_text("HEAD", lock_path)).items():
-            found[name] = found.get(name, frozenset()) | versions
-    return found
-
-
-def manifest_gaps(updates: list[dict], token: str = "") -> list[dict]:
-    """Direct manifest bumps missing from the parsed list.
-
-    A base that is unnamed or unreadable is itself unresolved: the workflow
-    only runs this for a pull request, so a missing base never means "no
-    changes". An entry is explained only when its package moved to the
-    listed version. Anything else in the file stays unresolved under the
-    path. A listed package with that path as its name does not hide the
-    path. A dependency with more than one unexplained entry is named as well.
-
-    An opaque lockfile, a deleted path, and any changed path this grammar does
-    not parse are unresolved under their path; a changed path that is a
-    manifest we have no parser for (see _diff._unparsed_manifest: a workflow,
-    composite action, Dockerfile, Cargo, Swift, Terraform or NuGet file) is
-    reported as `unparsed_manifest`. A shared `^` or `~`
-    package.json bump is explained only when a lockfile beside it in HEAD
-    resolves the new spec to the listed version: the top-level npm copy, or
-    the Yarn stanza for that exact descriptor. Unlisted names in a npm
-    or Yarn lock are transitive residue when every listed name in that lock
-    moved to its listed version and each unlisted entry was bumped, added or
-    removed as a registry tarball.
+    The workflow only runs this for a pull request, so a missing base never means "no changes".
     """
     base = _base_commit(token)
-    if not base:
-        return [uncovered({"packageName": "manifest-diff"}, "unresolved")]
-    listed = {str(item.get("packageName") or "").strip() for item in updates}
-    changed = _changed_paths(base)
-    if changed is None:
-        return [uncovered({"packageName": "manifest-diff"}, "unresolved")]
-    gaps: list[dict] = []
-    seen = set(listed)
-    for old_path, path, status in changed:
-        kind = _diff._manifest_kind(path)
-        if status in {"D", "T"}:
-            for label in dict.fromkeys((old_path, path)):
-                gaps.append(uncovered({"packageName": label}, "unresolved"))
-            continue
-        if not kind or kind == "opaque":
-            reason = "unparsed_manifest" if _diff._unparsed_manifest(path) else "unresolved"
-            for label in dict.fromkeys((old_path, path)):
-                gaps.append(uncovered({"packageName": label}, reason))
-            continue
-        before = _git_text(base, old_path)
-        after = _git_text("HEAD", path)
-        names = _diff._changed_names(kind, before, after)
-        locked = _head_locked_versions(path)
-        explained = names is not None and _diff._entries_explain(kind, before, after, updates, locked)
-        file_unresolved = names is None or (before != after and not explained)
-        if (
-            Path(path).name in _diff.TRANSITIVE_LOCK_NAMES
-            and names
-            and _diff._lock_covers_listed(kind, before, after, updates, names, locked)
-        ):
-            continue
-        if file_unresolved and (names is None or _diff._names_listed(kind, names, listed)):
-            gaps.append(uncovered({"packageName": path}, "unresolved"))
-        elif names:
-            for label in sorted(names):
-                if _diff._names_listed(kind, {label}, seen):
-                    continue
-                gaps.append(uncovered({"packageName": label}, "unresolved"))
-                seen.add(label)
-        if names is not None and file_unresolved:
-            for label in sorted(_diff._multi_entry_names(kind, before, after, updates, locked)):
-                if _diff._names_listed(kind, {label}, seen):
-                    continue
-                gaps.append(uncovered({"packageName": label}, "unresolved"))
-                seen.add(label)
-    return gaps
+    changed = _changed_paths(base) if base else None
+    return None if changed is None else _diff.plan(changed, _git_text, base)
 
 
-def _load_updates(path: Path) -> list[dict]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    if not isinstance(payload, list):
-        return []
-    return [item for item in payload if isinstance(item, dict)]
-
-
-def _has_upstream_link(updates: list[dict]) -> bool:
-    return any(_REPO_RE.fullmatch(str(item.get("upstreamRepo") or "")) for item in updates)
+def _split(plan: _diff.Plan) -> tuple[list[_diff.Change], Disclosure]:
+    """The primary changes to scan, and the Disclosure of the rest."""
+    scanned: list[_diff.Change] = []
+    warnings: list[dict] = []
+    for change in plan.primary:
+        reason = _ecosystems.warn_reason(change.ecosystem, change.old, change.new)
+        if reason:
+            warnings.append({**change._asdict(), "reason": reason})
+        else:
+            scanned.append(change)
+    unchecked = tuple(change._asdict() for change in plan.unchecked)
+    return scanned, Disclosure(tuple(warnings), unchecked, plan.unparsed_locks)
 
 
 def remove_entry(path: Path) -> None:
@@ -543,18 +509,45 @@ def _clone(repo: str, dest: Path) -> bool:
     return proc.returncode == 0 and dest.is_dir()
 
 
-def _scan_one(update: dict, dest: Path, scan_script: Path) -> dict:
-    if not scannable(update):
-        return uncovered(update, "unresolved")
+def _exact(change: _diff.Change) -> tuple[Target, str]:
+    """The Target of one primary change, and "unresolved" unless both versions are exact in its ecosystem's grammar.
+
+    An empty from version stays inconclusive. A range, wildcard, tag name, operator or moving major could resolve to a
+    tree other than the one installed, so it is never scanned.
+    """
+    old = _versions._exact_body(change.old, mode=change.ecosystem)
+    new = _versions._exact_body(change.new, mode=change.ecosystem)
+    target = Target(package=change.name, old=old or change.old, new=new or change.new)
+    return target, "" if new and (old or not change.old) else "unresolved"
+
+
+def _targets(changes: list[_diff.Change]) -> list[tuple[Target, str]]:
+    """Each change as (Target with its repository, why it is not scanned or "").
+
+    Each distinct (ecosystem, name, version) is looked up once, and the lookups run concurrently.
+    """
+    exact = [_exact(change) for change in changes]
+    keys = [(change.ecosystem, change.name, target.new) for change, (target, _why) in zip(changes, exact)]
+    wanted = list(dict.fromkeys(key for key, (_target, why) in zip(keys, exact) if not why))
+    with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
+        repos = dict(zip(wanted, pool.map(lambda key: _ecosystems.upstream_repo(*key), wanted)))
+    resolved: list[tuple[Target, str]] = []
+    for key, (target, why) in zip(keys, exact):
+        repo = "" if why else repos[key]
+        resolved.append((target._replace(repo=repo), why or ("" if repo else "no_upstream_link")))
+    return resolved
+
+
+def _scan_one(target: Target, dest: Path, scan_script: Path) -> dict:
     dest = dest.absolute()
     checkout = dest / ".upstream-dependency"
-    if not _clone(str(update["upstreamRepo"]), checkout):
-        return uncovered(update, "unresolved")
+    if not _clone(target.repo, checkout):
+        return uncovered(target, "unresolved")
     env = os.environ.copy()
     env["GITHUB_OUTPUT"] = str(dest / "github_output.txt")
-    env["PACKAGE_NAME"] = str(update.get("packageName") or "")
-    env["FROM_VERSION"] = str(update.get("fromVersion") or "")
-    env["TO_VERSION"] = str(update.get("toVersion") or "")
+    env["PACKAGE_NAME"] = target.package
+    env["FROM_VERSION"] = target.old
+    env["TO_VERSION"] = target.new
     proc = subprocess.run(
         ["bash", str(scan_script)],
         cwd=dest,
@@ -565,14 +558,14 @@ def _scan_one(update: dict, dest: Path, scan_script: Path) -> dict:
     )
     report_path = dest / "malware_scan_report.json"
     if not report_path.is_file():
-        return uncovered(update, "not_scanned")
+        return uncovered(target, "not_scanned")
     try:
         report = json.loads(report_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return uncovered(update, "not_scanned")
+        return uncovered(target, "not_scanned")
     if not isinstance(report, dict):
-        return uncovered(update, "not_scanned")
-    tagged = _tag(update, report)
+        return uncovered(target, "not_scanned")
+    tagged = _tag(target, report)
     if proc.returncode != 0 and tagged.get("status") != "fail":
         tagged["scan_conclusive"] = False
         tagged["not_scanned_reason"] = "scanner_error"
@@ -609,8 +602,6 @@ def _emit(report: dict, summary: str) -> None:
     conclusive = "true" if report.get("scan_conclusive") is True else "false"
     body = summary.rstrip("\n")
     text = (
-        f"status={_output_field(report.get('status'))}\n"
-        f"changed_files_count={int(report.get('changed_files_count') or 0)}\n"
         f"package_name={_output_field(fields.get('package_name'))}\n"
         f"upstream_repo={_output_field(fields.get('upstream_repo'))}\n"
         f"from_version={_output_field(fields.get('from_version'))}\n"
@@ -647,27 +638,27 @@ def main() -> None:
     fetch_token = os.environ.pop(FETCH_AUTH_VARIABLE, "")
     scan_script = Path(__file__).resolve().parent / "upstream_malware_scan.sh"
     out = Path(os.environ["DCR_OUT"])
-    updates = _load_updates(out / "dependency_updates.json")
-    if updates and not _has_upstream_link(updates):
-        report = uncovered({}, "no_upstream_link")
-        summary = render_summary(report, [])
-        _write_report(out, report, summary)
-        _emit(report, summary)
-        return
-    gaps = manifest_gaps(updates, fetch_token)
+    plan = _plan(fetch_token)
+    if plan is None:
+        records, scanned, disclosed = [uncovered(Target(path="pull request diff"), "unresolved")], [], _NONE_DISCLOSED
+    else:
+        scanned, disclosed = _split(plan)
+        records = [uncovered(Target(path=path), reason) for path, reason in plan.gaps]
     work = Path(".dcr-dependency-scans")
     remove_entry(work)
     work.mkdir()
-    records: list[dict] = list(gaps)
     scans: list[tuple[dict, Path]] = []
     try:
-        for index, update in enumerate(updates):
+        for index, (target, why) in enumerate(_targets(scanned)):
+            if why:
+                records.append(uncovered(target, why))
+                continue
             dest = work / str(index)
             dest.mkdir()
-            record = _scan_one(update, dest, scan_script)
+            record = _scan_one(target, dest, scan_script)
             records.append(record)
             scans.append((record, dest))
-        report = aggregate(records)
+        report = aggregate(records, disclosed)
         summary = render_summary(report, records)
         _write_report(out, report, summary)
         _keep_checkout(records, scans)

@@ -211,7 +211,7 @@ Codepoint matches in binary or media blobs are not text findings and are context
 A changed media path is still a steganography signal.
 You may only agree with blocking findings or escalate them.
 Generic exec, spawn, child_process, base64, and eval hits are context, including inside compiled
-bundles. Other heuristic hits stay blocking unless the scan report is warn_only.
+bundles. Other heuristic hits are blocking.
 status clean with scan_conclusive true means release blobs were read and no findings were produced.
 status warn or fail means findings were produced from blobs that were read. Incorporate them.
 If scan_conclusive is false, coverage was incomplete, so do not treat the absence of further findings as a clean result.

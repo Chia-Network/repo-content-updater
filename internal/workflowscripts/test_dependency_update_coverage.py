@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import dependency_cursor_review_prompts as prompts
+import dependency_manifest_diff as diff
 import dependency_update_coverage as coverage
 import malware_verdict_formatter as formatter
 
@@ -53,7 +56,6 @@ def _commit(repo: Path, rel: str, content: str, message: str) -> None:
 def _clean(name: str, repo: str) -> dict:
     return {
         "status": "clean",
-        "warn_only": True,
         "scan_conclusive": True,
         "not_scanned_reason": "",
         "verdict_token_in_tree": False,
@@ -77,6 +79,44 @@ def _clean(name: str, repo: str) -> dict:
     }
 
 
+def _plan(*primary: tuple[str, ...], unchecked: tuple = (), gaps: tuple = (), unparsed_locks: tuple = ()) -> diff.Plan:
+    """A Plan of (ecosystem, dir, name, old, new) changes."""
+    return diff.Plan(
+        tuple(diff.Change(*change) for change in primary),
+        tuple(diff.Change(*change) for change in unchecked),
+        tuple(gaps),
+        tuple(unparsed_locks),
+    )
+
+
+def _run_main(
+    plan: diff.Plan | None,
+    *,
+    scan: Callable[..., dict] | None = None,
+    repo: Callable[[str, str, str], str] = lambda _ecosystem, name, _version: f"upstream/{name}",
+    clone: Callable[[str, Path], bool] = lambda *_args: False,
+) -> tuple[dict, str, str]:
+    """coverage.main() over `plan`: (report, summary, GITHUB_OUTPUT text). `scan` replaces _scan_one."""
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        output = root / "github_output.txt"
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(contextlib.chdir(root))
+            stack.enter_context(patch.dict(os.environ, {"GITHUB_OUTPUT": str(output), "DCR_OUT": str(root)}))
+            stack.enter_context(patch.object(coverage, "_plan", return_value=plan))
+            stack.enter_context(patch.object(coverage._ecosystems, "upstream_repo", repo))
+            stack.enter_context(patch.object(coverage, "_clone", clone))
+            if scan is not None:
+                stack.enter_context(patch.object(coverage, "_scan_one", scan))
+            coverage.main()
+        report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
+        return (
+            report,
+            (root / "malware_scan_summary.md").read_text(encoding="utf-8"),
+            output.read_text(encoding="utf-8"),
+        )
+
+
 class DependencyUpdateCoverageTest(unittest.TestCase):
     def test_every_conclusive_scan_covers_the_group(self) -> None:
         first = _clean("lodash", "lodash/lodash")
@@ -92,12 +132,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
 
     def test_one_unresolvable_entry_is_inconclusive(self) -> None:
         gap = coverage.uncovered(
-            {
-                "packageName": "k8s.io/api",
-                "fromVersion": "0.29.1",
-                "toVersion": "0.29.2",
-                "upstreamRepo": "",
-            },
+            coverage.Target(package="k8s.io/api", old="0.29.1", new="0.29.2", repo=""),
             "unresolved",
         )
         records = [_clean("cobra", "spf13/cobra"), gap]
@@ -116,100 +151,99 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIs(coverage.aggregate([one])["scan_conclusive"], True)
 
     def test_single_update_summary_reflects_coverage_not_the_child_summary(self) -> None:
-        update = {
-            "packageName": "lodash",
-            "fromVersion": "4.17.20",
-            "toVersion": "4.17.21",
-            "upstreamRepo": "lodash/lodash",
-        }
         child = _clean("lodash", "lodash/lodash")
         child["from_tag"] = ""
         child["to_tag"] = ""
         child["scan_conclusive"] = False
 
-        def scan_and_publish(_update: dict, dest: Path, _script: Path) -> dict:
+        def scan_and_publish(_update: coverage.Target, dest: Path, _script: Path) -> dict:
             (dest / "malware_scan_summary.md").write_text(
                 "## Malware Scan Summary\n\n- Status: **clean**\n- Scan coverage: **conclusive**.\n",
                 encoding="utf-8",
             )
             return child
 
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "dependency_updates.json").write_text(json.dumps([update]), encoding="utf-8")
-            output = root / "github_output.txt"
-            previous = os.getcwd()
-            saved = os.environ.get("GITHUB_OUTPUT")
-            os.chdir(root)
-            os.environ["GITHUB_OUTPUT"] = str(output)
-            os.environ["DCR_OUT"] = str(root)
-            try:
-                with (
-                    patch.object(coverage, "manifest_gaps", return_value=[]),
-                    patch.object(coverage, "_scan_one", side_effect=scan_and_publish),
-                ):
-                    coverage.main()
-            finally:
-                os.chdir(previous)
-                os.environ.pop("DCR_OUT", None)
-                if saved is None:
-                    os.environ.pop("GITHUB_OUTPUT", None)
-                else:
-                    os.environ["GITHUB_OUTPUT"] = saved
-            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
-            summary = (root / "malware_scan_summary.md").read_text(encoding="utf-8")
+        report, summary, _output = _run_main(_plan(("npm", ".", "lodash", "4.17.20", "4.17.21")), scan=scan_and_publish)
         self.assertIs(report["scan_conclusive"], False)
         self.assertIn("Scan coverage: **incomplete**", summary)
         self.assertIn("not covered", summary)
         self.assertNotIn("Scan coverage: **conclusive**", summary)
+        self.assertNotIn("Status:", summary)
 
     def test_main_names_an_unresolvable_entry_and_does_not_clone_it(self) -> None:
-        updates = [
-            {
-                "packageName": "lodash",
-                "fromVersion": "4.17.20",
-                "toVersion": "4.17.21",
-                "upstreamRepo": "lodash/lodash",
-            },
-            {
-                "packageName": "k8s.io/api",
-                "fromVersion": "0.29.1",
-                "toVersion": "0.29.2",
-                "upstreamRepo": "",
-            },
-        ]
         cloned: list[str] = []
 
         def no_clone(repo: str, _dest: Path) -> bool:
             cloned.append(repo)
             return False
 
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
-            output = root / "github_output.txt"
-            previous = os.getcwd()
-            previous_output = os.environ.get("GITHUB_OUTPUT")
-            os.chdir(root)
-            os.environ["GITHUB_OUTPUT"] = str(output)
-            os.environ["DCR_OUT"] = str(root)
-            try:
-                with patch.object(coverage, "_clone", no_clone):
-                    coverage.main()
-            finally:
-                os.chdir(previous)
-                os.environ.pop("DCR_OUT", None)
-                if previous_output is None:
-                    os.environ.pop("GITHUB_OUTPUT", None)
-                else:
-                    os.environ["GITHUB_OUTPUT"] = previous_output
-            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
-            self.assertIs(report["scan_conclusive"], False)
-            self.assertEqual(cloned, ["lodash/lodash"])
-            summary = (root / "malware_scan_summary.md").read_text(encoding="utf-8")
-            self.assertIn("k8s.io/api", summary)
-            self.assertIn("not covered", summary)
-            self.assertIn("scan_conclusive=false", output.read_text(encoding="utf-8"))
+        plan = _plan(("npm", ".", "lodash", "4.17.20", "4.17.21"), ("go", ".", "k8s.io/api", "v0.29.1", "v0.29.2"))
+        report, summary, output = _run_main(
+            plan,
+            repo=lambda _ecosystem, name, _version: "lodash/lodash" if name == "lodash" else "",
+            clone=no_clone,
+        )
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertEqual(cloned, ["lodash/lodash"])
+        self.assertIn("`k8s.io/api 0.29.1 -> 0.29.2` (no repository): not covered (no_upstream_link)", summary)
+        self.assertIn("scan_conclusive=false", output)
+
+    def test_the_report_writes_the_disclosed_lists_the_formatter_reads(self) -> None:
+        self.assertEqual(coverage.Disclosure._fields, formatter.DISCLOSED_KEYS)
+        report = coverage.aggregate([_clean("lodash", "lodash/lodash")])
+        self.assertEqual(
+            {key: report[key] for key in formatter.DISCLOSED_KEYS}, {key: [] for key in formatter.DISCLOSED_KEYS}
+        )
+
+    def test_each_repository_is_looked_up_once(self) -> None:
+        looked_up: list[tuple[str, str, str]] = []
+
+        def repo(ecosystem: str, name: str, version: str) -> str:
+            looked_up.append((ecosystem, name, version))
+            return f"upstream/{name}"
+
+        plan = _plan(("npm", "a", "lodash", "4.17.20", "4.17.21"), ("npm", "b", "lodash", "4.17.20", "4.17.21"))
+        seen: list[coverage.Target] = []
+        _run_main(plan, repo=repo, scan=lambda target, *_args: seen.append(target) or _clean("lodash", target.repo))
+        self.assertEqual(looked_up, [("npm", "lodash", "4.17.21")])
+        self.assertEqual([target.repo for target in seen], ["upstream/lodash", "upstream/lodash"])
+
+    def test_versions_that_are_not_exact_stop_before_the_repository_lookup(self) -> None:
+        looked_up: list[str] = []
+
+        def repo(_ecosystem: str, name: str, _version: str) -> str:
+            looked_up.append(name)
+            return f"upstream/{name}"
+
+        plan = _plan(
+            ("npm", ".", "left-pad", "^1.2.3", "^1.3.0"),
+            ("pip", ".", "requests", "==2.31.0", ">=2.32"),
+            ("npm", ".", "nested", "1.0.0, 1.1.0", "1.2.0"),
+            ("go", ".", "github.com/spf13/cobra", "v1.8.0", "v1.8.1"),
+        )
+        seen: list[coverage.Target] = []
+        report, _summary, _output = _run_main(plan, repo=repo, scan=lambda update, *_args: seen.append(update) or {})
+        self.assertEqual(looked_up, ["github.com/spf13/cobra"])
+        self.assertEqual(
+            seen,
+            [
+                coverage.Target(
+                    package="github.com/spf13/cobra", old="1.8.0", new="1.8.1", repo="upstream/github.com/spf13/cobra"
+                )
+            ],
+        )
+        reasons = {item["package_name"]: item["not_scanned_reason"] for item in report["dependencies"]}
+        self.assertEqual(reasons["left-pad"], "unresolved")
+        self.assertEqual(reasons["requests"], "unresolved")
+        self.assertEqual(reasons["nested"], "unresolved")
+
+    def test_pip_pins_lose_their_operator_before_the_scan(self) -> None:
+        seen: list[coverage.Target] = []
+        _run_main(
+            _plan(("pip", ".", "requests", "==2.31.0", "==2.32.0")),
+            scan=lambda update, *_args: seen.append(update) or _clean("requests", "psf/requests"),
+        )
+        self.assertEqual((seen[0].old, seen[0].new), ("2.31.0", "2.32.0"))
 
     def test_raw_sha_and_branch_are_not_conclusive(self) -> None:
         marker = "RAW_SHA_IOC_9f3a"
@@ -236,32 +270,23 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 name: os.environ.get(name)
                 for name in (
                     "MALWARE_IOC_PATTERNS",
-                    "MALWARE_WARN_ONLY",
                     "MALWARE_IOC_ALLOWLIST",
                     "MALWARE_UNICODE_ALLOWLIST",
                     "MALWARE_CONFUSABLE_ALLOWLIST",
                     "MALWARE_HEURISTIC_ALLOWLIST",
-                    "VERSION_RANGE_FROM_BODY",
                 )
             }
             os.chdir(root)
             os.environ["MALWARE_IOC_PATTERNS"] = json.dumps([marker])
-            os.environ["MALWARE_WARN_ONLY"] = "1"
-            os.environ["VERSION_RANGE_FROM_BODY"] = "0"
             for name in saved_env:
-                if name not in {"MALWARE_IOC_PATTERNS", "MALWARE_WARN_ONLY", "VERSION_RANGE_FROM_BODY"}:
+                if name != "MALWARE_IOC_PATTERNS":
                     os.environ[name] = "[]"
 
             def scan(to_version: str) -> dict:
                 dest = child / to_version.replace("/", "-")
                 dest.mkdir()
                 return coverage._scan_one(
-                    {
-                        "packageName": "lodash",
-                        "fromVersion": "1.0.0",
-                        "toVersion": to_version,
-                        "upstreamRepo": "lodash/lodash",
-                    },
+                    coverage.Target(package="lodash", old="1.0.0", new=to_version, repo="lodash/lodash"),
                     dest,
                     Path(__file__).resolve().parent / "upstream_malware_scan.sh",
                 )
@@ -280,8 +305,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             self.assertEqual((child / "dependabot_commits.md").read_text(encoding="utf-8"), f"commit {sha}\n")
         for report in (by_sha, by_branch):
             self.assertIs(report["scan_conclusive"], False, msg=report)
-            # A branch name is not an exact version, so it stops before the clone.
-            self.assertIn(report["not_scanned_reason"], {"to_ref_unresolved", "unresolved"})
+            self.assertEqual(report["not_scanned_reason"], "to_ref_unresolved")
             self.assertEqual(report["to_tag"], "")
             self.assertEqual(report["findings"]["ioc"], [])
 
@@ -438,49 +462,17 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         child["to_tag"] = ""
         child["status"] = "fail"
         child["findings"]["ioc"] = [{"path": "pkg/index.js", "line": 1, "kind": "ioc", "match": "x"}]
-        updates = [
-            {
-                "packageName": "lodash",
-                "fromVersion": "4.17.20",
-                "toVersion": "4.17.21",
-                "upstreamRepo": "lodash/lodash",
-            }
-        ]
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
-            output = root / "github_output.txt"
-            previous = os.getcwd()
-            saved = os.environ.get("GITHUB_OUTPUT")
-            os.chdir(root)
-            os.environ["GITHUB_OUTPUT"] = str(output)
-            os.environ["DCR_OUT"] = str(root)
-            try:
-                with patch.object(coverage, "_scan_one", lambda *_args, **_kwargs: child):
-                    coverage.main()
-            finally:
-                os.chdir(previous)
-                os.environ.pop("DCR_OUT", None)
-                if saved is None:
-                    os.environ.pop("GITHUB_OUTPUT", None)
-                else:
-                    os.environ["GITHUB_OUTPUT"] = saved
-            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
-            self.assertEqual(report["status"], "fail")
-            self.assertIs(report["scan_conclusive"], False)
-            self.assertEqual(report["findings"]["ioc"][0]["path"], "pkg/index.js")
-            self.assertIn("status=fail", output.read_text(encoding="utf-8"))
-            self.assertTrue((root / "malware_scan_summary.md").is_file())
+        report, summary, output = _run_main(
+            _plan(("npm", ".", "lodash", "4.17.20", "4.17.21")), scan=lambda *_args, **_kwargs: child
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertEqual(report["findings"]["ioc"][0]["path"], "pkg/index.js")
+        self.assertIn("scan_conclusive=false", output)
+        self.assertIn("Scan coverage: **incomplete**", summary)
 
     def test_empty_from_still_scans_the_to_tree(self) -> None:
-        update = {
-            "packageName": "lodash",
-            "fromVersion": "",
-            "toVersion": "1.1.0",
-            "upstreamRepo": "lodash/lodash",
-        }
-        self.assertTrue(coverage.scannable(update))
-        self.assertFalse(coverage.scannable({**update, "toVersion": ""}))
+        update = coverage.Target(package="lodash", old="", new="1.1.0", repo="lodash/lodash")
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root / "scan.sh"
@@ -525,12 +517,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 os.chdir(previous)
 
     def test_missing_scan_report_fails_the_check(self) -> None:
-        update = {
-            "packageName": "left-pad",
-            "fromVersion": "1.2.3",
-            "toVersion": "1.2.4",
-            "upstreamRepo": "left-pad/left-pad",
-        }
+        update = coverage.Target(package="left-pad", old="1.2.3", new="1.2.4", repo="left-pad/left-pad")
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root / "scan.sh"
@@ -551,12 +538,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIs(concluded["may_complete"], False)
 
     def test_nonzero_exit_after_report_is_a_scanner_error(self) -> None:
-        update = {
-            "packageName": "left-pad",
-            "fromVersion": "1.2.3",
-            "toVersion": "1.2.4",
-            "upstreamRepo": "left-pad/left-pad",
-        }
+        update = coverage.Target(package="left-pad", old="1.2.3", new="1.2.4", repo="left-pad/left-pad")
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root / "scan.sh"
@@ -585,12 +567,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIs(published["may_complete"], False)
 
     def test_scan_one_passes_an_absolute_github_output(self) -> None:
-        update = {
-            "packageName": "left-pad",
-            "fromVersion": "1.2.3",
-            "toVersion": "1.2.4",
-            "upstreamRepo": "left-pad/left-pad",
-        }
+        update = coverage.Target(package="left-pad", old="1.2.3", new="1.2.4", repo="left-pad/left-pad")
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root / "scan.sh"
@@ -618,27 +595,9 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIn(str(Path(tmp).resolve() / "child"), child_output)
 
     def test_no_upstream_link_writes_a_report(self) -> None:
-        updates = [{"packageName": "lodash", "fromVersion": "4.17.20", "toVersion": "4.17.21", "upstreamRepo": ""}]
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "dependency_updates.json").write_text(json.dumps(updates), encoding="utf-8")
-            output = root / "github_output.txt"
-            previous = os.getcwd()
-            saved = os.environ.get("GITHUB_OUTPUT")
-            os.chdir(root)
-            os.environ["GITHUB_OUTPUT"] = str(output)
-            os.environ["DCR_OUT"] = str(root)
-            try:
-                coverage.main()
-            finally:
-                os.chdir(previous)
-                os.environ.pop("DCR_OUT", None)
-                if saved is None:
-                    os.environ.pop("GITHUB_OUTPUT", None)
-                else:
-                    os.environ["GITHUB_OUTPUT"] = saved
-            report = json.loads((root / "malware_scan_report.json").read_text(encoding="utf-8"))
-            summary = (root / "malware_scan_summary.md").read_text(encoding="utf-8")
+        report, summary, _output = _run_main(
+            _plan(("npm", ".", "lodash", "4.17.20", "4.17.21")), repo=lambda *_args: ""
+        )
         self.assertEqual(report["not_scanned_reason"], "no_upstream_link")
         self.assertIs(report["scan_conclusive"], False)
         self.assertIn("no_upstream_link", summary)
@@ -646,6 +605,11 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             report, "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n", "COMPATIBILITY_RECOMMENDATION: Merge\n"
         )
         self.assertEqual(published["check"], "fail")
+
+    def test_unreadable_diff_is_one_unresolved_gap(self) -> None:
+        report, summary, _output = _run_main(None)
+        self.assertEqual((report["path"], report["not_scanned_reason"]), ("pull request diff", "unresolved"))
+        self.assertIn("`pull request diff` (no repository): not covered (unresolved)", summary)
 
     def test_emit_puts_the_heredoc_delimiter_on_its_own_line(self) -> None:
         report = {"status": "clean", "scan_conclusive": True, "changed_files_count": 0}
@@ -730,15 +694,14 @@ class AuthenticatedBaseFetchTest(unittest.TestCase):
     def test_main_removes_token_before_child_processes(self) -> None:
         seen = {}
 
-        def fake_gaps(updates, token=""):
+        def fake_plan(token=""):
             seen["token"] = token
             seen["env"] = os.environ.get(coverage.FETCH_AUTH_VARIABLE)
             raise RuntimeError("stop")
 
         with (
             patch.dict(os.environ, {coverage.FETCH_AUTH_VARIABLE: "tok", "DCR_OUT": "unused"}),
-            patch.object(coverage, "_load_updates", return_value=[]),
-            patch.object(coverage, "manifest_gaps", side_effect=fake_gaps),
+            patch.object(coverage, "_plan", side_effect=fake_plan),
             self.assertRaises(RuntimeError),
         ):
             coverage.main()

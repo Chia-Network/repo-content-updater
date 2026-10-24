@@ -12,15 +12,7 @@ const context = require('./dependency-cursor-review-dependabot-context.js');
 const { run, MAX_PR_COMMITS } = require('./dependency-cursor-review-target-pr.js');
 const postComment = require('./dependency-cursor-review-post-comment.js');
 
-const {
-  parseDependencyUpdate,
-  patchIdFromDiff,
-  reviewMarkerFromPatchId,
-  reviewedShasForPatch,
-  skipApplies,
-  versionTextCameFromBody,
-  MAX_DIFF_CHARS,
-} = context;
+const { patchIdFromDiff, reviewMarkerFromPatchId, reviewedShasForPatch, skipApplies, MAX_DIFF_CHARS } = context;
 
 function fakeCore() {
   return {
@@ -175,7 +167,7 @@ async function resolve(eventName, pr, options = {}) {
 async function withWorkspace(fn) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dcr-'));
   const previous = process.cwd();
-  const keys = ['PR_TITLE', 'PR_BODY', 'PR_NUMBER', 'REVIEW_MARKER', 'DCR_OUT'];
+  const keys = ['PR_BODY', 'PR_NUMBER', 'REVIEW_MARKER', 'DCR_OUT'];
   const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   process.chdir(directory);
   process.env.DCR_OUT = directory;
@@ -477,36 +469,6 @@ test('a rebased pull request with a moved tag is not already reviewed', async ()
   }
 });
 
-test('grouped updates always run the body version checks', () => {
-  const title = 'Bump the npm-dependencies group with 2 updates';
-  const body = [
-    '| Package | From | To |',
-    '| --- | --- | --- |',
-    '| [lodash](https://github.com/lodash/lodash) | `4.17.20` | `4.17.21` |',
-    '| [semver](https://github.com/npm/node-semver) | `7.5.4` | `7.6.0` |',
-  ].join('\n');
-  assert.equal(versionTextCameFromBody(title, body), true);
-});
-
-test('release note versions are marked only when they supply a missing version', () => {
-  const titled = 'Bump example from 1.0.0 to 1.1.0';
-  const notes = '`9.9.9` -> `9.9.9`\nhttps://github.com/example/example';
-  const kept = parseDependencyUpdate(titled, notes);
-  assert.equal(kept.fromVersion, '1.0.0');
-  assert.equal(kept.toVersion, '1.1.0');
-  assert.equal(versionTextCameFromBody(titled, notes), false);
-
-  const renovate = 'Update dependency example to v1.2.3';
-  const same = '`1.2.3` -> `1.2.3`\nhttps://github.com/example/example';
-  const filled = parseDependencyUpdate(renovate, same);
-  assert.equal(filled.fromVersion, '1.2.3');
-  assert.equal(filled.toVersion, 'v1.2.3');
-  assert.equal(versionTextCameFromBody(renovate, same), true);
-
-  const open = 'Update dependency example to v1.2.3';
-  assert.equal(versionTextCameFromBody(open, 'https://github.com/example/example'), false);
-});
-
 test('a non-web-flow committer, unverified commit, or other author fails open', async () => {
   const pr = dependabotPr('Bump lodash from 4.17.20 to 4.17.21');
   const diff = realDiff();
@@ -564,66 +526,22 @@ test('an empty commit list, an API error, an empty diff, or too many commits fai
   assert.match(refused.core.warnings.join('\n'), /diff too large/);
 });
 
-test('parseDependencyUpdate still extracts upstream notes and commits', () => {
-  const parsed = parseDependencyUpdate('Bump lodash from 4.17.20 to 4.17.21', singleBody('deadbee'));
-  assert.equal(parsed.upstreamRepo, 'lodash/lodash');
-  assert.equal(parsed.packageName, 'lodash');
-  assert.equal(parsed.fromVersion, '4.17.20');
-  assert.equal(parsed.toVersion, '4.17.21');
-  assert.equal(parsed.updates.length, 1);
-  assert.equal(parsed.updates[0].fromVersion, '4.17.20');
-  assert.equal(parsed.updates[0].toVersion, '4.17.21');
-  assert.match(parsed.releaseNotes, /small patch/);
-  assert.match(parsed.commits, /deadbee/);
+test('bodyNotes extracts the release notes and commits for the prompt', () => {
+  const notes = context.bodyNotes(singleBody('deadbee'));
+  assert.deepEqual(Object.keys(notes), ['releaseNotes', 'commits']);
+  assert.match(notes.releaseNotes, /small patch/);
+  assert.match(notes.commits, /deadbee/);
 });
 
-test('grouped context does not choose a package before the scans', async () => {
+test('context JSON carries only the prompt fields and no update list', async () => {
   await withWorkspace(async (directory) => {
-    process.env.PR_TITLE = 'Bump the npm-dependencies group across 1 directory with 2 updates';
-    process.env.PR_BODY = [
-      '| Package | From | To |',
-      '| --- | --- | --- |',
-      '| [lodash](https://github.com/lodash/lodash) | `4.17.20` | `4.17.21` |',
-      '| [semver](https://github.com/npm/node-semver) | `7.5.4` | `7.6.0` |',
-    ].join('\n');
-    process.env.PR_NUMBER = '7';
-    const core = fakeCore();
-    await context({ core });
-    assert.equal(core.failed, '');
-    assert.equal(core.outputs.package_name, '');
-    assert.equal(core.outputs.upstream_repo, '');
-    const updates = JSON.parse(fs.readFileSync(path.join(directory, 'dependency_updates.json'), 'utf8'));
-    assert.deepEqual(
-      updates.map((item) => item.packageName),
-      ['lodash', 'semver'],
-    );
-  });
-});
-
-test('context JSON stays limited to the prompt fields', async () => {
-  await withWorkspace(async (directory) => {
-    process.env.PR_TITLE = 'Bump lodash from 4.17.20 to 4.17.21';
     process.env.PR_BODY = singleBody('abc1234');
     process.env.PR_NUMBER = '42';
-    const core = fakeCore();
-    await context({ core });
+    await context();
     const written = JSON.parse(fs.readFileSync(path.join(directory, 'dependabot_comment_context.json'), 'utf8'));
-    assert.deepEqual(Object.keys(written), [
-      'prNumber',
-      'upstreamRepo',
-      'packageName',
-      'fromVersion',
-      'toVersion',
-      'releaseNotes',
-      'commits',
-    ]);
-    assert.equal(core.failed, '');
-    const updates = JSON.parse(fs.readFileSync(path.join(directory, 'dependency_updates.json'), 'utf8'));
-    assert.equal(updates.length, 1);
-    assert.equal(updates[0].packageName, 'lodash');
-    assert.equal(updates[0].fromVersion, '4.17.20');
-    assert.equal(updates[0].toVersion, '4.17.21');
-    assert.equal(updates[0].upstreamRepo, 'lodash/lodash');
+    assert.deepEqual(Object.keys(written), ['prNumber', 'releaseNotes', 'commits']);
+    assert.equal(written.prNumber, 42);
+    assert.equal(fs.existsSync(path.join(directory, 'dependency_updates.json')), false);
   });
 });
 
