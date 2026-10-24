@@ -191,6 +191,20 @@ class BindTest(unittest.TestCase):
         files["Pipfile.lock"] = pipfile_lock_text({"requests": "2.32.0"})
         self.assertEqual(len(ecosystems.locked("pip", ".", "requests", "2.32.0", read)), 2)
         self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.31.0", read), ())
+        files = {"poetry.lock": poetry_lock_text({"requests": "2.32.0"}, legacy=True)}
+        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.32.0", read), (poetry,))
+
+    def test_every_lock_and_checksum_grammar_reads_its_own_hashes(self) -> None:
+        """locked() has no per-role case: each row says which entries are installed copies and what they record."""
+        rows = [row for row in ecosystems._FILES if row.role in {ecosystems.LOCK, ecosystems.CHECKSUMS} and row.parse]
+        self.assertEqual([row for row in rows if row.hashes is None], [])
+        (go_sum,) = (row for row in rows if "go.sum" in row.names)
+        self.assertEqual(go_sum.hashes(("m", "v1.0.0", False, "m v1.0.0 h1:x=")), "h1:x=")
+        (lock,) = (row for row in rows if "yarn.lock" in row.names)
+        self.assertIsNone(lock.hashes(("a", "1.0.0", False, 'a@^1:\n  version "1.0.0"\n  integrity sha512-x\n')))
+        self.assertEqual(
+            lock.hashes(("a", "1.0.0", True, 'a@^1:\n  version "1.0.0"\n  integrity sha512-x\n')), "sha512-x"
+        )
 
 
 class _Fetch:

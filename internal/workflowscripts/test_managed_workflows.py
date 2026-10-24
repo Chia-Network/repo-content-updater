@@ -43,8 +43,6 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
     def test_malware_formatter_imported_from_trusted_companion_not_inline(self) -> None:
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
         scan = self._job(workflow, "dependency-review-scan")
-        agent = self._job(workflow, "dependency-review-agent")
-        verdict = self._job(workflow, "dependency-review")
         self.assertIn(
             'python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/dependency_update_coverage.py"',
             scan,
@@ -98,6 +96,25 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             self.assertIn("${{`{{ runner.temp }}`}}/dcr-out/" + name, upload)
         self.assertIn("retention-days: 1", upload)
         self.assertNotIn("cursor_output_malware.json", upload)
+
+    def test_python_is_pinned_before_any_managed_script_runs(self) -> None:
+        """The scripts need Python 3.11+ (`tomllib`); every job that runs them pins one interpreter by SHA."""
+        setup = (
+            "uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0\n"
+            "        with:\n"
+            '          python-version: "3.12"\n'
+        )
+        workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
+        jobs = {name: self._job(workflow, name) for name in ("dependency-review-scan", "dependency-review")}
+        for name in ("go-test.yml", "workflowscripts-lint.yml"):
+            jobs[name] = (_REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+        runs = {"go-test.yml": "run: make test", "workflowscripts-lint.yml": "python3 -m unittest"}
+        for name, job in jobs.items():
+            with self.subTest(name):
+                self.assertEqual(job.count(setup), 1)
+                self.assertLess(job.index(setup), job.index(runs.get(name, "python3 -I")))
+        self.assertNotIn("python3 -I", self._job(workflow, "dependency-review-agent"))
+        self.assertEqual(workflow.count("actions/setup-python@"), 2)
 
     def test_agent_job_cannot_reach_the_verdict(self) -> None:
         """The agent runner has no write token, no verdict scripts, and no full history."""
@@ -247,6 +264,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             ancestry = subprocess.run(
                 ["git", "merge-base", "--is-ancestor", orphan, head],
                 cwd=origin,
+                check=False,
                 capture_output=True,
                 text=True,
             )
@@ -316,6 +334,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         checkout = subprocess.run(
             ["bash", str(_REPO_ROOT / "internal/workflowscripts/upstream_release_checkout.sh")],
             cwd=work,
+            check=False,
             env={**self._git_env(), "RESOLVED_TO": resolved_to},
             capture_output=True,
             text=True,
@@ -388,6 +407,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             missing = subprocess.run(
                 ["git", "rev-parse", "--verify", "--end-of-options", "refs/tags/moved"],
                 cwd=upstream,
+                check=False,
                 env=self._git_env(),
                 capture_output=True,
                 text=True,
@@ -476,6 +496,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             missing = subprocess.run(
                 ["git", "rev-parse", "--verify", "--end-of-options", "refs/tags/v1.0.0"],
                 cwd=upstream,
+                check=False,
                 env=self._git_env(),
                 capture_output=True,
                 text=True,
@@ -542,6 +563,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         return subprocess.run(
             ["bash", "-c", script],
             cwd=work,
+            check=False,
             env=env,
             capture_output=True,
             text=True,
@@ -552,6 +574,7 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         proc = subprocess.run(
             ["git", *args],
             cwd=repo,
+            check=False,
             env=self._git_env(),
             capture_output=True,
             text=True,

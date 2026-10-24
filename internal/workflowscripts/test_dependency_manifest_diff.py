@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import unittest
 
@@ -380,16 +381,23 @@ class PythonTest(unittest.TestCase):
         self.assertEqual(_plan(base, head).gaps, (("requirements.txt", "unresolved"),))
 
     def test_a_poetry_lock_supplies_the_versions_of_the_names_the_pyproject_declares(self) -> None:
+        """A Poetry 1.1 lock, with its files in `[metadata.files]`, moves the same way."""
         manifest = '[tool.poetry.dependencies]\npython = "^3.11"\nrequests = "{}"\n'
-        for name, pin in (("lock-only update", ("^2.31", "^2.31")), ("pin and lock", ("2.31.0", "2.32.0"))):
-            with self.subTest(name):
+        for (name, pin), legacy in itertools.product(
+            (("lock-only update", ("^2.31", "^2.31")), ("pin and lock", ("2.31.0", "2.32.0"))), (False, True)
+        ):
+            with self.subTest(name, legacy=legacy):
                 base = {
                     "pyproject.toml": manifest.format(pin[0]),
-                    "poetry.lock": poetry_lock_text({"requests": "2.31.0", "idna": "3.6"}, content_hash="a"),
+                    "poetry.lock": poetry_lock_text(
+                        {"requests": "2.31.0", "idna": "3.6"}, content_hash="a", legacy=legacy
+                    ),
                 }
                 head = {
                     "pyproject.toml": manifest.format(pin[1]),
-                    "poetry.lock": poetry_lock_text({"requests": "2.32.0", "idna": "3.7"}, content_hash="b"),
+                    "poetry.lock": poetry_lock_text(
+                        {"requests": "2.32.0", "idna": "3.7"}, content_hash="b", legacy=legacy
+                    ),
                 }
                 plan = _plan(base, head)
                 self.assertEqual(plan.primary, (Change("pip", ".", "requests", "2.31.0", "2.32.0"),))

@@ -19,7 +19,8 @@ the scanned commit:
 Provenance is read, not verified: the registry checks the Sigstore signature
 when the attestation is published, and this module reads the repository and
 commit from the Fulcio certificate's extensions and the digest from the
-signed statement. A registry that gives no readable answer is
+signed statement. A registry that gives no readable answer, or one that
+records no artifact hash for the version (a 404 or an empty release), is
 registry_unavailable, never a hash or provenance result.
 """
 
@@ -27,17 +28,14 @@ from __future__ import annotations
 
 import base64
 import binascii
-import hashlib
-import io
 import json
 import re
 import urllib.parse
-import zipfile
-import zlib
 from typing import NamedTuple
 
 import dependency_cursor_review_certificate as certificate
 import dependency_cursor_review_upstream as upstream
+from dependency_manifest_go import GO_ZIP_LIMIT, go_zip_hash
 
 INTRINSIC, CHECKSUM, PROVENANCE, UNBOUND = "intrinsic", "checksum", "provenance", "unbound"
 BOUND = frozenset({INTRINSIC, CHECKSUM, PROVENANCE})
@@ -47,7 +45,7 @@ HASH_MISMATCH = "hash_mismatch"  # the registry's artifact hash for the version 
 COMMIT_MISMATCH = "commit_mismatch"  # the registry names no commit, or another one, as the artifact's source
 NO_PROVENANCE = "no_provenance"  # the registry serves no provenance attestation for the artifact
 PROVENANCE_MISMATCH = "provenance_mismatch"  # an attestation names another repository, commit or digest
-REGISTRY_UNAVAILABLE = "registry_unavailable"  # the registry gave no readable answer
+REGISTRY_UNAVAILABLE = "registry_unavailable"  # the registry gave no readable answer or no artifact hash to compare
 UNSUPPORTED = "unsupported"  # the ecosystem has no binding
 REASONS = frozenset(
     {
@@ -63,8 +61,6 @@ REASONS = frozenset(
 
 _SLSA_V1 = "https://slsa.dev/provenance/v1"
 _GO_PROXY = "https://proxy.golang.org"
-# golang.org/x/mod/zip.MaxZipFile: the go command reads no module zip, and extracts no content, larger than this.
-_GO_ZIP_LIMIT = 500 << 20
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
@@ -154,10 +150,10 @@ def npm(subject: Subject) -> Binding:
     except binascii.Error:
         return _unbound(NO_LOCK_HASH)
     version = urllib.parse.quote(subject.version, safe="")
-    doc = upstream.fetch_json(f"https://registry.npmjs.org/{subject.name}/{version}")
-    if doc is None:
+    registered = _dig(upstream.fetch_json(f"https://registry.npmjs.org/{subject.name}/{version}"), "dist", "integrity")
+    if not isinstance(registered, str) or not registered:
         return _UNAVAILABLE
-    if _dig(doc, "dist", "integrity") != integrity:
+    if registered != integrity:
         return _unbound(HASH_MISMATCH)
     escaped = urllib.parse.quote(subject.name, safe="@")
     found = upstream.fetch_json(f"https://registry.npmjs.org/-/npm/v1/attestations/{escaped}@{version}")
@@ -185,33 +181,6 @@ def _go_escaped(text: str) -> str:
     return urllib.parse.quote(escaped, safe="/!+")
 
 
-def _hash1(archive: bytes) -> str:
-    """Go's dirhash.Hash1 of a module zip, as go.sum records it, or "" when it is not a zip the go command reads.
-
-    Hash1 is the sha256 of one `<sha256 hex>  <name>` line per file, in byte order of the names the zip stores.
-    """
-    lines: dict[bytes, bytes] = {}
-    total = 0
-    try:
-        with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
-            for info in zipped.infolist():
-                name = info.orig_filename.encode("utf-8" if info.flag_bits & 0x800 else "cp437")
-                if b"\n" in name or name in lines:
-                    return ""
-                digest = hashlib.sha256()
-                with zipped.open(info) as handle:
-                    while chunk := handle.read(1 << 20):
-                        total += len(chunk)
-                        if total > _GO_ZIP_LIMIT:
-                            return ""
-                        digest.update(chunk)
-                lines[name] = digest.hexdigest().encode() + b"  " + name + b"\n"
-    except (zipfile.BadZipFile, NotImplementedError, RuntimeError, EOFError, OSError, ValueError, zlib.error):
-        return ""
-    summary = hashlib.sha256(b"".join(lines[name] for name in sorted(lines)))
-    return "h1:" + base64.b64encode(summary.digest()).decode()
-
-
 def go(subject: Subject) -> Binding:
     """The proxy's module zip hashes to the go.sum entry, and the proxy built that zip from the scanned commit.
 
@@ -222,8 +191,8 @@ def go(subject: Subject) -> Binding:
     if not want.startswith("h1:"):
         return _unbound(NO_LOCK_HASH)
     base = f"{_GO_PROXY}/{_go_escaped(subject.name)}/@v/{_go_escaped('v' + subject.version)}"
-    archive = upstream.fetch_archive(base + ".zip", _GO_ZIP_LIMIT)
-    found = _hash1(archive) if archive else ""
+    archive = upstream.fetch_archive(base + ".zip", GO_ZIP_LIMIT)
+    found = go_zip_hash(archive) if archive else ""
     if not found:
         return _UNAVAILABLE
     if found != want:
@@ -246,14 +215,13 @@ def pypi(subject: Subject) -> Binding:
     if not entries or not all(entries) or not all(_SHA256_RE.fullmatch(digest) for digest in locked):
         return _unbound(NO_LOCK_HASH)
     project, version = subject.name, urllib.parse.quote(subject.version, safe="")
-    doc = upstream.fetch_json(f"https://pypi.org/pypi/{project}/{version}/json")
-    if doc is None:
-        return _UNAVAILABLE
-    urls, files = _dig(doc, "urls"), {}
+    urls, files = _dig(upstream.fetch_json(f"https://pypi.org/pypi/{project}/{version}/json"), "urls"), {}
     for item in urls if isinstance(urls, list) else []:
         filename, sha256 = _dig(item, "filename"), _dig(item, "digests", "sha256")
         if isinstance(filename, str) and isinstance(sha256, str):
             files.setdefault(f"sha256:{sha256}", filename)
+    if not files:
+        return _UNAVAILABLE
     if not all(digest in files for digest in locked):
         return _unbound(HASH_MISMATCH)
     for digest in locked:

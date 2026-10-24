@@ -64,7 +64,7 @@ def _version_body(value: str, prefix: re.Pattern[str]) -> str:
     return value[match.end() :].strip() if match else value
 
 
-def _exact_body(value: str, *, mode: str) -> str:
+def exact_body(value: str, *, mode: str) -> str:
     """The exact version a token pins in ecosystem `mode`, or "" for a range, wildcard, empty token or unknown mode."""
     if mode not in _MODES:
         return ""
@@ -82,7 +82,7 @@ def commit_ref(ref: str) -> bool:
 
 def moving_ref(ref: str) -> bool:
     """True for a GitHub Actions ref that is neither a full release tag nor a commit SHA: `v4`, `v4.1`, a branch."""
-    return not commit_ref(ref) and not _exact_body(ref, mode="github-actions")
+    return not commit_ref(ref) and not exact_body(ref, mode="github-actions")
 
 
 class TagStatus(enum.IntEnum):

@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import io
 import json
 import unittest
-import warnings
-import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
 import dependency_cursor_review_binding as binding
 import dependency_cursor_review_upstream as upstream
+from test_dependency_manifest_grammars import _CONTEXT, _CONTEXT_H1, _UTFBOM, _UTFBOM_H1
 
 _DATA = Path(__file__).resolve().parent / "testdata" / "provenance"
 # sigstore@3.0.0 on npm and sigstore 3.6.1 on PyPI, as the registries served them.
@@ -144,10 +142,23 @@ class NpmTest(_Registry):
                 self.assertEqual(self.urls, [])
 
     def test_the_registry_integrity_must_be_the_lock_hash(self) -> None:
-        for answers in ({_NPM_DOC: {"dist": {"integrity": "sha512-" + "A" * 86 + "=="}}}, {_NPM_DOC: {}}, {}):
-            with self.subTest(answers=answers):
+        found = self.bind(binding.npm, _NPM, {_NPM_DOC: {"dist": {"integrity": "sha512-" + "A" * 86 + "=="}}})
+        self.assertEqual(found, binding.Binding(_UNBOUND, binding.HASH_MISMATCH))
+        self.assertEqual(self.urls, [_NPM_DOC])
+
+    def test_a_404_or_a_version_with_no_integrity_is_registry_unavailable_not_a_mismatch(self) -> None:
+        """No registry hash was read, so there is nothing for the lock hash to mismatch."""
+        for name, answers in (
+            ("404", {}),
+            ("empty body", {_NPM_DOC: b""}),
+            ("empty document", {_NPM_DOC: {}}),
+            ("no dist", {_NPM_DOC: {"version": "3.0.0"}}),
+            ("empty integrity", {_NPM_DOC: {"dist": {"integrity": ""}}}),
+            ("integrity not a string", {_NPM_DOC: {"dist": {"integrity": [_NPM_INTEGRITY]}}}),
+        ):
+            with self.subTest(name):
                 found = self.bind(binding.npm, _NPM, answers)
-                self.assertEqual(found, binding.Binding(_UNBOUND, binding.HASH_MISMATCH))
+                self.assertEqual(found, binding.Binding(_UNBOUND, binding.REGISTRY_UNAVAILABLE))
                 self.assertEqual(self.urls, [_NPM_DOC])
 
     def test_an_unreadable_registry_answer_is_registry_unavailable_not_a_mismatch(self) -> None:
@@ -262,14 +273,26 @@ class PypiTest(_Registry):
     def test_a_lock_hash_that_is_no_file_of_the_release_is_a_hash_mismatch(self) -> None:
         for name, answers in (
             ("another file hash", self._answers(**{_PYPI_DOC: self._files((_SDIST, "0" * 64))})),
-            ("no release", {}),
+            ("one of two locked files", self._answers(**{_PYPI_DOC: self._files((_WHEEL, _WHEEL_SHA256))})),
+        ):
+            with self.subTest(name):
+                found = self.bind(binding.pypi, _PYPI._replace(locked=(_SDIST_LOCK,)), answers)
+                self.assertEqual(found, binding.Binding(_UNBOUND, binding.HASH_MISMATCH))
+                self.assertEqual(self.urls, [_PYPI_DOC])
+
+    def test_a_404_or_a_release_with_no_file_hash_is_registry_unavailable_not_a_mismatch(self) -> None:
+        """No registry hash was read, so there is nothing for the lock hash to mismatch."""
+        for name, answers in (
+            ("404", {}),
+            ("empty body", {_PYPI_DOC: b""}),
+            ("empty document", {_PYPI_DOC: {}}),
             ("no files", {_PYPI_DOC: {"urls": []}}),
             ("unreadable files", {_PYPI_DOC: {"urls": "x"}}),
             ("a file with no sha256", {_PYPI_DOC: {"urls": [{"filename": _SDIST}]}}),
         ):
             with self.subTest(name):
                 found = self.bind(binding.pypi, _PYPI._replace(locked=(_SDIST_LOCK,)), answers)
-                self.assertEqual(found, binding.Binding(_UNBOUND, binding.HASH_MISMATCH))
+                self.assertEqual(found, binding.Binding(_UNBOUND, binding.REGISTRY_UNAVAILABLE))
                 self.assertEqual(self.urls, [_PYPI_DOC])
 
     def test_another_repository_commit_or_attested_digest_is_a_mismatch(self) -> None:
@@ -292,68 +315,14 @@ class PypiTest(_Registry):
                     self.assertEqual(found, binding.Binding(_UNBOUND, binding.REGISTRY_UNAVAILABLE))
 
 
-_GO_DATA = Path(__file__).resolve().parent / "testdata" / "go"
-# Module zips as proxy.golang.org served them, with the h1: hash the go command recorded for each.
-_UTFBOM = (_GO_DATA / "github.com-dimchansky-utfbom-v1.1.1.zip").read_bytes()
-_UTFBOM_H1 = "h1:vV6w1AhK4VMnhBno/TPVCoK9U/LP0PkLCS9tbxHdi/U="
-_CONTEXT = (_GO_DATA / "github.com-jbenet-go-context-v0.0.0-20150711004518-d14ea06fba99.zip").read_bytes()
-_CONTEXT_H1 = "h1:BQSFePA1RWJOlocH6Fxy8MmwDt+yVQYULKfN0RoTN8A="
 _GO_COMMIT = "c" * 40
 _GO = binding.Subject("github.com/dimchansky/utfbom", "1.1.1", "dimchansky/utfbom", _GO_COMMIT, (_UTFBOM_H1,))
 _GO_ZIP = "https://proxy.golang.org/github.com/dimchansky/utfbom/@v/v1.1.1.zip"
 _GO_INFO = "https://proxy.golang.org/github.com/dimchansky/utfbom/@v/v1.1.1.info"
 
 
-def _zip(*files: tuple[str, bytes]) -> bytes:
-    buffer = io.BytesIO()
-    with warnings.catch_warnings(), zipfile.ZipFile(buffer, "w") as archive:
-        warnings.simplefilter("ignore")  # a duplicate name is one of the cases
-        for name, data in files:
-            archive.writestr(zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0)), data)
-    return buffer.getvalue()
-
-
 def _origin(commit: str) -> dict:
     return {"Version": "v1.1.1", "Origin": {"VCS": "git", "Ref": "refs/tags/v1.1.1", "Hash": commit}}
-
-
-class Hash1Test(unittest.TestCase):
-    """Expected hashes are golang.org/x/mod/sumdb/dirhash.HashZip's for the same zips."""
-
-    def test_proxy_zips_hash_to_their_go_sum_entries(self) -> None:
-        self.assertEqual(binding._hash1(_UTFBOM), _UTFBOM_H1)
-        self.assertEqual(binding._hash1(_CONTEXT), _CONTEXT_H1)
-
-    def test_names_hash_in_byte_order_whatever_order_the_zip_stores(self) -> None:
-        with zipfile.ZipFile(io.BytesIO(_UTFBOM)) as archive:
-            files = [(info.filename, archive.read(info)) for info in archive.infolist()]
-        self.assertEqual(binding._hash1(_zip(*reversed(files))), _UTFBOM_H1)
-        found = binding._hash1(
-            _zip(("m@v1.0.0/b.go", b"package b\n"), ("m@v1.0.0/a.go", b"package a\n"), ("m@v1.0.0/A.go", b""))
-        )
-        self.assertEqual(found, "h1:3pzSCMVVmw4tgP34iOomYzRsoW4niDuZH67QHuuSScg=")
-        self.assertEqual(
-            binding._hash1(_zip(("m@v1.0.0/\u00e9.go", b"x"), ("m@v1.0.0/z.go", b"y"))),
-            "h1:FR/Zov1UYpiM4jZqEwhAWjdOpRIqg+0PlD93WQsbCAg=",
-        )
-
-    def test_a_zip_the_go_command_would_not_read_has_no_hash(self) -> None:
-        for name, archive in (
-            ("not a zip", b"not a zip"),
-            ("empty", b""),
-            ("truncated", _UTFBOM[: len(_UTFBOM) // 2]),
-            ("a duplicate name", _zip(("m@v1.0.0/a.go", b"a"), ("m@v1.0.0/a.go", b"b"))),
-            (
-                "a newline in a name",
-                _zip(
-                    ("m@v1.0.0/a\n.go", b"a"),
-                ),
-            ),
-        ):
-            with self.subTest(name):
-                self.assertEqual(binding._hash1(archive), "")
-        with patch.object(binding, "_GO_ZIP_LIMIT", 1024):
-            self.assertEqual(binding._hash1(_zip(("m@v1.0.0/big", b"0" * 2048))), "")
 
 
 class GoTest(_Registry):

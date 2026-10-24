@@ -201,7 +201,7 @@ class ExactVersionTest(unittest.TestCase):
         for mode, exact in cases.items():
             for token, body in exact.items():
                 with self.subTest(mode=mode, token=token):
-                    self.assertEqual(versions._exact_body(token, mode=mode), body)
+                    self.assertEqual(versions.exact_body(token, mode=mode), body)
 
     def test_ranges_wildcards_and_moving_majors_are_never_exact(self) -> None:
         cases = {
@@ -215,13 +215,13 @@ class ExactVersionTest(unittest.TestCase):
         for mode, tokens in cases.items():
             for token in tokens:
                 with self.subTest(mode=mode, token=token):
-                    self.assertEqual(versions._exact_body(token, mode=mode), "")
+                    self.assertEqual(versions.exact_body(token, mode=mode), "")
 
     def test_only_ascii_digits(self) -> None:
         for digits in ("١.٢.٣", "１.２.３", "1.2.٣", "१.0.0"):
             for mode in ("pip", "npm", "go", "github-actions"):
                 with self.subTest(version=digits, mode=mode):
-                    self.assertEqual(versions._exact_body(digits, mode=mode), "")
+                    self.assertEqual(versions.exact_body(digits, mode=mode), "")
 
 
 class MovingRefTest(unittest.TestCase):

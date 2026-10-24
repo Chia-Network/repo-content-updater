@@ -25,6 +25,8 @@ _BUNDLE_STEMS = (
     "dependency_cursor_review_binding.py",
     "dependency_cursor_review_certificate.py",
     "dependency_cursor_review_upstream.py",
+    "dependency_manifest_go.py",
+    "dependency_manifest_lines.py",
 )
 _BENIGN_AGENT = '{"result":"MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs."}'
 _COMPAT_AGENT = '{"result":"compat ok"}'

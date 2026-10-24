@@ -29,9 +29,9 @@ from typing import NamedTuple
 
 import dependency_cursor_review_binding as binding
 import dependency_cursor_review_upstream as upstream
-from dependency_cursor_review_versions import _exact_body, commit_ref, moving_ref
+from dependency_cursor_review_versions import commit_ref, exact_body, moving_ref
 from dependency_manifest_go import go_mod, go_sum, go_sum_hash
-from dependency_manifest_lines import Parsed, dockerfile_from, terraform_config, terraform_lock, workflow_uses
+from dependency_manifest_lines import Entry, Parsed, dockerfile_from, terraform_config, terraform_lock, workflow_uses
 from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
 from dependency_manifest_python import (
     pipfile_lock,
@@ -82,7 +82,8 @@ class FileKind(NamedTuple):
     names: frozenset[str] = frozenset()  # exact file names
     match: Callable[[PurePosixPath], bool] | None = None  # any other path shape
     records: bool = False  # entries are whole records, not lines
-    integrity: Callable[[str], str] | None = None  # the artifact hash a lock or checksum entry records, "" for none
+    # The artifact hash an installed copy's entry records, "" for none; None for an entry that is no installed copy.
+    hashes: Callable[[Entry], str | None] | None = None
 
 
 NPM = Ecosystem("npm", repo=upstream.npm, bind=binding.npm)
@@ -101,6 +102,11 @@ TERRAFORM = Ecosystem("terraform", warn=UNSCANNABLE_ECOSYSTEM)
 CARGO, BUNDLER, COMPOSER, SWIFT, NUGET = (
     Ecosystem(name) for name in ("cargo", "bundler", "composer", "swift", "nuget")
 )
+
+
+def _top_copy(read: Callable[[str], str]) -> Callable[[Entry], str | None]:
+    """A lock installs the top entry for a name; a nested entry is the copy another dependency installs."""
+    return lambda entry: read(entry[3]) if entry[2] else None
 
 
 def _requirements(path: PurePosixPath) -> bool:
@@ -132,17 +138,17 @@ _FILES = (
         package_lock,
         frozenset({"package-lock.json", "npm-shrinkwrap.json"}),
         records=True,
-        integrity=package_lock_integrity,
+        hashes=_top_copy(package_lock_integrity),
     ),
-    FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), records=True, integrity=yarn_lock_integrity),
+    FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), records=True, hashes=_top_copy(yarn_lock_integrity)),
     FileKind(NPM, LOCK, None, frozenset({"pnpm-lock.yaml"})),
     FileKind(GO, MANIFEST, go_mod, frozenset({"go.mod"})),
-    FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), records=True, integrity=go_sum_hash),
+    FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), records=True, hashes=go_sum_hash),
     FileKind(
         PIP, MANIFEST, requirements, frozenset({"pyproject.toml", "setup.py", "setup.cfg", "Pipfile"}), _requirements
     ),
-    FileKind(PIP, LOCK, poetry_lock, frozenset({"poetry.lock"}), records=True, integrity=poetry_lock_hashes),
-    FileKind(PIP, LOCK, pipfile_lock, frozenset({"Pipfile.lock"}), records=True, integrity=pipfile_lock_hashes),
+    FileKind(PIP, LOCK, poetry_lock, frozenset({"poetry.lock"}), records=True, hashes=_top_copy(poetry_lock_hashes)),
+    FileKind(PIP, LOCK, pipfile_lock, frozenset({"Pipfile.lock"}), records=True, hashes=_top_copy(pipfile_lock_hashes)),
     FileKind(ACTIONS, MANIFEST, workflow_uses, match=_workflow),
     FileKind(DOCKER, MANIFEST, dockerfile_from, match=_dockerfile),
     FileKind(TERRAFORM, MANIFEST, terraform_lock, frozenset({".terraform.lock.hcl"}), records=True),
@@ -178,22 +184,20 @@ def _first(rules: tuple[_RefRule, ...], old: str, new: str) -> str:
 
 
 def locked(ecosystem: str, directory: str, name: str, version: str, read: Callable[[str], str]) -> tuple[str, ...]:
-    """The hash each entry for `name` at exact `version` records in the locks and checksums beside `directory`.
+    """The hash each installed copy of `name` at exact `version` records in the locks and checksums beside `directory`.
 
-    A lock entry counts when it is top; a checksum file has one entry per version. "" is an entry with no hash.
+    Each row's `hashes` reads which entries are installed copies and what they record. "" is a copy with no hash.
     """
     row = _BY_NAME.get(ecosystem)
+    if row is None or not version:
+        return ()
     found: list[str] = []
-    for path, kind in [item for role in (LOCK, CHECKSUMS) for item in beside(row, role, directory)] if row else ():
-        parsed = kind.parse(read(path)) if kind.integrity else None
-        for entry, at, top, text in parsed[0] if parsed else ():
-            if (
-                (top or kind.role == CHECKSUMS)
-                and entry == name
-                and version
-                and _exact_body(at, mode=ecosystem) == version
-            ):
-                found.append(kind.integrity(text))
+    for path, kind in [item for role in (LOCK, CHECKSUMS) for item in beside(row, role, directory)]:
+        parsed = kind.parse(read(path)) if kind.hashes else None
+        for entry in parsed[0] if parsed else ():
+            recorded = kind.hashes(entry)
+            if recorded is not None and entry[0] == name and exact_body(entry[1], mode=ecosystem) == version:
+                found.append(recorded)
     return tuple(found)
 
 

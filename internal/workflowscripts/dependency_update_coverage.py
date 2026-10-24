@@ -536,8 +536,8 @@ def _exact(change: _diff.Change) -> tuple[Target, str]:
     An empty from version stays inconclusive. A range, wildcard, tag name, operator or moving major could resolve to a
     tree other than the one installed, so it is never scanned.
     """
-    old = _versions._exact_body(change.old, mode=change.ecosystem)
-    new = _versions._exact_body(change.new, mode=change.ecosystem)
+    old = _versions.exact_body(change.old, mode=change.ecosystem)
+    new = _versions.exact_body(change.new, mode=change.ecosystem)
     target = Target(package=change.name, old=old or change.old, new=new or change.new)
     return target, "" if new and (old or not change.old) else "unresolved"
 

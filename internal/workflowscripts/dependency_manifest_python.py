@@ -12,7 +12,9 @@ residue is the document left once the records and the manifest's content hash
 are taken out (the manifest beside the lock is read on its own). A package
 locked from anywhere but the package index keeps its version with the source
 appended, so it is never read as an exact PyPI version. poetry_lock_hashes and
-pipfile_lock_hashes read the file hashes a record locks.
+pipfile_lock_hashes read the file hashes a record locks. A lock from Poetry
+before 1.2 keeps each package's files in `[metadata.files]`; each package's
+table there joins its record, so it changes with the version.
 """
 
 from __future__ import annotations
@@ -101,15 +103,23 @@ def poetry_lock(text: str) -> Parsed | None:
         return None
     if not all(isinstance(item.get("name"), str) and item["name"] for item in packages):
         return None
-    if isinstance(doc.get("metadata"), dict):
-        doc["metadata"].pop("content-hash", None)
+    metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    metadata.pop("content-hash", None)
+    legacy = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
+    # A table joins the first package of its name; a table no package claims stays residue.
+    claims = {_requirement_name(key): key for key in legacy}
+    if len(claims) < len(legacy):  # two tables share a name, so neither is the package's
+        claims = {}
     entries: list[Entry] = []
-    for item in packages:
+    for package in packages:
+        name = _requirement_name(package["name"])
+        claimed = "files" not in package and name in claims
+        item = {**package, "files": legacy.pop(claims[name])} if claimed else package
         version = str(item.get("version") or "")
         source = item.get("source")
         if source is not None:
             version = f"{version} ({_residue(source)})"
-        entries.append((_requirement_name(item["name"]), version, True, _record("package", item)))
+        entries.append((name, version, True, _record("package", item)))
     return entries, _residue(doc)
 
 
