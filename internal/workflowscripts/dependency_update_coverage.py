@@ -392,7 +392,7 @@ def any_read(report: dict) -> bool:
 
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
 _REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
-_REGISTRY_FIELD_RE = re.compile(r"""^    (type|url):\s*(["']?)([^"'\s#]+)\2\s*(#.*)?$""")
+_REGISTRY_FIELD_RE = re.compile(r"""^    (type|url|replaces-base):\s*(["']?)([^"'\s#]+)\2\s*(#.*)?$""")
 _DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
 
 
@@ -402,6 +402,7 @@ class Indexes(NamedTuple):
 
     trusted: frozenset[str] = frozenset()  # each one in upstream.TRUSTED_PYTHON_INDEXES
     other: bool = False  # whether it names any other one, or one this cannot read
+    replaces_pypi: bool = False  # whether a trusted index replaces PyPI rather than adding to it
 
 
 def _python_indexes(text: str) -> Indexes:
@@ -420,20 +421,24 @@ def _python_indexes(text: str) -> Indexes:
         elif fields is not None and (match := _REGISTRY_FIELD_RE.match(line)):
             fields[match.group(1)] = match.group(3)
     urls = [block.get("url", "") for block in blocks if block.get("type") == "python-index"]
+    replaces = any(
+        block.get("type") == "python-index" and block.get("replaces-base", "").lower() == "true" for block in blocks
+    )
     # Every python-index this reads has a URL, or the config is not read and nothing is trusted.
-    return _indexes(urls, len(urls) != text.count("python-index"))
+    return _indexes(urls, len(urls) != text.count("python-index"), replaces)
 
 
-def _indexes(urls: list[str], unread: bool, *more: Indexes) -> Indexes:
+def _indexes(urls: list[str], unread: bool, replaces_pypi: bool = False, *more: Indexes) -> Indexes:
     """Indexes of `urls` and `more`. Any index that is not in TRUSTED_PYTHON_INDEXES, or `unread`, trusts none."""
     urls = [url if url.endswith("/") else f"{url}/" for url in urls]
     trusted = frozenset(url for url in urls if url in _upstream.TRUSTED_PYTHON_INDEXES)
     other = unread or len(trusted) != len(set(urls)) or any(item.other for item in more)
-    return Indexes(frozenset() if other else trusted.union(*(item.trusted for item in more)), other)
+    replaces = not other and (replaces_pypi or any(item.replaces_pypi for item in more))
+    return Indexes(frozenset() if other else trusted.union(*(item.trusted for item in more)), other, replaces)
 
 
 def _configured_indexes() -> Indexes:
-    return _indexes([], False, *(_python_indexes(_git_text("HEAD", path)) for path in _DEPENDABOT_CONFIGS))
+    return _indexes([], False, False, *(_python_indexes(_git_text("HEAD", path)) for path in _DEPENDABOT_CONFIGS))
 
 
 _MAX_REQUIREMENTS_FILES = 64
@@ -450,6 +455,8 @@ def _requirements_indexes(directory: str, configured: Indexes) -> Indexes:
     pending = [path for path in files if (row := _ecosystems.file_kind(path)) and row.parse is _python.requirements_txt]
     seen: set[str] = set()
     urls: list[str] = []
+    replaces = False
+    extra = False
     while pending:
         path = pending.pop()
         if path in seen:
@@ -461,8 +468,10 @@ def _requirements_indexes(directory: str, configured: Indexes) -> Indexes:
         if options.unread or outside or len(seen) > _MAX_REQUIREMENTS_FILES:
             return Indexes(other=True)
         urls += options.urls
+        replaces = replaces or options.replaces_pypi
+        extra = extra or options.extra_index_url
         pending += included
-    return _indexes(urls, False, configured)
+    return _indexes(urls, False, replaces and not extra, configured)
 
 
 def _git_files(directory: str) -> list[str] | None:
@@ -668,7 +677,7 @@ def _trusted(
         locked = _ecosystems.locked(
             change.ecosystem, change.dir, change.name, version, lambda path: _git_text("HEAD", path), hashed
         )
-        return _upstream.trusted_python_index(change.name, version, locked, found.trusted)
+        return _upstream.trusted_python_index(change.name, version, locked, found.trusted, found.replaces_pypi)
 
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
         hosts = list(pool.map(host, changes))

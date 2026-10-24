@@ -18,7 +18,8 @@ adversarial.
   canonical one.
 - Anything that lets repository or upstream content add a trusted package
   index, or trust a package that a listed index does not serve at that
-  exact version and lock hashes (see "Trusted package indexes" in
+  exact version with matching downloaded file hashes, or, for an unhashed
+  pin, with an index that replaces PyPI (see "Trusted package indexes" in
   `AGENTS.md`).
 
 ## Do not raise

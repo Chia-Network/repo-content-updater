@@ -16,6 +16,7 @@ of it benign.
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import re
@@ -73,18 +74,34 @@ def github_repo(url: object) -> str:
 
 _REDIRECTS = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 5
+_TIMEOUT = 20
+_CHUNK = 1024 * 1024
+_MAX_INDEX_FILE = 512 * 1024 * 1024
+_MAX_INDEX_FILES = 64
 
 
-def _get(url: str, limit: int, accept: str = "application/json") -> tuple[int, str, bytes] | None:
-    """The status, Location header and first `limit + 1` body bytes of an https GET, or None when there is none."""
+def _get_response(url: str, accept: str) -> tuple[http.client.HTTPSConnection, http.client.HTTPResponse] | None:
+    """An open response to an https GET and its connection, or None when there is none."""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != "https" or not parts.hostname:
         return None
     target = parts.path + (f"?{parts.query}" if parts.query else "")
-    connection = http.client.HTTPSConnection(parts.hostname, timeout=20)
+    connection = http.client.HTTPSConnection(parts.hostname, timeout=_TIMEOUT)
     try:
         connection.request("GET", target, headers={"Accept": accept, "User-Agent": "dependency-review"})
-        response = connection.getresponse()
+        return connection, connection.getresponse()
+    except (OSError, http.client.HTTPException):
+        connection.close()
+        return None
+
+
+def _get(url: str, limit: int, accept: str = "application/json") -> tuple[int, str, bytes] | None:
+    """The status, Location header and first `limit + 1` body bytes of an https GET, or None when there is none."""
+    opened = _get_response(url, accept)
+    if opened is None:
+        return None
+    connection, response = opened
+    try:
         return response.status, response.getheader("Location") or "", response.read(limit + 1)
     except (OSError, http.client.HTTPException):
         return None
@@ -123,6 +140,43 @@ def fetch_archive(url: str, limit: int, follow: frozenset[str] = frozenset()) ->
     A redirect is followed only to a host in `follow`.
     """
     return _fetch(url, limit, follow) or None
+
+
+def _sha256_download(url: str, host: str, limit: int = _MAX_INDEX_FILE) -> str | None:
+    """The sha256 of an https GET body from `host`, or None when it is not a 200 or exceeds `limit` bytes.
+
+    The body is read in chunks. A redirect is followed only to `host`, and at most _MAX_REDIRECTS times.
+    """
+    for _hop in range(_MAX_REDIRECTS + 1):
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme != "https" or parts.hostname != host:
+            return None
+        opened = _get_response(url, "application/octet-stream")
+        if opened is None:
+            return None
+        connection, response = opened
+        try:
+            if response.status in _REDIRECTS:
+                location = response.getheader("Location") or ""
+                if not location:
+                    return None
+                url = urllib.parse.urljoin(url, location)
+                continue
+            if response.status != 200:
+                return None
+            digest = hashlib.sha256()
+            size = 0
+            while chunk := response.read(_CHUNK):
+                size += len(chunk)
+                if size > limit:
+                    return None
+                digest.update(chunk)
+            return digest.hexdigest()
+        except (OSError, http.client.HTTPException):
+            return None
+        finally:
+            connection.close()
+    return None
 
 
 def fetch_json(url: str) -> dict | None:
@@ -206,9 +260,10 @@ def go(module: str, _version: str) -> Repo:
 
 
 # Deliberate trust decision (AGENTS.md, "Trusted package indexes"): a Python package that one of the organization's
-# own indexes below serves, at the exact version and with every file hash the lock records, is trusted and is not
-# scanned. This tuple is the only list of trusted indexes. A repository's Dependabot config can select among them,
-# but nothing a repository or a package says can add one; any other configured index leaves pip changes inconclusive.
+# own indexes below serves at the exact version is trusted and is not scanned when every file hash the lock records
+# matches a file downloaded from it, or, for an unhashed pin, when that index replaces PyPI. This tuple is the only
+# list of trusted indexes. A repository's Dependabot config can select among them, but nothing a repository or a
+# package says can add one; any other configured index leaves pip changes inconclusive.
 TRUSTED_PYTHON_INDEXES = ("https://pypi.chia.net/simple/", "https://download.chia.net/simple/")
 _INDEX_LINK_RE = re.compile(r"""<a\s[^>]*?href=["']([^"']+)["']""", re.IGNORECASE)
 _SDIST_SUFFIXES = (".tar.gz", ".zip", ".tar.bz2")
@@ -230,32 +285,57 @@ def _release(filename: str) -> tuple[str, str]:
     return ("", "")
 
 
-def _index_digests(index: str, name: str, version: str) -> set[str] | None:
-    """The sha256 of each file a simple index page lists for `name` at `version` ("" for one with no hash), or None."""
-    body = _fetch(f"{index}{_canonical(name)}/", accept="text/html")
+def _index_files(index: str, name: str, version: str) -> tuple[str, ...] | None:
+    """The urls of the files a simple index page lists for `name` at `version`, or None.
+
+    Each url is resolved against the page and must be https on the index host. A page with no file for the version,
+    or with more than _MAX_INDEX_FILES of them, has none.
+    """
+    page_url = f"{index}{_canonical(name)}/"
+    body = _fetch(page_url, accept="text/html")
     if not body:
         return None
-    page = body.decode("utf-8", errors="replace")
-    digests: set[str] = set()
-    for href in _INDEX_LINK_RE.findall(page):
-        parts = urllib.parse.urlsplit(urllib.parse.unquote(href.replace("&amp;", "&")))
-        if _release(parts.path.rsplit("/", 1)[-1]) == (_canonical(name), version):
-            fragment = urllib.parse.parse_qs(parts.fragment)
-            digests.add((fragment.get("sha256") or [""])[0].lower())
-    return digests or None
+    host = urllib.parse.urlsplit(index).hostname
+    files: list[str] = []
+    for href in _INDEX_LINK_RE.findall(body.decode("utf-8", errors="replace")):
+        url = urllib.parse.urljoin(page_url, href.replace("&amp;", "&"))
+        parts = urllib.parse.urlsplit(url)
+        if _release(urllib.parse.unquote(parts.path.rsplit("/", 1)[-1])) != (_canonical(name), version):
+            continue
+        if parts.scheme != "https" or not host or parts.hostname != host:
+            return None
+        files.append(urllib.parse.urlunsplit(parts._replace(fragment="")))
+    return tuple(files) if files and len(files) <= _MAX_INDEX_FILES else None
 
 
-def trusted_python_index(name: str, version: str, locked: tuple[str, ...], configured: frozenset[str]) -> str:
+def trusted_python_index(
+    name: str,
+    version: str,
+    locked: tuple[str, ...],
+    configured: frozenset[str],
+    replaces_pypi: bool = False,
+) -> str:
     """The host of the first trusted index in `configured` that serves `name` at `version`, or "".
 
-    The index must list a file of that exact version, and the sha256 of every file the lock records (`locked`, as
-    binding.Subject.locked) when it records any.
+    With a hashed lock, each sha256 the lock records (`locked`, as binding.Subject.locked) must match a file
+    downloaded from that index at this version. With an unhashed pin, the index must replace PyPI (`replaces_pypi`).
+    A file link outside the index host is not downloaded.
     """
     if not _PYPI_NAME_RE.fullmatch(name) or not version:
         return ""
     wanted = {digest.removeprefix("sha256:").lower() for hashes in locked for digest in hashes.split()}
+    if not wanted and not replaces_pypi:
+        return ""
     for index in TRUSTED_PYTHON_INDEXES:
-        served = _index_digests(index, name, version) if index in configured else None
-        if served and wanted <= served - {""}:
-            return urllib.parse.urlsplit(index).hostname or ""
+        if index not in configured:
+            continue
+        files = _index_files(index, name, version)
+        if not files:
+            continue
+        host = urllib.parse.urlsplit(index).hostname or ""
+        if not wanted:
+            return host
+        downloaded = [_sha256_download(url, host) for url in files]
+        if all(digest is not None for digest in downloaded) and wanted <= {digest for digest in downloaded if digest}:
+            return host
     return ""

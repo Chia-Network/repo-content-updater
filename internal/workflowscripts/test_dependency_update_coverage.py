@@ -651,16 +651,21 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertNotEqual(published["verdict"], "benign")
 
     def test_a_pip_change_a_trusted_index_serves_is_trusted_and_the_rest_are_looked_up(self) -> None:
-        config = "registries:\n  chia:\n    type: python-index\n    url: https://pypi.chia.net/simple\n"
+        config = (
+            "registries:\n  chia:\n    type: python-index\n    url: https://pypi.chia.net/simple\n"
+            "    replaces-base: true\n"
+        )
         looked_up: list[str] = []
-        asked: list[tuple[str, str, frozenset[str]]] = []
+        asked: list[tuple[str, str, frozenset[str], bool]] = []
 
         def repo(_ecosystem: str, name: str, _version: str) -> upstream.Repo:
             looked_up.append(name)
             return _found(f"upstream/{name}")
 
-        def trusted(name: str, version: str, _locked: tuple[str, ...], configured: frozenset[str]) -> str:
-            asked.append((name, version, configured))
+        def trusted(
+            name: str, version: str, _locked: tuple[str, ...], configured: frozenset[str], replaces_pypi: bool
+        ) -> str:
+            asked.append((name, version, configured, replaces_pypi))
             return "pypi.chia.net" if name == "chiapos" else ""
 
         plan = _plan(
@@ -680,7 +685,12 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertEqual(
             sorted(asked),
             [
-                (name, "2.0.4" if name == "chiapos" else "23.2.0", frozenset({"https://pypi.chia.net/simple/"}))
+                (
+                    name,
+                    "2.0.4" if name == "chiapos" else "23.2.0",
+                    frozenset({"https://pypi.chia.net/simple/"}),
+                    True,
+                )
                 for name in ("attrs", "chiapos")
             ],
         )
@@ -723,7 +733,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         expected = {
             "plain": coverage.Indexes(),
             "other": coverage.Indexes(other=True),
-            "chia": coverage.Indexes(frozenset({chia})),
+            "chia": coverage.Indexes(frozenset({chia}), replaces_pypi=True),
             "chained": coverage.Indexes(other=True),
             "outside": coverage.Indexes(other=True),
             "sibling": coverage.Indexes(other=True),
@@ -739,9 +749,38 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             download = coverage.Indexes(frozenset({"https://download.chia.net/simple/"}))
             self.assertEqual(
                 coverage._requirements_indexes("chia", download),
-                coverage.Indexes(frozenset({chia, "https://download.chia.net/simple/"})),
+                coverage.Indexes(frozenset({chia, "https://download.chia.net/simple/"}), replaces_pypi=True),
             )
             self.assertEqual(coverage._requirements_indexes("plain", coverage.Indexes(other=True)).other, True)
+
+    def test_a_requirements_extra_index_means_the_index_does_not_replace_pypi(self) -> None:
+        chia = "https://pypi.chia.net/simple/"
+        cases = {
+            "index": (f"-i {chia}\nattrs==23.2.0\n", coverage.Indexes(frozenset({chia}), replaces_pypi=True)),
+            "extra": (f"--extra-index-url {chia}\nattrs==23.2.0\n", coverage.Indexes(frozenset({chia}))),
+            "both": (f"-i {chia}\n--extra-index-url {chia}\nattrs==23.2.0\n", coverage.Indexes(frozenset({chia}))),
+        }
+        for label, (text, expected) in cases.items():
+            with (
+                self.subTest(label),
+                patch.object(coverage, "_git_files", lambda directory: [f"{directory}/requirements.txt"]),
+                patch.object(coverage, "_git_text", lambda _rev, path, text=text: text),
+            ):
+                self.assertEqual(coverage._requirements_indexes("app", coverage.Indexes()), expected)
+
+    def test_a_dependabot_index_replaces_pypi_only_when_it_says_so(self) -> None:
+        chia = "https://pypi.chia.net/simple/"
+
+        def config(replaces: str) -> str:
+            return (
+                "registries:\n  chia:\n    type: python-index\n"
+                f"    url: {chia}\n    replaces-base: {replaces}\n"
+            )
+
+        self.assertEqual(
+            coverage._python_indexes(config("true")), coverage.Indexes(frozenset({chia}), replaces_pypi=True)
+        )
+        self.assertEqual(coverage._python_indexes(config("false")), coverage.Indexes(frozenset({chia})))
 
     def test_git_files_lists_one_directory_at_head(self) -> None:
         with TemporaryDirectory() as tmp:

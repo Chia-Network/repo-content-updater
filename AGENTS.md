@@ -54,7 +54,9 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
   `PIP_INDEX_URL`, is out of scope: the review reads only the pull request's
   tree.
 - A pip change is trusted only when a listed, configured index serves that
-  exact version and every file hash its lock records. Otherwise it is
+  exact version and either every file hash its lock records matches a file
+  downloaded from that index's own links, or the lock records no hashes and
+  that index replaces PyPI for the change's directory. Otherwise it is
   looked up and scanned as usual.
 - Trusted changes are disclosed in the review summary. They never block,
   and they are not counted as scanned.

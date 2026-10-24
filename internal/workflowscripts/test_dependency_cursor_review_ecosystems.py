@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import unittest
 import urllib.parse
@@ -437,6 +438,11 @@ if __name__ == "__main__":
 
 
 _CHIA = "https://pypi.chia.net/simple/"
+_HOST = "pypi.chia.net"
+_WHEEL = b"wheel bytes"
+_SDIST = b"sdist bytes"
+_WHEEL_URL = "https://pypi.chia.net/files/chiapos-2.0.4-cp312-cp312-manylinux_2_28_x86_64.whl"
+_SDIST_URL = "https://pypi.chia.net/files/chiapos-2.0.4.tar.gz"
 _PAGE = (
     b'<a href="../../files/chiapos-2.0.4-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=AAAA">w</a>\n'
     b'<a href="../../files/chiapos-2.0.4.tar.gz#sha256=bbbb">s</a>\n'
@@ -444,38 +450,86 @@ _PAGE = (
 )
 
 
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 class TrustedPythonIndexTest(unittest.TestCase):
-    def trusted(self, version: str, locked: tuple[str, ...] = (), configured=frozenset({_CHIA}), pages=None) -> str:
+    def trusted(
+        self,
+        version: str,
+        locked: tuple[str, ...] = (),
+        configured: frozenset[str] = frozenset({_CHIA}),
+        pages: dict[str, bytes] | None = None,
+        downloads: dict[str, bytes | None] | None = None,
+        replaces_pypi: bool = False,
+    ) -> str:
         urls: list[str] = []
-        pages = {f"{_CHIA}chiapos/": _PAGE} if pages is None else pages
+        fetched = {f"{_CHIA}chiapos/": _PAGE} if pages is None else pages
+        served = {_WHEEL_URL: _WHEEL, _SDIST_URL: _SDIST} if downloads is None else downloads
+        downloaded: list[str] = []
 
         def fetch(url: str, **_kwargs: object) -> bytes | None:
             urls.append(url)
-            return pages.get(url)
+            return fetched.get(url)
 
-        with patch.object(upstream, "_fetch", fetch):
-            found = upstream.trusted_python_index("ChiaPos", version, locked, configured)
+        def download(url: str, host: str) -> str | None:
+            downloaded.append(url)
+            body = served.get(url)
+            return _sha(body) if isinstance(body, bytes) and host == _HOST else None
+
+        with patch.object(upstream, "_fetch", fetch), patch.object(upstream, "_sha256_download", download):
+            found = upstream.trusted_python_index("ChiaPos", version, locked, configured, replaces_pypi)
         self.urls = urls
+        self.downloaded = downloaded
         return found
 
-    def test_a_served_version_is_trusted_with_its_host(self) -> None:
-        self.assertEqual(self.trusted("2.0.4"), "pypi.chia.net")
-        self.assertEqual(self.urls, [f"{_CHIA}chiapos/"])
+    def test_a_hashed_pin_is_trusted_only_when_a_downloaded_file_matches(self) -> None:
+        self.assertEqual(self.trusted("2.0.4", (f"sha256:{_sha(_WHEEL)}",)), _HOST)
+        self.assertEqual(self.downloaded, [_WHEEL_URL, _SDIST_URL])
+        self.assertEqual(self.trusted("2.0.4", (f"sha256:{_sha(_WHEEL)} sha256:{_sha(_SDIST)}",)), _HOST)
+        self.assertEqual(self.trusted("2.0.4", (f"sha256:{_sha(b'other')}",)), "")
 
-    def test_every_locked_hash_must_be_served(self) -> None:
-        self.assertEqual(self.trusted("2.0.4", ("sha256:aaaa sha256:BBBB",)), "pypi.chia.net")
-        self.assertEqual(self.trusted("2.0.4", ("sha256:aaaa sha256:dddd",)), "")
-        self.assertEqual(self.trusted("2.0.4", ("sha256:cccc",)), "")
+    def test_every_locked_hash_must_match_a_downloaded_file(self) -> None:
+        locked = f"sha256:{_sha(_WHEEL)} sha256:{_sha(b'other')}"
+        self.assertEqual(self.trusted("2.0.4", (locked,)), "")
+
+    def test_page_fragments_do_not_stand_in_for_downloaded_bytes(self) -> None:
+        for fragment in ("aaaa", "bbbb", "cccc"):
+            with self.subTest(fragment=fragment):
+                self.assertEqual(self.trusted("2.0.4", (f"sha256:{fragment}",)), "")
+
+    def test_a_failed_download_is_not_trusted(self) -> None:
+        hashed = (f"sha256:{_sha(_WHEEL)}",)
+        self.assertEqual(self.trusted("2.0.4", hashed, downloads={_WHEEL_URL: None, _SDIST_URL: _SDIST}), "")
+
+    def test_an_off_host_file_link_is_not_downloaded(self) -> None:
+        page = b'<a href="https://example.com/chiapos-2.0.4.tar.gz">x</a>\n'
+        self.assertEqual(
+            self.trusted("2.0.4", (f"sha256:{_sha(_SDIST)}",), pages={f"{_CHIA}chiapos/": page}), ""
+        )
+        self.assertEqual(self.downloaded, [])
+
+    def test_an_unhashed_pin_is_trusted_only_when_the_index_replaces_pypi(self) -> None:
+        self.assertEqual(self.trusted("2.0.4"), "")
+        self.assertEqual(self.trusted("2.0.4", replaces_pypi=True), _HOST)
+        self.assertEqual(self.trusted("2.0.4", ("",), replaces_pypi=True), _HOST)
+        self.assertEqual(self.trusted("2.0.4", ("",)), "")
 
     def test_a_version_the_index_does_not_serve_is_not_trusted(self) -> None:
-        self.assertEqual(self.trusted("2.0.5"), "")
-        self.assertEqual(self.trusted("2.0.4", pages={}), "")
+        self.assertEqual(self.trusted("2.0.5", replaces_pypi=True), "")
+        self.assertEqual(self.trusted("2.0.4", replaces_pypi=True, pages={}), "")
 
     def test_only_a_listed_index_is_ever_read(self) -> None:
         evil = "https://pypi.chia.net.evil/simple/"
-        self.assertEqual(self.trusted("2.0.4", configured=frozenset({evil}), pages={f"{evil}chiapos/": _PAGE}), "")
+        self.assertEqual(
+            self.trusted(
+                "2.0.4", configured=frozenset({evil}), pages={f"{evil}chiapos/": _PAGE}, replaces_pypi=True
+            ),
+            "",
+        )
         self.assertEqual(self.urls, [])
-        self.assertEqual(self.trusted("2.0.4", configured=frozenset()), "")
+        self.assertEqual(self.trusted("2.0.4", configured=frozenset(), replaces_pypi=True), "")
         self.assertEqual(self.urls, [])
 
     def test_release_reads_wheel_and_sdist_names(self) -> None:
@@ -483,3 +537,34 @@ class TrustedPythonIndexTest(unittest.TestCase):
         self.assertEqual(upstream._release("chia.pos-2.0.4.tar.gz"), ("chia-pos", "2.0.4"))
         self.assertEqual(upstream._release("chiapos-2.0.4.whl"), ("", ""))
         self.assertEqual(upstream._release("chiapos-2.0.4.exe"), ("", ""))
+
+
+class _Reply:
+    def __init__(self, chunks: list[bytes], status: int = 200) -> None:
+        self.status = status
+        self.chunks = chunks
+
+    def getheader(self, _name: str) -> str | None:
+        return None
+
+    def read(self, _size: int) -> bytes:
+        return self.chunks.pop(0) if self.chunks else b""
+
+
+class _Connection:
+    def close(self) -> None:
+        return None
+
+
+class Sha256DownloadTest(unittest.TestCase):
+    def download(self, chunks: list[bytes], limit: int = 8) -> str | None:
+        reply = _Reply(chunks)
+        with patch.object(upstream, "_get_response", lambda _url, _accept: (_Connection(), reply)):
+            return upstream._sha256_download(f"https://{_HOST}/x", _HOST, limit)
+
+    def test_a_body_over_the_limit_has_no_digest(self) -> None:
+        self.assertIsNone(self.download([b"1234", b"5678", b"9"]))
+        self.assertEqual(self.download([b"1234", b"5678"]), _sha(b"12345678"))
+
+    def test_a_download_from_another_host_is_not_read(self) -> None:
+        self.assertIsNone(upstream._sha256_download("https://example.com/x", _HOST))

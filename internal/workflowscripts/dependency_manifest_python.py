@@ -311,6 +311,8 @@ class IndexOptions(NamedTuple):
     urls: tuple[str, ...] = ()  # each --index-url and --extra-index-url
     includes: tuple[str, ...] = ()  # each --requirement and --constraint, as written
     unread: bool = False  # whether a line may name another package source the review does not read
+    replaces_pypi: bool = False  # an --index-url or -i is given and no --extra-index-url, so it replaces PyPI
+    extra_index_url: bool = False  # whether an --extra-index-url is given
 
 
 def _option(word: str, words: list[str]) -> tuple[str, str | None]:
@@ -339,6 +341,8 @@ def requirements_index_options(text: str) -> IndexOptions:
     """The index URLs and included files a requirements file names, read as pip reads its option lines."""
     urls: list[str] = []
     includes: list[str] = []
+    index_url = False
+    extra_index_url = False
     for line, original in _pip_lines(text):
         if not line.startswith("-"):
             # A line pip fills from the environment may be any option.
@@ -355,6 +359,8 @@ def requirements_index_options(text: str) -> IndexOptions:
                 return IndexOptions(unread=True)
             if option in _PIP_INDEXES:
                 urls.append(value)
+                index_url = index_url or option == "--index-url"
+                extra_index_url = extra_index_url or option == "--extra-index-url"
             elif option in _PIP_INCLUDES:
                 includes.append(value)
-    return IndexOptions(tuple(urls), tuple(includes))
+    return IndexOptions(tuple(urls), tuple(includes), False, index_url and not extra_index_url, extra_index_url)
