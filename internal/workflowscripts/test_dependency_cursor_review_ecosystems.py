@@ -283,10 +283,11 @@ class UpstreamRepoTest(unittest.TestCase):
             b'<meta name="go-source" content="golang.org/x/net https://github.com/golang/net/ '
             b'https://github.com/golang/net/tree/master{/dir}">\n'
         )
-        self.assertEqual(
-            self._repo("go", "golang.org/x/net", "v0.21.0", {url: page}),
-            (upstream.Repo("golang/net", upstream.PUBLISHER), [url]),
-        )
+        with patch.dict(ecosystems.KNOWN_REPO_PREFIXES, clear=True):  # the lookup this allowlist entry replaces
+            self.assertEqual(
+                self._repo("go", "golang.org/x/net", "v0.21.0", {url: page}),
+                (upstream.Repo("golang/net", upstream.PUBLISHER), [url]),
+            )
         grpc = b'<meta name="go-import" content="google.golang.org/grpc git https://github.com/grpc/grpc-go">'
         found = self._repo("go", "google.golang.org/grpc", "v1.62.0", {"https://google.golang.org/grpc?go-get=1": grpc})
         self.assertEqual(found[0], upstream.Repo("grpc/grpc-go", upstream.PUBLISHER))
@@ -317,7 +318,32 @@ class UpstreamRepoTest(unittest.TestCase):
                 self._repo("go", "golang.org/x/net", "v0.21.0", {}),
                 (upstream.Repo("golang/net", upstream.ALLOWLISTED), []),
             )
-        self.assertEqual(ecosystems.KNOWN_REPOS, {}, "the allowlist ships empty; each entry is checked by hand")
+        self.assertEqual(ecosystems.KNOWN_REPOS, {}, "exact entries ship empty; each entry is checked by hand")
+
+    def test_the_golang_org_x_prefix_maps_to_the_golang_owner(self) -> None:
+        self.assertEqual(ecosystems.KNOWN_REPO_PREFIXES, {("go", "golang.org/x/"): "golang"})
+        for name, repo in (
+            ("golang.org/x/net", "golang/net"),
+            ("golang.org/x/tools/gopls", "golang/tools"),
+            ("golang.org/x/exp/typeparams", "golang/exp"),
+        ):
+            with self.subTest(name):
+                self.assertEqual(self._repo("go", name, "v0.60.0", {}), (upstream.Repo(repo, upstream.ALLOWLISTED), []))
+        for ecosystem, name in (
+            ("go", "golang.org/x/"),
+            ("go", "golang.org/x/.."),
+            ("go", "golang.org/x//net"),
+            ("go", "golang.org/x/n@t"),
+            ("go", "golang.org/xnet"),
+            ("go", "example.com/golang.org/x/net"),
+            ("npm", "golang.org/x/net"),
+        ):
+            with self.subTest(ecosystem=ecosystem, name=name):
+                self.assertEqual(ecosystems.known_repo(ecosystem, name), "")
+
+    def test_an_exact_entry_wins_over_a_prefix(self) -> None:
+        with patch.dict(ecosystems.KNOWN_REPOS, {("go", "golang.org/x/net"): "golang/net-mirror"}):
+            self.assertEqual(ecosystems.known_repo("go", "golang.org/x/net"), "golang/net-mirror")
 
     def test_only_identity_attested_and_allowlisted_repositories_are_verified(self) -> None:
         self.assertEqual(upstream.VERIFIED, {upstream.IDENTITY, upstream.ATTESTED, upstream.ALLOWLISTED})

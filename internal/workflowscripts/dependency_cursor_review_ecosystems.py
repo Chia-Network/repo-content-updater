@@ -24,6 +24,7 @@ a provider block) it is the whole record, which changes with the version.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import PurePosixPath
 from typing import NamedTuple
@@ -60,6 +61,22 @@ _REFS_UNRESOLVED = frozenset({"from_ref_unresolved", "to_ref_unresolved"})
 # so a scan of it can be benign once it is also bound to the installed artifact. Add one only after checking by
 # hand that the package is published from that repository, e.g. ("go", "golang.org/x/net"): "golang/net".
 KNOWN_REPOS: dict[tuple[str, str], str] = {}
+# Prefix entries: (ecosystem, name prefix) -> GitHub owner. The first path segment after the prefix is the repository,
+# so golang.org/x/net and golang.org/x/tools/gopls map to golang/net and golang/tools.
+KNOWN_REPO_PREFIXES: dict[tuple[str, str], str] = {("go", "golang.org/x/"): "golang"}
+_REPO_SEGMENT = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def known_repo(ecosystem: str, name: str) -> str:
+    """The allowlisted owner/repo for a package, or "" when no exact or prefix entry names it."""
+    exact = KNOWN_REPOS.get((ecosystem, name))
+    if exact:
+        return exact
+    for (eco, prefix), owner in KNOWN_REPO_PREFIXES.items():
+        segment = name[len(prefix) :].split("/", 1)[0] if eco == ecosystem and name.startswith(prefix) else ""
+        if _REPO_SEGMENT.fullmatch(segment) and segment.strip("."):
+            return f"{owner}/{segment}"
+    return ""
 
 
 def _no_repo(_name: str, _version: str) -> upstream.Repo:
@@ -232,7 +249,7 @@ def upstream_repo(ecosystem: str, name: str, version: str) -> upstream.Repo:
 
     An allowlisted package skips the lookup.
     """
-    known = KNOWN_REPOS.get((ecosystem, name))
+    known = known_repo(ecosystem, name)
     if known:
         return upstream.Repo(known, upstream.ALLOWLISTED)
     row = _BY_NAME.get(ecosystem)
