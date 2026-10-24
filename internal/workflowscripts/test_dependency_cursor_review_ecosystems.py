@@ -106,16 +106,20 @@ class WarnPolicyTest(unittest.TestCase):
 
 class BindTest(unittest.TestCase):
     def _bind(self, ecosystem: str, version: str) -> binding.Binding:
-        return ecosystems.bind(ecosystem, binding.Subject("a/b", version, "a/b", _SHA, "."))
+        return ecosystems.bind(ecosystem, binding.Subject("a/b", version, "a/b", _SHA))
 
-    def test_go_modules_and_commit_pinned_actions_are_intrinsic(self) -> None:
-        for ecosystem, version in (("go", "v1.2.3"), ("github-actions", _SHA), ("github-actions", _SHA.upper())):
+    def test_go_modules_and_actions_pinned_to_a_full_tag_or_commit_are_intrinsic(self) -> None:
+        for ecosystem, version in (
+            ("go", "v1.2.3"),
+            ("github-actions", _SHA),
+            ("github-actions", _SHA.upper()),
+            ("github-actions", "4.2.0"),
+        ):
             with self.subTest(ecosystem=ecosystem, version=version):
                 self.assertEqual(self._bind(ecosystem, version), binding.Binding(binding.INTRINSIC))
 
-    def test_a_tag_pinned_action_and_ecosystems_without_a_binding_are_unbound(self) -> None:
+    def test_ecosystems_without_a_binding_are_unbound(self) -> None:
         for ecosystem, version, reason in (
-            ("github-actions", "4.2.0", binding.MUTABLE_REF),
             ("docker", "1.0", binding.UNSUPPORTED),
             ("cargo", "1.0.0", binding.UNSUPPORTED),
             ("unknown", "1.0.0", binding.UNSUPPORTED),

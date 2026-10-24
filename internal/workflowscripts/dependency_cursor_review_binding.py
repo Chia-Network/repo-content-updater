@@ -5,12 +5,12 @@ publisher controls that name. A binding ties the installed artifact back to
 the scanned commit:
 
 - intrinsic: the ecosystem installs that git content itself. A Go module zip
-  is built from the tag and pinned by go.sum; an action pinned to a commit
-  SHA runs that commit.
+  is built from the tag and pinned by go.sum; an action runs the commit its
+  full tag or commit SHA resolves to in the action's own repository, which is
+  the commit scanned.
 - provenance: the lockfile's artifact hash equals the registry's, and every
   provenance attestation the registry serves for the artifact names the
-  scanned repository, a commit equal to or reachable from the scanned commit,
-  and the artifact's digest.
+  scanned repository, the scanned commit itself and the artifact's digest.
 - unbound: anything else, with a reason. decide() never reports it benign.
 
 Provenance is read, not verified: the registry checks the Sigstore signature
@@ -25,12 +25,10 @@ import base64
 import binascii
 import json
 import re
-import subprocess
 import urllib.parse
 from typing import NamedTuple
 
 import dependency_cursor_review_upstream as upstream
-from dependency_cursor_review_versions import commit_ref
 
 INTRINSIC, PROVENANCE, UNBOUND = "intrinsic", "provenance", "unbound"
 BOUND = frozenset({INTRINSIC, PROVENANCE})
@@ -39,9 +37,8 @@ NO_LOCK_HASH = "no_lock_hash"  # no lockfile records one sha512 integrity for th
 HASH_MISMATCH = "hash_mismatch"  # the registry's integrity for the version is not the lockfile's
 NO_PROVENANCE = "no_provenance"  # the registry serves no provenance attestation for the artifact
 PROVENANCE_MISMATCH = "provenance_mismatch"  # an attestation names another repository, commit or digest
-MUTABLE_REF = "mutable_ref"  # an action pinned to a tag, which can be moved
 UNSUPPORTED = "unsupported"  # the ecosystem has no binding
-REASONS = frozenset({NO_LOCK_HASH, HASH_MISMATCH, NO_PROVENANCE, PROVENANCE_MISMATCH, MUTABLE_REF, UNSUPPORTED})
+REASONS = frozenset({NO_LOCK_HASH, HASH_MISMATCH, NO_PROVENANCE, PROVENANCE_MISMATCH, UNSUPPORTED})
 
 _SLSA_V1 = "https://slsa.dev/provenance/v1"
 # Fulcio certificate extensions 1.3.6.1.4.1.57264.1.12 (source repository URI) and .13 (source repository digest).
@@ -62,7 +59,6 @@ class Subject(NamedTuple):
     version: str
     repo: str  # owner/repo that was scanned
     commit: str  # the scanned commit (the peeled to tag)
-    checkout: str  # the clone of repo
     locked: tuple[str, ...] = ()  # the text of each top lock entry for name at version
 
 
@@ -80,11 +76,6 @@ def intrinsic(_subject: Subject) -> Binding:
 
 def unsupported(_subject: Subject) -> Binding:
     return _unbound(UNSUPPORTED)
-
-
-def action(subject: Subject) -> Binding:
-    """A commit SHA pin runs the scanned commit; a tag can be moved after the scan."""
-    return _INTRINSIC if commit_ref(subject.version) else _unbound(MUTABLE_REF)
 
 
 def _tlvs(data: bytes) -> list[tuple[int, bytes]]:
@@ -127,22 +118,8 @@ def _decoded(text: object) -> bytes:
     return base64.b64decode(text, validate=True) if isinstance(text, str) else b""
 
 
-def _reaches(subject: Subject, commit: str) -> bool:
-    """True when `commit` is the scanned commit or one of its ancestors."""
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        return False
-    if commit == subject.commit:
-        return True
-    proc = subprocess.run(
-        ["git", "-C", subject.checkout, "merge-base", "--is-ancestor", commit, subject.commit],
-        capture_output=True,
-        check=False,
-    )
-    return proc.returncode == 0
-
-
 def _attested(subject: Subject, certificate: object, statement: object, algorithm: str, digest: str) -> bool:
-    """One attestation names the scanned repository, a commit the scan reaches and the artifact digest."""
+    """One attestation names the scanned repository, the scanned commit and the artifact digest."""
     try:
         found = _extensions(_decoded(certificate), {})
         doc = json.loads(_decoded(statement))
@@ -152,7 +129,8 @@ def _attested(subject: Subject, certificate: object, statement: object, algorith
     digests = [item.get("digest") for item in items if isinstance(item, dict)] if isinstance(items, list) else []
     return (
         found.get(_SOURCE_REPO, "").lower() == f"https://github.com/{subject.repo}".lower()
-        and _reaches(subject, found.get(_SOURCE_COMMIT, ""))
+        and bool(subject.commit)
+        and found.get(_SOURCE_COMMIT) == subject.commit
         and any(isinstance(item, dict) and item.get(algorithm) == digest for item in digests)
     )
 

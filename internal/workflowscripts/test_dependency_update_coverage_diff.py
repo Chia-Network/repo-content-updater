@@ -109,6 +109,9 @@ class PolicyTest(_Diff):
     def test_a_major_minor_action_tag_is_a_moving_ref_too(self) -> None:
         self._not_scanned("v4.1", "v4.2", "moving_ref")
 
+    def test_a_bump_from_a_full_tag_to_a_branch_is_a_moving_ref(self) -> None:
+        self._not_scanned("v4.1.0", "main", "moving_ref")
+
     def _action(self, old: str, new: str, scan: Callable[..., dict] | None = None) -> tuple[dict, str]:
         return self.run_main(
             {".github/workflows/ci.yml": _WORKFLOW.format(old)},
@@ -163,20 +166,20 @@ class PolicyTest(_Diff):
                     published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
                     self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
 
-    def test_a_full_action_tag_is_scanned_and_not_bound(self) -> None:
-        """A tag can be moved after the scan, so only a commit SHA pin binds an action."""
+    def test_a_full_action_tag_bump_is_scanned_bound_and_can_be_benign(self) -> None:
+        """The scan resolves each full tag to its commit in the action's own repository: that range is what runs."""
         report, summary = self._action("v4.1.0", "v4.2.0")
         self.assertEqual(
             self.scanned,
             [coverage.Target(package="actions/checkout", old="4.1.0", new="4.2.0", repo="actions/checkout")],
         )
         self.assertEqual((report["policy_warnings"], report["scan_conclusive"]), ([], True))
-        self.assertEqual(report["binding"], {"kind": "unbound", "reason": "mutable_ref"})
-        self.assertIn("covered, artifact not bound (`mutable_ref`)", summary)
+        self.assertEqual(report["binding"], {"kind": "intrinsic", "reason": ""})
+        self.assertIn("covered, artifact binding `intrinsic`", summary)
         for warn_only in (True, False):
             published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
-            self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
-            self.assertIn("artifact_unbound(mutable_ref)", published["malware_text"])
+            self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+            self.assertNotIn("artifact_unbound", published["malware_text"])
 
     def test_docker_and_terraform_beside_a_clean_scan_are_never_benign(self) -> None:
         lock = 'provider "registry.terraform.io/hashicorp/aws" {{\n  version = "{}"\n}}\n'

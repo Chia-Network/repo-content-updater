@@ -7,12 +7,10 @@ import hashlib
 import json
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import dependency_cursor_review_binding as binding
 import dependency_cursor_review_upstream as upstream
-from upstream_malware_scan_case import _commit_file, _git, _init_repo
 
 _DATA = Path(__file__).resolve().parent / "testdata" / "provenance"
 # sigstore@3.0.0 on npm and sigstore 3.6.1 on PyPI, as the registries served them.
@@ -86,7 +84,7 @@ class _Registry(unittest.TestCase):
             return check(subject)
 
 
-_NPM = binding.Subject("sigstore", "3.0.0", "sigstore/sigstore-js", _NPM_COMMIT, ".", (_lock_record(_NPM_INTEGRITY),))
+_NPM = binding.Subject("sigstore", "3.0.0", "sigstore/sigstore-js", _NPM_COMMIT, (_lock_record(_NPM_INTEGRITY),))
 _NPM_DIGEST = base64.b64decode(_NPM_INTEGRITY.removeprefix("sha512-")).hex()
 _UNBOUND = binding.UNBOUND
 
@@ -165,31 +163,28 @@ class NpmTest(_Registry):
         self.assertEqual(self.urls[-1], "https://registry.npmjs.org/-/npm/v1/attestations/@scope%2Fpkg@3.0.0")
 
 
-class AncestorTest(_Registry):
-    def test_an_attested_commit_the_scanned_commit_descends_from_is_provenance(self) -> None:
-        with TemporaryDirectory() as tmp:
-            repo = Path(tmp) / "upstream"
-            _init_repo(repo)
-            commits = []
-            for content in ("1", "2"):
-                _commit_file(repo, "index.js", content, content)
-                commits.append(_git(repo, "rev-parse", "HEAD"))
-            subject = _NPM._replace(repo="a/b", checkout=str(repo))
-            for attested, scanned, want in (
-                (commits[0], commits[1], binding.Binding(binding.PROVENANCE)),
-                (commits[1], commits[0], binding.Binding(_UNBOUND, binding.PROVENANCE_MISMATCH)),
-                ("--output=x" + "0" * 30, commits[1], binding.Binding(_UNBOUND, binding.PROVENANCE_MISMATCH)),
-            ):
-                with self.subTest(attested=attested, scanned=scanned):
-                    pair = (_certificate("a/b", attested), _statement("sha512", _NPM_DIGEST))
-                    answers = {
-                        _NPM_DOC: {"dist": {"integrity": _NPM_INTEGRITY}},
-                        _NPM_ATTESTATIONS: _npm_attestations(pair),
-                    }
-                    self.assertEqual(self.bind(binding.npm, subject._replace(commit=scanned), answers), want)
+class ExactCommitTest(_Registry):
+    def test_only_the_scanned_commit_itself_is_provenance(self) -> None:
+        """An ancestor, a descendant or an abbreviation of the scanned commit is another commit."""
+        parent, child = "1" * 40, "2" * 40
+        for name, attested, scanned, want in (
+            ("the scanned commit", child, child, binding.Binding(binding.PROVENANCE)),
+            ("an ancestor", parent, child, binding.Binding(_UNBOUND, binding.PROVENANCE_MISMATCH)),
+            ("a descendant", child, parent, binding.Binding(_UNBOUND, binding.PROVENANCE_MISMATCH)),
+            ("an abbreviation", child[:12], child, binding.Binding(_UNBOUND, binding.PROVENANCE_MISMATCH)),
+            ("no scanned commit", "", "", binding.Binding(_UNBOUND, binding.PROVENANCE_MISMATCH)),
+        ):
+            with self.subTest(name):
+                pair = (_certificate("a/b", attested), _statement("sha512", _NPM_DIGEST))
+                answers = {
+                    _NPM_DOC: {"dist": {"integrity": _NPM_INTEGRITY}},
+                    _NPM_ATTESTATIONS: _npm_attestations(pair),
+                }
+                found = self.bind(binding.npm, _NPM._replace(repo="a/b", commit=scanned), answers)
+                self.assertEqual(found, want)
 
 
-_PYPI = binding.Subject("sigstore", "3.6.1", "sigstore/sigstore-python", _PYPI_COMMIT, ".")
+_PYPI = binding.Subject("sigstore", "3.6.1", "sigstore/sigstore-python", _PYPI_COMMIT)
 _WHEEL = "sigstore-3.6.1-py3-none-any.whl"
 
 

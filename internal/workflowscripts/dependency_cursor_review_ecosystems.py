@@ -83,7 +83,7 @@ ACTIONS = Ecosystem(
     ref_rules=_ACTION_REFS,
     repo=upstream.action,
     unresolved_rules=_ACTION_COMMITS,
-    bind=binding.action,
+    bind=binding.intrinsic,
 )
 DOCKER = Ecosystem("docker", warn=UNSCANNABLE_ECOSYSTEM)
 TERRAFORM = Ecosystem("terraform", warn=UNSCANNABLE_ECOSYSTEM)

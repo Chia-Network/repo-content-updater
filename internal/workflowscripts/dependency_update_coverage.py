@@ -558,14 +558,13 @@ def _targets(changes: list[_diff.Change]) -> list[tuple[Target, str]]:
     return resolved
 
 
-def _bind(change: _diff.Change, target: Target, record: dict, checkout: Path) -> dict:
+def _bind(change: _diff.Change, target: Target, record: dict) -> dict:
     """The binding of a covered scan to the artifact the change installs, as report fields."""
     subject = _binding.Subject(
         name=target.package,
         version=target.new,
         repo=target.repo,
         commit=str(record.get("resolved_to") or ""),
-        checkout=str(checkout),
         locked=_ecosystems.locked(
             change.ecosystem, change.dir, target.package, target.new, lambda path: _git_text("HEAD", path)
         ),
@@ -702,7 +701,7 @@ def main() -> None:
                 late.append({**change._asdict(), "reason": fallback})
                 continue
             if _covered(record):
-                record["binding"] = _bind(change, target, record, dest / ".upstream-dependency")
+                record["binding"] = _bind(change, target, record)
             records.append(record)
             scans.append((record, dest))
         disclosed = disclosed._replace(policy_warnings=disclosed.policy_warnings + tuple(late))
