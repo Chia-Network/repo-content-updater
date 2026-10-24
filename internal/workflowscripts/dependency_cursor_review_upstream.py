@@ -21,7 +21,9 @@ import http.client
 import json
 import re
 import urllib.parse
+from collections.abc import Mapping
 from typing import NamedTuple
+
 
 _PART = r"[A-Za-z0-9_.-]+"
 _GITHUB_URL_RE = re.compile(
@@ -109,12 +111,23 @@ def _get(url: str, limit: int, accept: str = "application/json") -> tuple[int, s
         connection.close()
 
 
+def _redirect_allowed(url: str, follow: Mapping[str, str] | None) -> bool:
+    """An https URL on a host in `follow`, within that host's required path prefix ("" permits any path)."""
+    parts = urllib.parse.urlsplit(url)
+    prefix = follow.get(parts.hostname) if follow and parts.hostname else None
+    return parts.scheme == "https" and prefix is not None and parts.path.startswith(prefix)
+
+
 def _fetch(
-    url: str, limit: int = _LIMIT, follow: frozenset[str] = frozenset(), accept: str = "application/json"
+    url: str,
+    limit: int = _LIMIT,
+    follow: Mapping[str, str] | None = None,
+    accept: str = "application/json",
 ) -> bytes | None:
     """The body of a 200 response to an https GET, b"" for a 404, or None when there is no readable answer.
 
-    A redirect is followed only to an https URL on a host in `follow`, and at most _MAX_REDIRECTS times.
+    A redirect is followed only to an https URL on a host in `follow`, within that host's path prefix, and at most
+    _MAX_REDIRECTS times.
     """
     for _hop in range(_MAX_REDIRECTS + 1):
         answer = _get(url, limit, accept)
@@ -124,8 +137,7 @@ def _fetch(
         if status not in _REDIRECTS:
             break
         url = urllib.parse.urljoin(url, location)
-        parts = urllib.parse.urlsplit(url)
-        if not location or parts.scheme != "https" or parts.hostname not in follow:
+        if not location or not _redirect_allowed(url, follow):
             return None
     else:
         return None
@@ -134,10 +146,10 @@ def _fetch(
     return body if status == 200 and len(body) <= limit else None
 
 
-def fetch_archive(url: str, limit: int, follow: frozenset[str] = frozenset()) -> bytes | None:
+def fetch_archive(url: str, limit: int, follow: Mapping[str, str] | None = None) -> bytes | None:
     """The body of a 200 response to an https GET of at most `limit` bytes, or None for anything else.
 
-    A redirect is followed only to a host in `follow`.
+    A redirect is followed only to a host in `follow`, within that host's path prefix.
     """
     return _fetch(url, limit, follow) or None
 

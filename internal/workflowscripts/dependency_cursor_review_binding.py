@@ -61,8 +61,9 @@ REASONS = frozenset(
 
 _SLSA_V1 = "https://slsa.dev/provenance/v1"
 _GO_PROXY = "https://proxy.golang.org"
-# The proxy may serve a module zip from its storage; the zip must still hash to the go.sum entry.
-_GO_PROXY_HOSTS = frozenset({"proxy.golang.org", "storage.googleapis.com"})
+# The proxy serves a module zip itself or redirects to this bucket's module path. The downloaded zip is used only
+# after its hash matches the go.sum entry (go() below).
+_GO_REDIRECTS = {"proxy.golang.org": "", "storage.googleapis.com": "/proxy-golang-org-prod/"}
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
@@ -193,14 +194,16 @@ def _go_escaped(text: str) -> str:
 def go(subject: Subject) -> Binding:
     """The proxy's module zip hashes to the go.sum entry, and the proxy built that zip from the scanned commit.
 
-    The go command installs a module only when its zip hashes to the go.sum entry, so that zip is the one checked.
+    The go command installs a module only when its zip hashes to the go.sum entry, so that zip is the one checked. A
+    proxy redirect may reach only its storage bucket's module path, and the downloaded zip is used only after that
+    hash check.
     """
     sums = set(subject.locked) - {""}
     want = sums.pop() if len(sums) == 1 else ""
     if not want.startswith("h1:"):
         return _unbound(NO_LOCK_HASH)
     base = f"{_GO_PROXY}/{_go_escaped(subject.name)}/@v/{_go_escaped('v' + subject.version)}"
-    archive = upstream.fetch_archive(base + ".zip", GO_ZIP_LIMIT, _GO_PROXY_HOSTS)
+    archive = upstream.fetch_archive(base + ".zip", GO_ZIP_LIMIT, _GO_REDIRECTS)
     found = go_zip_hash(archive) if archive else ""
     if not found:
         return _UNAVAILABLE

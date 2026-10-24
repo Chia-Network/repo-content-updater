@@ -346,8 +346,8 @@ class GoTest(_Registry):
         self.assertEqual(self.bind(binding.go, _GO, self._answers()), binding.Binding(binding.CHECKSUM))
         self.assertEqual(self.urls, [_GO_ZIP, _GO_INFO])
 
-    def test_a_proxy_zip_served_from_its_storage_is_checksum_bound(self) -> None:
-        stored = "https://storage.googleapis.com/proxy/utfbom.zip"
+    def test_a_proxy_zip_served_from_its_storage_path_is_checksum_bound(self) -> None:
+        stored = "https://storage.googleapis.com/proxy-golang-org-prod/github.com/dimchansky/utfbom/@v/v1.1.1.zip"
         answers = {
             _GO_ZIP: (302, stored, b""),
             stored: (200, "", _UTFBOM),
@@ -355,6 +355,18 @@ class GoTest(_Registry):
         }
         with patch.object(upstream, "_get", lambda url, _limit, _accept: answers[url]):
             self.assertEqual(binding.go(_GO), binding.Binding(binding.CHECKSUM))
+
+    def test_a_proxy_zip_redirect_outside_the_storage_path_is_not_read(self) -> None:
+        for stored in (
+            "https://storage.googleapis.com/other/utfbom.zip",
+            "https://storage.googleapis.com/proxy-golang-org-prod-other/utfbom.zip",
+            "https://storage.googleapis.com/proxy-golang-org-prod",
+        ):
+            with self.subTest(stored=stored):
+                answers = {_GO_ZIP: (302, stored, b""), stored: (200, "", _UTFBOM)}
+                with patch.object(upstream, "_get", lambda url, _limit, _accept, answers=answers: answers[url]):
+                    found = binding.go(_GO)
+                self.assertEqual(found, binding.Binding(binding.UNBOUND, binding.REGISTRY_UNAVAILABLE))
 
     def test_a_proxy_zip_that_does_not_hash_to_go_sum_is_a_hash_mismatch(self) -> None:
         for name, subject, answers in (
