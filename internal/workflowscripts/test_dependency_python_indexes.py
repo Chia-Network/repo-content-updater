@@ -155,6 +155,43 @@ class PythonIndexesTest(unittest.TestCase):
         text = "registries:\n  r:\n    type:\n    url: https://pypi.chia.net/simple/\n"
         self.assertTrue(indexes._dependabot_indexes(text).other)
 
+    def test_pypi_own_simple_index_is_the_default(self) -> None:
+        cases = {
+            "index": "-i https://pypi.org/simple\nattrs==23.2.0\n",
+            "index slash": "-i https://pypi.org/simple/\nattrs==23.2.0\n",
+            "extra": "--extra-index-url https://pypi.org/simple/\nattrs==23.2.0\n",
+            "legacy": "-i https://pypi.python.org/simple\nattrs==23.2.0\n",
+        }
+        for label, text in cases.items():
+            with self.subTest(label):
+                self.assertEqual(
+                    indexes.for_directory(
+                        "app",
+                        indexes.Indexes(),
+                        _read({"app/requirements.txt": text}),
+                        _requirements(),
+                    ),
+                    indexes.Indexes(),
+                )
+
+    def test_a_dependabot_pypi_index_is_the_default(self) -> None:
+        text = "registries:\n  pypi:\n    type: python-index\n    url: https://pypi.org/simple\n"
+        self.assertEqual(indexes._dependabot_indexes(text), indexes.Indexes())
+
+    def test_a_trusted_index_with_pypi_as_an_extra_index_does_not_replace_pypi(
+        self,
+    ) -> None:
+        text = f"-i {_CHIA}\n--extra-index-url https://pypi.org/simple\nattrs==23.2.0\n"
+        self.assertEqual(
+            indexes.for_directory(
+                "app",
+                indexes.Indexes(),
+                _read({"app/requirements.txt": text}),
+                _requirements(),
+            ),
+            indexes.Indexes(frozenset({_CHIA})),
+        )
+
     def test_only_listed_indexes_are_trusted_and_anything_else_trusts_none(
         self,
     ) -> None:

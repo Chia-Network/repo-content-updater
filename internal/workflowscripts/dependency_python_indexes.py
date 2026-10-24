@@ -2,9 +2,9 @@
 
 The Dependabot config can select among the organization's trusted indexes, and a
 requirements file can name indexes for its directory and the files it includes.
-A directory is read when every source it names is a trusted index. Any other
-source or an unreadable config leaves the directory unread, so no change there
-is trusted.
+A directory is read when every source it names is a trusted index or PyPI's own
+simple index. Any other source or an unreadable config leaves the directory
+unread, so no change there is trusted.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ _REGISTRY_FIELD_RE = re.compile(r"""^    (type|url|replaces-base):\s*(["']?)([^"
 _TYPE_FIELD_RE = re.compile(r"^    type\s*:")
 _SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
+_PYPI_INDEXES = frozenset({"https://pypi.org/simple/", "https://pypi.python.org/simple/"})
 _MAX_REQUIREMENTS_FILES = 64
 
 
@@ -49,14 +50,20 @@ def _indexes(
     *more: Indexes,
     extra: bool = False,
 ) -> Indexes:
-    """Indexes of `urls` and `more`. Any index that is not in TRUSTED_PYTHON_INDEXES, or `unread`, trusts none.
+    """Indexes of `urls` and `more`.
 
-    An extra index keeps PyPI as a source, so no index replaces it.
+    PyPI's own simple index is neither trusted nor other. Any index that is not in TRUSTED_PYTHON_INDEXES, or
+    `unread`, trusts none. An extra index keeps PyPI as a source, so no index replaces it.
     """
-    urls = [_normalized(url) for url in urls]
+    urls = [_normalized(url) for url in urls if _normalized(url) not in _PYPI_INDEXES]
     trusted = frozenset(url for url in urls if url in _upstream.TRUSTED_PYTHON_INDEXES)
     other = unread or len(trusted) != len(set(urls)) or any(item.other for item in more)
-    replaces = not other and not extra and (replaces_pypi or any(item.replaces_pypi for item in more))
+    replaces = (
+        not other
+        and not extra
+        and bool(trusted or any(item.trusted for item in more))
+        and (replaces_pypi or any(item.replaces_pypi for item in more))
+    )
     return Indexes(
         frozenset() if other else trusted.union(*(item.trusted for item in more)),
         other,
