@@ -40,6 +40,7 @@ class CombineCompleteTest(unittest.TestCase):
                     "unchecked_upgrades": [],
                     "unparsed_locks": [],
                     "binding": {"kind": "intrinsic", "reason": ""},
+                    "repo_source": "identity",
                 }
             payload = (json.dumps(report) + "\n").encode()
             report_path = root / "sealed-scan-report.json"
@@ -570,6 +571,7 @@ class CombineCompleteTest(unittest.TestCase):
                 "unchecked_upgrades": [],
                 "unparsed_locks": [],
                 "binding": {"kind": "intrinsic", "reason": ""},
+                "repo_source": "identity",
             },
         )
         self.assertIn("**Verdict: benign**", written["result"])
@@ -600,6 +602,7 @@ class CombineCompleteTest(unittest.TestCase):
                 "unchecked_upgrades": [],
                 "unparsed_locks": [],
                 "binding": {"kind": "intrinsic", "reason": ""},
+                "repo_source": "identity",
             },
         )
         body = written["compatibility_review"]["result"]

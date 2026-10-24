@@ -6,6 +6,8 @@ import json
 import unittest
 from unittest.mock import patch
 
+import dependency_cursor_review_binding as binding
+import dependency_cursor_review_upstream as upstream
 import dependency_update_coverage as coverage
 import malware_verdict_formatter as formatter
 from test_dependency_cursor_review_binding import (
@@ -22,7 +24,7 @@ from test_dependency_cursor_review_binding import (
     _integrity_url,
 )
 from test_dependency_update_coverage import _clean
-from test_dependency_update_coverage_diff import _BENIGN, _MERGE, GoBump, _Diff, _package
+from test_dependency_update_coverage_diff import _BENIGN, _GO, _MERGE, GoBump, _Diff, _package
 
 
 def _lock(version: str, integrity: str | None) -> str:
@@ -52,6 +54,7 @@ class NpmBindingTest(_Diff):
         report, summary = self._run(_NPM_INTEGRITY, attestations)
         self.assertEqual([(u.package, u.repo) for u in self.scanned], [("sigstore", "sigstore/sigstore-js")])
         self.assertEqual(report["binding"], {"kind": "provenance", "reason": ""})
+        self.assertEqual(report["repo_source"], "attested")
         self.assertIn("covered, artifact binding `provenance`", summary)
         published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
@@ -62,11 +65,13 @@ class NpmBindingTest(_Diff):
                 self.setUp()
                 report, summary = self._run(integrity, b"")
                 self.assertEqual(report["binding"], {"kind": "unbound", "reason": reason})
-                self.assertIn(f"covered, artifact not bound (`{reason}`)", summary)
+                self.assertIn(f"covered, artifact not bound (`{reason}`), repository named only by", summary)
+                self.assertEqual(report["repo_source"], "publisher")
                 for warn_only in (True, False):
                     published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
                     self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
                     self.assertIn(f"artifact_unbound({reason})", published["malware_text"])
+                    self.assertIn(formatter._REPO_UNVERIFIED_WARNING, published["malware_text"])
 
     def test_an_unreadable_attestation_answer_is_registry_unavailable(self) -> None:
         report, summary = self._run(_NPM_INTEGRITY, None)
@@ -97,6 +102,39 @@ class GoBindingTest(GoBump):
     def test_no_go_sum_entry_for_the_module_tree_is_inconclusive(self) -> None:
         report, summary = self.bump(self.HEAD_SUM.splitlines(keepends=True)[1])
         _inconclusive(self, report, summary, "no_lock_hash")
+
+
+class RepoSourceTest(GoBump):
+    """A bound scan is benign only when its repository is verified; go-get metadata alone does not verify it."""
+
+    def _bump_named_by(self, found: upstream.Repo) -> tuple[dict, str]:
+        with patch.object(coverage._ecosystems, "upstream_repo", lambda *_args: found):
+            return self.bump(self.HEAD_SUM)
+
+    def test_a_github_module_path_names_its_repository(self) -> None:
+        report, _summary = self.bump(self.HEAD_SUM)
+        self.assertEqual((report["binding"]["kind"], report["repo_source"]), ("checksum", "identity"))
+
+    def test_a_repository_named_only_by_publisher_metadata_is_inconclusive_and_passes(self) -> None:
+        report, summary = self._bump_named_by(upstream.Repo(_GO.repo, upstream.PUBLISHER))
+        self.assertEqual((report["binding"]["kind"], report["repo_source"]), ("checksum", "publisher"))
+        self.assertIn("covered, artifact binding `checksum`, repository named only by publisher metadata", summary)
+        for warn_only in (True, False):
+            published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
+            self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+            self.assertIn(formatter._REPO_UNVERIFIED_WARNING, published["malware_text"])
+            self.assertNotIn("benign", published["malware_text"])
+
+    def test_an_allowlisted_repository_is_verified(self) -> None:
+        report, _summary = self._bump_named_by(upstream.Repo(_GO.repo, upstream.ALLOWLISTED))
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
+        self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+
+    def test_only_provenance_attests_a_publisher_named_repository(self) -> None:
+        for kind, want in (("provenance", "attested"), ("checksum", "publisher"), ("unbound", "publisher")):
+            with self.subTest(kind=kind):
+                self.assertEqual(binding.repo_source(upstream.PUBLISHER, binding.Binding(kind)), want)
+        self.assertEqual(binding.repo_source(upstream.IDENTITY, binding.Binding("unbound")), "identity")
 
     def test_a_zip_the_proxy_built_from_another_commit_is_inconclusive(self) -> None:
         report, summary = self.bump(self.HEAD_SUM, origin="c" * 40)
@@ -160,10 +198,10 @@ class PooledBindingTest(_Diff):
     def test_each_covered_scan_gets_its_own_binding_once_every_scan_is_done(self) -> None:
         bound: list[str] = []
 
-        def bind(_change: object, target: coverage.Target, record: dict) -> dict:
+        def bind(_change: object, target: coverage.Target, record: dict) -> binding.Binding:
             self.assertEqual(len(self.scanned), 3, "a binding ran before every scan was done")
             bound.append(target.package)
-            return {"kind": "unbound", "reason": f"for-{target.package}"}
+            return binding.Binding("unbound", f"for-{target.package}")
 
         names = {"a": "1.0.0", "b": "2.0.0", "c": "3.0.0"}
         doc = json.dumps({"repository": "github:o/r"}).encode()
@@ -192,6 +230,12 @@ class GroupBindingTest(unittest.TestCase):
         self.assertEqual([item["binding"] for item in report["dependencies"]], [bound["binding"], unbound["binding"]])
         published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+
+    def test_a_group_carries_its_first_unverified_repository_source(self) -> None:
+        verified = {**_clean("a", "o/a"), "repo_source": "identity"}
+        named = {**_clean("b", "o/b"), "repo_source": "publisher"}
+        self.assertEqual(coverage.aggregate([verified, named])["repo_source"], "publisher")
+        self.assertEqual(coverage.aggregate([verified, verified])["repo_source"], "identity")
 
 
 if __name__ == "__main__":

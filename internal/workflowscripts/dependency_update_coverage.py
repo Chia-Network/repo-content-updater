@@ -4,7 +4,8 @@ The manifest diff (dependency_manifest_diff.plan) is the update list. A
 primary change is scanned unless its ecosystem's policy warns; a dependency is
 covered only when its scan is conclusive and both from_tag and to_tag are set.
 Anything else makes the group inconclusive. Each covered scan carries the
-binding of the scanned commit to the installed artifact. Policy warnings,
+binding of the scanned commit to the installed artifact, and where the
+scanned repository's name came from. Policy warnings,
 other upgraded packages and unparsed lockfiles are disclosed in the report and
 the summary.
 """
@@ -19,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import NamedTuple
@@ -27,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import dependency_cursor_review_binding as _binding
 import dependency_cursor_review_ecosystems as _ecosystems
+import dependency_cursor_review_upstream as _upstream
 import dependency_cursor_review_versions as _versions
 import dependency_manifest_diff as _diff
 from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN
@@ -44,6 +47,7 @@ class Target(NamedTuple):
     repo: str = ""
     old: str = ""
     new: str = ""
+    repo_source: str = ""  # dependency_cursor_review_upstream source of `repo`
 
 
 class Disclosure(NamedTuple):
@@ -63,6 +67,7 @@ def _fields(target: Target) -> dict[str, str]:
         "package_name": target.package,
         "path": target.path,
         "upstream_repo": target.repo,
+        "repo_source": target.repo_source,
         "from_version": target.old,
         "to_version": target.new,
     }
@@ -273,7 +278,8 @@ def aggregate(records: list[dict], disclosed: Disclosure = _NONE_DISCLOSED) -> d
             "errors": errors,
             "findings": findings,
             "unread": _unread_items(records),
-            "binding": _weakest(records),
+            "binding": _weakest(records, "binding", _bound),
+            "repo_source": _weakest(records, "repo_source", _verified),
             "dependencies": [
                 {
                     "package_name": record.get("package_name") or "",
@@ -283,6 +289,7 @@ def aggregate(records: list[dict], disclosed: Disclosure = _NONE_DISCLOSED) -> d
                     "scan_conclusive": _covered(record),
                     "not_scanned_reason": record.get("not_scanned_reason") or "",
                     "binding": record.get("binding"),
+                    "repo_source": record.get("repo_source"),
                 }
                 for record in records
             ],
@@ -298,9 +305,13 @@ def _bound(record: dict) -> bool:
     return isinstance(found, dict) and found.get("kind") in _binding.BOUND
 
 
-def _weakest(records: list[dict]) -> dict | None:
-    """The first unbound record's binding, else the first record's: one value for the group."""
-    return next((record.get("binding") for record in records if not _bound(record)), records[0].get("binding"))
+def _verified(record: dict) -> bool:
+    return record.get("repo_source") in _upstream.VERIFIED
+
+
+def _weakest(records: list[dict], key: str, holds: Callable[[dict], bool]) -> object:
+    """The first `key` of a record it does not hold for, else the first record's: one value for the group."""
+    return next((record.get(key) for record in records if not holds(record)), records[0].get(key))
 
 
 def _record_label(record: dict) -> str:
@@ -347,11 +358,12 @@ def render_summary(report: dict, records: list[dict]) -> str:
         span = f"{record.get('from_version') or '?'} -> {record.get('to_version') or '?'}"
         label = _code(f"{_record_label(record)} {span}") if record.get("package_name") else _code(_record_label(record))
         repo = record.get("upstream_repo") or "no repository"
+        named = "" if _verified(record) else ", repository named only by publisher metadata"
         if _covered(record) and _bound(record):
-            lines.append(f"- {label} ({repo}): covered, artifact binding `{record['binding']['kind']}`")
+            lines.append(f"- {label} ({repo}): covered, artifact binding `{record['binding']['kind']}`{named}")
         elif _covered(record):
             reason = (record.get("binding") or {}).get("reason") or "missing"
-            lines.append(f"- {label} ({repo}): covered, artifact not bound (`{reason}`)")
+            lines.append(f"- {label} ({repo}): covered, artifact not bound (`{reason}`){named}")
         else:
             reason = record.get("not_scanned_reason") or "not_conclusive"
             lines.append(f"- {label} ({repo}): not covered ({reason})")
@@ -554,13 +566,14 @@ def _targets(changes: list[_diff.Change]) -> list[tuple[_diff.Change, Target, st
         repos = dict(zip(wanted, pool.map(lambda key: _ecosystems.upstream_repo(*key), wanted)))
     resolved: list[tuple[_diff.Change, Target, str]] = []
     for key, (change, target, why) in zip(keys, exact):
-        repo = "" if why else repos[key]
-        resolved.append((change, target._replace(repo=repo), why or ("" if repo else "no_upstream_link")))
+        repo = _upstream.Repo() if why else repos[key]
+        found = target._replace(repo=repo.slug, repo_source=repo.source)
+        resolved.append((change, found, why or ("" if repo.slug else "no_upstream_link")))
     return resolved
 
 
-def _bind(change: _diff.Change, target: Target, record: dict) -> dict:
-    """The binding of a covered scan to the artifact the change installs, as report fields."""
+def _bind(change: _diff.Change, target: Target, record: dict) -> _binding.Binding:
+    """The binding of a covered scan to the artifact the change installs."""
     subject = _binding.Subject(
         name=target.package,
         version=target.new,
@@ -570,7 +583,7 @@ def _bind(change: _diff.Change, target: Target, record: dict) -> dict:
             change.ecosystem, change.dir, target.package, target.new, lambda path: _git_text("HEAD", path)
         ),
     )
-    return _ecosystems.bind(change.ecosystem, subject)._asdict()
+    return _ecosystems.bind(change.ecosystem, subject)
 
 
 def _scan_one(target: Target, dest: Path, scan_script: Path, ecosystem: str = "") -> dict:
@@ -697,8 +710,9 @@ def _scan_all(
         records.append(record)
         scans.append((record, dest))
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
-        for (_change, _target, record), found in zip(covered, pool.map(lambda item: _bind(*item), covered)):
-            record["binding"] = found
+        for (_change, target, record), found in zip(covered, pool.map(lambda item: _bind(*item), covered)):
+            record["binding"] = found._asdict()
+            record["repo_source"] = _binding.repo_source(target.repo_source, found)
     return records, scans, tuple(warnings)
 
 

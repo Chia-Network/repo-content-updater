@@ -39,7 +39,7 @@ _CONCLUSIVE_BYTES = (
     b'{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false,'
     b'"findings":{"ioc":[],"unicode":[],"confusable":[],"heuristic":[]},'
     b'"policy_warnings":[],"unchecked_upgrades":[],"unparsed_locks":[],'
-    b'"binding":{"kind":"intrinsic","reason":""}}\n'
+    b'"binding":{"kind":"intrinsic","reason":""},"repo_source":"identity"}\n'
 )
 
 

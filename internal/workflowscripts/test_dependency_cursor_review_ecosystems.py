@@ -221,7 +221,9 @@ class _Fetch:
 
 
 class UpstreamRepoTest(unittest.TestCase):
-    def _repo(self, ecosystem: str, name: str, version: str, answers: dict[str, object]) -> tuple[str, list[str]]:
+    def _repo(
+        self, ecosystem: str, name: str, version: str, answers: dict[str, object]
+    ) -> tuple[upstream.Repo, list[str]]:
         fetch = _Fetch(answers)
         with patch.object(upstream, "_fetch", fetch):
             return ecosystems.upstream_repo(ecosystem, name, version), fetch.urls
@@ -234,7 +236,7 @@ class UpstreamRepoTest(unittest.TestCase):
             ("go", "github.com/jackc/pgx/v5", "jackc/pgx"),
         ):
             with self.subTest(name=name):
-                self.assertEqual(self._repo(ecosystem, name, "1.0.0", {}), (want, []))
+                self.assertEqual(self._repo(ecosystem, name, "1.0.0", {}), (upstream.Repo(want, upstream.IDENTITY), []))
 
     def test_npm_repository_spellings(self) -> None:
         url = "https://registry.npmjs.org/@babel/core/7.24.0"
@@ -249,11 +251,13 @@ class UpstreamRepoTest(unittest.TestCase):
             with self.subTest(repository=repository):
                 self.assertEqual(
                     self._repo("npm", "@babel/core", "7.24.0", {url: {"repository": repository}}),
-                    ("babel/babel", [url]),
+                    (upstream.Repo("babel/babel", upstream.PUBLISHER), [url]),
                 )
         for repository in ("https://gitlab.com/a/b", "", {"url": 7}, "https://github.com/../b", None):
             with self.subTest(repository=repository):
-                self.assertEqual(self._repo("npm", "@babel/core", "7.24.0", {url: {"repository": repository}})[0], "")
+                self.assertEqual(
+                    self._repo("npm", "@babel/core", "7.24.0", {url: {"repository": repository}})[0], upstream.Repo()
+                )
 
     def test_pypi_prefers_source_labels_over_the_home_page(self) -> None:
         url = "https://pypi.org/pypi/requests/2.32.0/json"
@@ -264,10 +268,13 @@ class UpstreamRepoTest(unittest.TestCase):
                 "Source": "https://github.com/psf/requests",
             },
         }
-        self.assertEqual(self._repo("pip", "requests", "2.32.0", {url: {"info": info}}), ("psf/requests", [url]))
+        self.assertEqual(
+            self._repo("pip", "requests", "2.32.0", {url: {"info": info}}),
+            (upstream.Repo("psf/requests", upstream.PUBLISHER), [url]),
+        )
         home_only = {"home_page": "https://github.com/psf/requests", "project_urls": None}
-        self.assertEqual(self._repo("pip", "requests", "2.32.0", {url: {"info": home_only}})[0], "psf/requests")
-        self.assertEqual(self._repo("pip", "requests", "2.32.0", {url: {"info": "x"}})[0], "")
+        self.assertEqual(self._repo("pip", "requests", "2.32.0", {url: {"info": home_only}})[0].slug, "psf/requests")
+        self.assertEqual(self._repo("pip", "requests", "2.32.0", {url: {"info": "x"}})[0], upstream.Repo())
 
     def test_other_go_hosts_use_go_import_then_go_source(self) -> None:
         url = "https://golang.org/x/net?go-get=1"
@@ -276,13 +283,17 @@ class UpstreamRepoTest(unittest.TestCase):
             b'<meta name="go-source" content="golang.org/x/net https://github.com/golang/net/ '
             b'https://github.com/golang/net/tree/master{/dir}">\n'
         )
-        self.assertEqual(self._repo("go", "golang.org/x/net", "v0.21.0", {url: page}), ("golang/net", [url]))
+        self.assertEqual(
+            self._repo("go", "golang.org/x/net", "v0.21.0", {url: page}),
+            (upstream.Repo("golang/net", upstream.PUBLISHER), [url]),
+        )
         grpc = b'<meta name="go-import" content="google.golang.org/grpc git https://github.com/grpc/grpc-go">'
         found = self._repo("go", "google.golang.org/grpc", "v1.62.0", {"https://google.golang.org/grpc?go-get=1": grpc})
-        self.assertEqual(found[0], "grpc/grpc-go")
+        self.assertEqual(found[0], upstream.Repo("grpc/grpc-go", upstream.PUBLISHER))
         other = b'<meta name="go-import" content="example.com/other git https://github.com/evil/other">'
         self.assertEqual(
-            self._repo("go", "example.com/mod", "v1.0.0", {"https://example.com/mod?go-get=1": other})[0], ""
+            self._repo("go", "example.com/mod", "v1.0.0", {"https://example.com/mod?go-get=1": other})[0],
+            upstream.Repo(),
         )
 
     def test_names_outside_each_grammar_are_never_fetched(self) -> None:
@@ -298,7 +309,19 @@ class UpstreamRepoTest(unittest.TestCase):
             ("terraform", "registry.terraform.io/hashicorp/aws"),
         ):
             with self.subTest(ecosystem=ecosystem, name=name):
-                self.assertEqual(self._repo(ecosystem, name, "1.0.0", {}), ("", []))
+                self.assertEqual(self._repo(ecosystem, name, "1.0.0", {}), (upstream.Repo(), []))
+
+    def test_an_allowlisted_package_is_verified_without_a_lookup(self) -> None:
+        with patch.dict(ecosystems.KNOWN_REPOS, {("go", "golang.org/x/net"): "golang/net"}):
+            self.assertEqual(
+                self._repo("go", "golang.org/x/net", "v0.21.0", {}),
+                (upstream.Repo("golang/net", upstream.ALLOWLISTED), []),
+            )
+        self.assertEqual(ecosystems.KNOWN_REPOS, {}, "the allowlist ships empty; each entry is checked by hand")
+
+    def test_only_identity_attested_and_allowlisted_repositories_are_verified(self) -> None:
+        self.assertEqual(upstream.VERIFIED, {upstream.IDENTITY, upstream.ATTESTED, upstream.ALLOWLISTED})
+        self.assertNotIn(upstream.PUBLISHER, upstream.VERIFIED)
 
     def test_fetch_takes_only_https(self) -> None:
         for url in ("http://registry.npmjs.org/a/1.0.0", "file:///etc/passwd", "ftp://example.com/x", "https:///x"):
@@ -322,7 +345,7 @@ class UpstreamRepoTest(unittest.TestCase):
     def test_an_unavailable_registry_names_no_repository(self) -> None:
         for ecosystem, name in (("npm", "a"), ("pip", "a"), ("go", "example.com/mod")):
             with self.subTest(ecosystem=ecosystem), patch.object(upstream, "_fetch", lambda _url: None):
-                self.assertEqual(ecosystems.upstream_repo(ecosystem, name, "1.0.0"), "")
+                self.assertEqual(ecosystems.upstream_repo(ecosystem, name, "1.0.0"), upstream.Repo())
 
 
 if __name__ == "__main__":

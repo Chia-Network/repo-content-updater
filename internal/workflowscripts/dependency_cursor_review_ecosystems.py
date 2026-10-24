@@ -8,7 +8,8 @@ inconclusive with a named warning and does not block on it. A change one of
 its `unresolved_rules` matches is scanned, and reported that way only when the
 scan reports that its refs do not resolve in the cloned repository. A scanned
 change is benign only when its row's `bind` ties the scanned commit to the
-installed artifact.
+installed artifact, and its repository is verified
+(dependency_cursor_review_upstream.VERIFIED).
 
 Roles: a manifest declares dependencies; a lock records the installed copies
 of the dependencies the manifest beside it declares; checksums hash the
@@ -54,8 +55,15 @@ MANIFEST, LOCK, CHECKSUMS = "manifest", "lock", "checksums"
 _REFS_UNRESOLVED = frozenset({"from_ref_unresolved", "to_ref_unresolved"})
 
 
-def _no_repo(_name: str, _version: str) -> str:
-    return ""
+# The allowlist: (ecosystem, package name) -> the GitHub owner/repo it is built from, for a package whose
+# repository is named only by publisher metadata. An entry replaces that lookup and makes the repository verified,
+# so a scan of it can be benign once it is also bound to the installed artifact. Add one only after checking by
+# hand that the package is published from that repository, e.g. ("go", "golang.org/x/net"): "golang/net".
+KNOWN_REPOS: dict[tuple[str, str], str] = {}
+
+
+def _no_repo(_name: str, _version: str) -> upstream.Repo:
+    return upstream.Repo()
 
 
 # (warn reason, applies to (old, new)).
@@ -70,7 +78,7 @@ class Ecosystem(NamedTuple):
     name: str
     warn: str = ""  # the warn reason for every change, "" when changes are scanned
     ref_rules: tuple[_RefRule, ...] = ()  # the first rule that applies names the warn reason
-    repo: Callable[[str, str], str] = _no_repo  # GitHub repository of (name, exact version)
+    repo: Callable[[str, str], upstream.Repo] = _no_repo  # GitHub repository of (name, exact version)
     unresolved_rules: tuple[_RefRule, ...] = ()  # the warn reason when the scan cannot resolve the refs
     bind: Callable[[binding.Subject], binding.Binding] = binding.unsupported
 
@@ -219,10 +227,16 @@ def unresolved_reason(ecosystem: str, old: str, new: str, record: dict) -> str:
     return _first(row.unresolved_rules, old, new) if row and unresolved else ""
 
 
-def upstream_repo(ecosystem: str, name: str, version: str) -> str:
-    """The GitHub repository a change is scanned from, or "" when the ecosystem has none or the lookup failed."""
+def upstream_repo(ecosystem: str, name: str, version: str) -> upstream.Repo:
+    """The GitHub repository a change is scanned from, or Repo() when the ecosystem has none or the lookup failed.
+
+    An allowlisted package skips the lookup.
+    """
+    known = KNOWN_REPOS.get((ecosystem, name))
+    if known:
+        return upstream.Repo(known, upstream.ALLOWLISTED)
     row = _BY_NAME.get(ecosystem)
-    return row.repo(name, version) if row else ""
+    return row.repo(name, version) if row else upstream.Repo()
 
 
 def bind(ecosystem: str, subject: binding.Subject) -> binding.Binding:

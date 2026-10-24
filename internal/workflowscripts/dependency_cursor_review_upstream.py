@@ -3,7 +3,15 @@
 A GitHub Action and a github.com Go module name their repository in the
 package identity. An npm or PyPI package, and a Go module on another host,
 name it in registry or go-get metadata that the publisher controls. Every
-answer is an `owner/repo`, or "" when none is found.
+answer is a Repo: an `owner/repo` and where the name came from, or Repo()
+when none is found.
+
+A repository is verified when the package identity names it, when a
+provenance attestation for the installed artifact names it
+(dependency_cursor_review_binding.repo_source), or when the allowlist in
+dependency_cursor_review_ecosystems maps the package to it. A repository
+named only by publisher metadata is not, and decide() never reports a scan
+of it benign.
 """
 
 from __future__ import annotations
@@ -12,6 +20,7 @@ import http.client
 import json
 import re
 import urllib.parse
+from typing import NamedTuple
 
 _PART = r"[A-Za-z0-9_.-]+"
 _GITHUB_URL_RE = re.compile(
@@ -26,6 +35,22 @@ _GO_MODULE_RE = re.compile(r"(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?:/[A-Za-z0-9_.~+-
 _GO_META_RE = re.compile(r"""<meta\s+name=["'](go-import|go-source)["']\s+content=["']([^"']*)["']""", re.IGNORECASE)
 _SOURCE_LABEL_RE = re.compile(r"source|repo|code|github", re.IGNORECASE)
 _LIMIT = 4 * 1024 * 1024
+
+# Where a repository name came from.
+IDENTITY = "identity"  # the package identity: an action's owner/repo, a github.com Go module path
+ATTESTED = "attested"  # a provenance attestation for the installed artifact
+ALLOWLISTED = "allowlisted"  # dependency_cursor_review_ecosystems.KNOWN_REPOS
+PUBLISHER = "publisher"  # registry or go-get metadata the publisher writes
+VERIFIED = frozenset({IDENTITY, ATTESTED, ALLOWLISTED})
+
+
+class Repo(NamedTuple):
+    slug: str = ""  # owner/repo, "" when none was found
+    source: str = ""  # IDENTITY, ATTESTED, ALLOWLISTED or PUBLISHER; "" with no slug
+
+
+def _found(slug: str, source: str) -> Repo:
+    return Repo(slug, source) if slug else Repo()
 
 
 def _repo(owner: str, name: str) -> str:
@@ -81,14 +106,13 @@ def fetch_json(url: str) -> dict | None:
     return doc if isinstance(doc, dict) else None
 
 
-def action(name: str, _version: str) -> str:
+def action(name: str, _version: str) -> Repo:
     """`owner/repo` of `owner/repo[/path]`."""
     owner, _, rest = name.partition("/")
-    return _repo(owner, rest.split("/", 1)[0]) if re.fullmatch(_PART, owner) and rest else ""
+    return _found(_repo(owner, rest.split("/", 1)[0]) if re.fullmatch(_PART, owner) and rest else "", IDENTITY)
 
 
-def npm(name: str, version: str) -> str:
-    """The version document's `repository`: a URL, `{url}`, or `owner/repo` / `github:owner/repo` shorthand."""
+def _npm_repository(name: str, version: str) -> str:
     if not _NPM_NAME_RE.fullmatch(name):
         return ""
     doc = fetch_json(f"https://registry.npmjs.org/{name}/{urllib.parse.quote(version, safe='')}") or {}
@@ -100,8 +124,12 @@ def npm(name: str, version: str) -> str:
     return _repo(shorthand.group(1), shorthand.group(2)) if shorthand else github_repo(url)
 
 
-def pypi(name: str, version: str) -> str:
-    """The first GitHub project URL, source-like labels before the home page."""
+def npm(name: str, version: str) -> Repo:
+    """The version document's `repository`: a URL, `{url}`, or `owner/repo` / `github:owner/repo` shorthand."""
+    return _found(_npm_repository(name, version), PUBLISHER)
+
+
+def _pypi_repository(name: str, version: str) -> str:
     if not _PYPI_NAME_RE.fullmatch(name):
         return ""
     quoted = urllib.parse.quote(version, safe="")
@@ -110,20 +138,15 @@ def pypi(name: str, version: str) -> str:
         return ""
     urls = info.get("project_urls") if isinstance(info.get("project_urls"), dict) else {}
     labelled = sorted(urls.items(), key=lambda item: not _SOURCE_LABEL_RE.search(str(item[0])))
-    for url in [url for _label, url in labelled] + [info.get("home_page")]:
-        found = github_repo(url)
-        if found:
-            return found
-    return ""
+    return next(filter(None, map(github_repo, [url for _label, url in labelled] + [info.get("home_page")])), "")
 
 
-def go(module: str, _version: str) -> str:
-    """github.com/owner/repo from the module path, else the go-import or go-source GitHub URL for the module."""
-    if not _GO_MODULE_RE.fullmatch(module):
-        return ""
-    parts = module.split("/")
-    if parts[0] == "github.com":
-        return _repo(parts[1], parts[2]) if len(parts) >= 3 else ""
+def pypi(name: str, version: str) -> Repo:
+    """The first GitHub project URL, source-like labels before the home page."""
+    return _found(_pypi_repository(name, version), PUBLISHER)
+
+
+def _go_get_repository(module: str) -> str:
     page = (_fetch(f"https://{module}?go-get=1") or b"").decode("utf-8", errors="replace")
     metas = [(kind.lower(), content.split()) for kind, content in _GO_META_RE.findall(page)]
     for want, index in (("go-import", 2), ("go-source", 1)):
@@ -134,3 +157,13 @@ def go(module: str, _version: str) -> str:
                 if found:
                     return found
     return ""
+
+
+def go(module: str, _version: str) -> Repo:
+    """github.com/owner/repo from the module path, else the go-import or go-source GitHub URL for the module."""
+    if not _GO_MODULE_RE.fullmatch(module):
+        return Repo()
+    parts = module.split("/")
+    if parts[0] == "github.com":
+        return _found(_repo(parts[1], parts[2]) if len(parts) >= 3 else "", IDENTITY)
+    return _found(_go_get_repository(module), PUBLISHER)

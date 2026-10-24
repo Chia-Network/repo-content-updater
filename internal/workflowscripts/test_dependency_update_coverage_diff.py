@@ -122,7 +122,7 @@ class PolicyTest(_Diff):
 
     def test_commit_pinned_action_bumps_scan_the_commit_range_and_are_intrinsically_bound(self) -> None:
         """Commit -> commit, commit -> tag and tag -> commit are scanned; the case of a SHA is not part of it."""
-        target = coverage.Target(package="actions/checkout", repo="actions/checkout")
+        target = coverage.Target(package="actions/checkout", repo="actions/checkout", repo_source="identity")
         for old, new, scanned in (
             (_SHA, _SHA[::-1].upper(), target._replace(old=_SHA, new=_SHA[::-1])),
             ("v4.1.0", _SHA, target._replace(old="4.1.0", new=_SHA)),
@@ -185,7 +185,15 @@ class PolicyTest(_Diff):
         report, summary = self._action("v4.1.0", "v4.2.0")
         self.assertEqual(
             self.scanned,
-            [coverage.Target(package="actions/checkout", old="4.1.0", new="4.2.0", repo="actions/checkout")],
+            [
+                coverage.Target(
+                    package="actions/checkout",
+                    old="4.1.0",
+                    new="4.2.0",
+                    repo="actions/checkout",
+                    repo_source="identity",
+                )
+            ],
         )
         self.assertEqual((report["policy_warnings"], report["scan_conclusive"]), ([], True))
         self.assertEqual(report["binding"], {"kind": "intrinsic", "reason": ""})
