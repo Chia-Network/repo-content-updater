@@ -48,9 +48,15 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
 - A requirements file's `--index-url`, `-i` and `--extra-index-url` options
   select indexes for that file and the files it includes, read in pip's
   order. The last `--index-url` is its effective index, and any
-  `--extra-index-url` keeps PyPI as a source. Any other index,
-  `--find-links`, `--no-index`, an option filled from the environment, or an
-  include outside the repository leaves that file inconclusive.
+  `--extra-index-url` keeps PyPI as a source. A file keeps its replacing
+  trusted index only when every requirements file in its directory that
+  includes it, directly or through other includes, ends with that same index
+  and names no extra source. Any other index, `--find-links`, `--no-index`, an
+  option filled from the environment, or an include outside the repository
+  leaves that file inconclusive.
+- An exact pin in `pyproject.toml`, `setup.py`, `setup.cfg` or `Pipfile` is an
+  unhashed occurrence with no index, because pip installs it from the default
+  index. It never makes a change trusted.
 - A Dependabot `replaces-base` setting describes Dependabot's own resolution.
   It never makes an index replace PyPI for pip; only a requirements file's
   effective index does.
@@ -61,7 +67,7 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
   exact version and either every file hash its lock records matches a file
   downloaded from that index's own links, or every unhashed occurrence is in
   a requirements file whose effective index is a listed index that names no
-  other source, so that index replaces PyPI for that file. Otherwise it is
+  other source, so that index replaces PyPI for that install. Otherwise it is
   looked up and scanned as usual.
 - Trusted changes are disclosed in the review summary. They never block,
   and they are not counted as scanned.

@@ -773,6 +773,80 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 ("requirements.txt",),
                 True,
             ),
+            "outer include adds an extra source": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "requirements-dev.txt": "-r requirements.txt\n--extra-index-url https://pypi.org/simple/\n",
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "outer include ends at pypi": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "requirements-dev.txt": "-r requirements.txt\n-i https://pypi.org/simple/\n",
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "outer constraint adds an extra source": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "requirements-dev.txt": "-c requirements.txt\n--extra-index-url https://pypi.org/simple/\n",
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "outer include keeps the index": (
+                {
+                    "requirements.txt": f"-i https://pypi.chia.net/simple/\n{hashed_pin}",
+                    "requirements-dev.txt": "-r requirements.txt\n",
+                },
+                ("requirements.txt",),
+                True,
+            ),
+            "pyproject pin has no index": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "pyproject.toml": '[project]\ndependencies = ["chiapos==2.0.4"]\n',
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "setup.cfg pin has no index": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "setup.cfg": "[options]\ninstall_requires =\n    chiapos==2.0.4\n",
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "Pipfile pin has no index": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "Pipfile": '[packages]\nchiapos = "==2.0.4"\n',
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "setup.py pin has no index": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "setup.py": 'setup(install_requires=["chiapos==2.0.4"])\n',
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "short index option joined with equals": (
+                {"requirements.txt": f"-i=https://pypi.chia.net/simple/\n{hashed_pin}"},
+                ("requirements.txt",),
+                True,
+            ),
+            "upper case trusted host": (
+                {"requirements.txt": f"-i https://PYPI.CHIA.NET/simple/\n{hashed_pin}"},
+                ("requirements.txt",),
+                True,
+            ),
         }
 
         class Response:
@@ -822,7 +896,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                         plan,
                         repo=repo,
                         scan=lambda target, *_args: _clean(target.package, target.repo.slug),
-                        files=lambda directory, entries=entries: entries if directory == "." else [],
+                        files=lambda directory, entries=entries: entries if directory in {"", "."} else [],
                     )
                 self.assertEqual(looked_up, [] if trusted else ["chiapos"])
                 self.assertEqual(

@@ -582,6 +582,28 @@ class Exact(NamedTuple):
     index: str = ""  # the host of the trusted index that serves it, or ""
 
 
+def _index_occurrences(change: _diff.Change, new: str, hashed: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """Each (path, recorded hash) of an installed copy that constrains the trusted index.
+
+    A lock entry records a file hash and a requirements file records one when it pins one. An exact pin in
+    pyproject.toml, setup.py, setup.cfg or Pipfile records no hash and names no index: pip installs it from the
+    default index, so it is an unhashed occurrence with no replacing index.
+    """
+    found = list(
+        _ecosystems.locked_occurrences(
+            change.ecosystem, change.dir, change.name, new, lambda path: _git_text("HEAD", path), hashed
+        )
+    )
+    for path, kind in _ecosystems.beside(_ecosystems.PIP, _ecosystems.MANIFEST, change.dir):
+        parsed = kind.parse(_git_text("HEAD", path)) if kind.parse else None
+        if parsed and any(
+            name == change.name and _versions.exact_body(token, mode=change.ecosystem) == new
+            for name, token, _top, _text in parsed[0]
+        ):
+            found.append((path, ""))
+    return tuple(found)
+
+
 def _exact(
     change: _diff.Change,
     indexes: dict[str, _python_indexes.DirectoryIndexes],
@@ -605,9 +627,7 @@ def _exact(
     found = indexes.get(change.dir, _python_indexes.DirectoryIndexes(configured))
     if found.configured.other:
         return Exact(change, target, "configured_index")
-    occurrences = _ecosystems.locked_occurrences(
-        change.ecosystem, change.dir, change.name, new, lambda path: _git_text("HEAD", path), hashed
-    )
+    occurrences = _index_occurrences(change, new, hashed)
     if occurrences:
         facts = tuple(found.for_path(path) for path, _recorded in occurrences)
     elif any(fact.other for _path, fact in found.files):

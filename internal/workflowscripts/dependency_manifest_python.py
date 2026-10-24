@@ -344,7 +344,7 @@ def _option(word: str, words: list[str]) -> _Option:
             return _Option(None, unread=any(option in read for option in names))
         option = names[0]
     elif word[:2] in _PIP_SHORT_OPTIONS:
-        option, value = _PIP_SHORT_OPTIONS[word[:2]], word[2:]
+        option, value = _PIP_SHORT_OPTIONS[word[:2]], word[2:].removeprefix("=")
         equals = value
     else:
         return _Option(None)
@@ -354,30 +354,36 @@ def _option(word: str, words: list[str]) -> _Option:
 
 
 def requirements_index_options(text: str) -> IndexOptions:
-    """The package source options a requirements file names, read in pip's order."""
+    """The package source options a requirements file names, read in pip's order.
+
+    A line whose options cannot be read sets `unread`; the options already read, and the includes on later lines,
+    still say which files the install reads.
+    """
     found: list[IndexOption] = []
+    unread = False
     for line, original in _pip_lines(text):
         if not line.startswith("-"):
             # A line pip fills from the environment may be any option; only a plain requirement line is read.
             if not line and _ENV_VAR_RE.search(original) and not _REQ_RE.match(original.strip()):
-                return IndexOptions(unread=True)
+                unread = True
             continue
         try:
             words = shlex.split(line)
         except ValueError:
-            return IndexOptions(unread=True)
+            unread = True
+            continue
         while words:
             option = _option(words.pop(0), words)
             if option.name is None:
-                if option.unread:
-                    return IndexOptions(unread=True)
+                unread = unread or option.unread
                 continue
             if option.value is None or option.name in _PIP_OTHER_SOURCES:
-                return IndexOptions(unread=True)
+                unread = True
+                continue
             if option.name == "--index-url":
                 found.append(IndexOption(INDEX, option.value))
             elif option.name == "--extra-index-url":
                 found.append(IndexOption(EXTRA, option.value))
             elif option.name in _PIP_INCLUDES:
                 found.append(IndexOption(INCLUDE, option.value))
-    return IndexOptions(tuple(found))
+    return IndexOptions(tuple(found), unread)

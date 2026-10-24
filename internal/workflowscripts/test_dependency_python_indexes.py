@@ -151,6 +151,101 @@ class PythonIndexesTest(unittest.TestCase):
             indexes.Indexes(frozenset({_CHIA, _DOWNLOAD})),
         )
 
+    def test_an_outer_include_must_keep_the_same_replacing_index(self) -> None:
+        cases = {
+            "extra source": (
+                "-r requirements.txt\n--extra-index-url https://pypi.org/simple/\n",
+                indexes.Indexes(frozenset({_CHIA})),
+            ),
+            "later pypi index": (
+                "-r requirements.txt\n-i https://pypi.org/simple/\n",
+                indexes.Indexes(frozenset({_CHIA})),
+            ),
+            "constraint with an extra source": (
+                "-c requirements.txt\n--extra-index-url https://pypi.org/simple/\n",
+                indexes.Indexes(frozenset({_CHIA})),
+            ),
+            "include alone": (
+                "-r requirements.txt\n",
+                indexes.Indexes(frozenset({_CHIA}), index=_CHIA),
+            ),
+        }
+        for label, (outer, expected) in cases.items():
+            with self.subTest(label):
+                texts = {
+                    "app/requirements.txt": f"-i {_CHIA}\nchiapos==2.0.4\n",
+                    "app/requirements-dev.txt": outer,
+                }
+                tree = _listing("app/requirements.txt", "app/requirements-dev.txt")
+                found = indexes.for_directory("app", indexes.Indexes(), _read(texts), tree)
+                self.assertEqual(found.for_path("app/requirements.txt"), expected)
+
+    def test_an_unread_requirements_file_leaves_every_replacement_unread(self) -> None:
+        texts = {
+            "app/requirements.txt": f"-i {_CHIA}\nchiapos==2.0.4\n",
+            "app/requirements-dev.txt": "--find-links wheels\n",
+        }
+        tree = _listing("app/requirements.txt", "app/requirements-dev.txt")
+        found = indexes.for_directory("app", indexes.Indexes(), _read(texts), tree)
+        self.assertEqual(found.for_path("app/requirements.txt"), indexes.Indexes(frozenset({_CHIA})))
+
+    def test_a_diamond_include_is_read_once(self) -> None:
+        texts = {
+            "app/requirements.txt": "-r a.txt\n-r b.txt\n",
+            "app/a.txt": "-r shared.txt\n",
+            "app/b.txt": "-r shared.txt\n",
+            "app/shared.txt": f"-i {_CHIA}\n",
+        }
+        reads: list[str] = []
+
+        def read(_rev: str, path: str) -> str:
+            reads.append(path)
+            return texts[path]
+
+        tree = _listing(*texts)
+        found = indexes.for_directory("app", indexes.Indexes(), read, tree)
+        self.assertEqual(found.for_path("app/requirements.txt").index, _CHIA)
+        self.assertEqual(reads.count("app/shared.txt"), 1)
+
+    def test_a_requirements_tree_over_the_cap_leaves_the_directory_unread(self) -> None:
+        names = [f"f{i}.txt" for i in range(indexes._MAX_REQUIREMENTS_FILES + 1)]
+        texts = {"app/requirements.txt": "".join(f"-r {name}\n" for name in names)}
+        texts.update((f"app/{name}", "") for name in names)
+        tree = _listing(*texts)
+        found = indexes.for_directory("app", indexes.Indexes(), _read(texts), tree)
+        self.assertTrue(found.for_path("app/requirements.txt").other)
+
+    def test_a_source_option_the_review_cannot_read_leaves_the_file_unread(self) -> None:
+        for text in ("--find-links x\n", "-fx\n", "--find-links=x\n", "--no-index\n"):
+            with self.subTest(text=text):
+                self.assertTrue(_facts("app", indexes.Indexes(), {"app/requirements.txt": text}, _requirements()).other)
+
+    def test_an_unread_source_in_an_included_file_leaves_the_including_file_unread(self) -> None:
+        texts = {
+            "app/requirements.txt": "-r base.txt\n",
+            "app/base.txt": "--find-links wheels\n",
+        }
+        tree = _listing("app/requirements.txt", "app/base.txt")
+        self.assertTrue(_facts("app", indexes.Indexes(), texts, tree).other)
+
+    def test_a_malformed_index_url_is_not_a_source(self) -> None:
+        text = "-i https://[::1/simple/\nchiapos==2.0.4\n"
+        self.assertTrue(_facts("app", indexes.Indexes(), {"app/requirements.txt": text}, _requirements()).other)
+
+    def test_a_short_index_option_may_join_its_value_with_equals(self) -> None:
+        text = f"-i={_CHIA}\nchiapos==2.0.4\n"
+        self.assertEqual(
+            _facts("app", indexes.Indexes(), {"app/requirements.txt": text}, _requirements()),
+            indexes.Indexes(frozenset({_CHIA}), index=_CHIA),
+        )
+
+    def test_the_case_of_the_scheme_and_host_does_not_change_the_index(self) -> None:
+        text = f"-i {_CHIA.replace('https://', 'HTTPS://').replace('pypi.chia.net', 'PYPI.CHIA.NET')}\n"
+        self.assertEqual(
+            _facts("app", indexes.Indexes(), {"app/requirements.txt": text}, _requirements()),
+            indexes.Indexes(frozenset({_CHIA}), index=_CHIA),
+        )
+
     def test_other_registry_scalar_fields_are_accepted_and_ignored(self) -> None:
         text = (
             "registries:\n"
