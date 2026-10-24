@@ -790,6 +790,28 @@ class Sha256DownloadTest(unittest.TestCase):
             self.assertIsNone(upstream._sha256_download(f"https://{_HOST}/x", frozenset({_HOST})))
 
 class FetchBudgetTest(unittest.TestCase):
+    def test_the_default_budget_is_the_non_index_fetch_limit(self) -> None:
+        with patch.object(upstream, "_FETCH_SECONDS", 7.0), patch.object(upstream, "_FETCH_BYTES", 11):
+            budget = upstream._DownloadBudget(clock=lambda: 0.0)
+        self.assertEqual((budget.remaining_seconds(), budget.remaining), (7.0, 11))
+
+    def test_an_index_check_uses_the_index_budget(self) -> None:
+        seen: list[int] = []
+
+        def index_files(_index: str, _name: str, _version: str, budget: upstream._DownloadBudget) -> tuple[str, ...]:
+            seen.append(budget.remaining)
+            return ()
+
+        with (
+            patch.object(upstream, "_FETCH_SECONDS", 1.0),
+            patch.object(upstream, "_FETCH_BYTES", 1),
+            patch.object(upstream, "_INDEX_DOWNLOAD_SECONDS", 120.0),
+            patch.object(upstream, "_MAX_INDEX_DOWNLOAD_BYTES", 11),
+            patch.object(upstream, "_index_files", index_files),
+        ):
+            upstream.trusted_python_index("chiapos", "2.0.4", (upstream.Locked("", _CHIA),), frozenset({_CHIA}))
+        self.assertEqual(seen, [11])
+
     def test_a_redirect_body_and_the_next_hop_share_one_deadline(self) -> None:
         now = [0.0]
         budget = upstream._DownloadBudget(seconds=2, clock=lambda: now[0])

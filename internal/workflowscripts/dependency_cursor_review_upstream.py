@@ -84,6 +84,8 @@ _TIMEOUT = 20
 _CHUNK = 1024 * 1024
 _MAX_INDEX_FILE = 512 * 1024 * 1024
 _MAX_INDEX_FILES = 64
+_FETCH_SECONDS = 120.0
+_FETCH_BYTES = 1024 * 1024 * 1024
 _INDEX_DOWNLOAD_SECONDS = 120.0
 _MAX_INDEX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 
@@ -277,20 +279,21 @@ def fetch_archive(url: str, limit: int, follow: Mapping[str, str] | None = None)
 
 
 class _DownloadBudget:
-    """The time and total byte allowance of one package check.
+    """The time and total byte allowance of one fetch.
 
-    A grouped update runs one package check per package, so it can take up to N times these limits.
+    A non-index fetch gets _FETCH_SECONDS and _FETCH_BYTES. A trusted index check gets its own limits and passes them
+    explicitly. A grouped update runs one package check per package, so it can take up to N times these limits.
     """
 
     def __init__(
         self,
-        seconds: float = _INDEX_DOWNLOAD_SECONDS,
-        size: int = _MAX_INDEX_DOWNLOAD_BYTES,
+        seconds: float | None = None,
+        size: int | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._clock = clock
-        self.deadline = clock() + seconds
-        self.remaining = size
+        self.deadline = clock() + (_FETCH_SECONDS if seconds is None else seconds)
+        self.remaining = _FETCH_BYTES if size is None else size
 
     def remaining_seconds(self) -> float:
         return self.deadline - self._clock()
@@ -550,7 +553,7 @@ def trusted_python_index(
         return ""
     served: set[str] = set()
     matched = ""
-    budget = _DownloadBudget()
+    budget = _DownloadBudget(seconds=_INDEX_DOWNLOAD_SECONDS, size=_MAX_INDEX_DOWNLOAD_BYTES)
     for index in TRUSTED_PYTHON_INDEXES:
         if index not in configured:
             continue
