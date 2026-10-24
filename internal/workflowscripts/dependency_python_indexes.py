@@ -167,6 +167,8 @@ def for_directory(directory: str, configured: Indexes, read: _Read, list_files: 
                 return Indexes(other=True)
             pending.append(included)
         urls += options.urls
-        replaces = replaces or options.replaces_pypi
+        replaces = replaces or (
+            options.replaces_pypi and any(_normalized(url) in _upstream.TRUSTED_PYTHON_INDEXES for url in options.urls)
+        )
         extra = extra or options.extra_index_url
     return _indexes(urls, False, replaces, configured, extra=extra)

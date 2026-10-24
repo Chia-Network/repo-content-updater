@@ -174,6 +174,27 @@ class PythonIndexesTest(unittest.TestCase):
                     indexes.Indexes(),
                 )
 
+    def test_a_pypi_index_url_does_not_replace_pypi_beside_a_trusted_index(self) -> None:
+        text = "-i https://pypi.org/simple\nattrs==23.2.0\n"
+        self.assertEqual(
+            indexes.for_directory(
+                "app",
+                indexes.Indexes(frozenset({_CHIA})),
+                _read({"app/requirements.txt": text}),
+                _requirements(),
+            ),
+            indexes.Indexes(frozenset({_CHIA})),
+        )
+        self.assertEqual(
+            indexes.for_directory(
+                "app",
+                indexes.Indexes(frozenset({_CHIA}), replaces_pypi=True),
+                _read({"app/requirements.txt": text}),
+                _requirements(),
+            ),
+            indexes.Indexes(frozenset({_CHIA}), replaces_pypi=True),
+        )
+
     def test_a_dependabot_pypi_index_is_the_default(self) -> None:
         text = "registries:\n  pypi:\n    type: python-index\n    url: https://pypi.org/simple\n"
         self.assertEqual(indexes._dependabot_indexes(text), indexes.Indexes())
