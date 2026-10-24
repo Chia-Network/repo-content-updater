@@ -45,7 +45,7 @@ from dependency_manifest_lines import (
     workflow_uses,
 )
 from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
-from dependency_manifest_pnpm import pnpm_lock, pnpm_lock_integrity
+from dependency_manifest_pnpm import pnpm_lock, pnpm_lock_integrity, pnpm_lock_unsupported_version
 from dependency_manifest_python import (
     pipfile_lock,
     pipfile_lock_hashes,
@@ -140,6 +140,8 @@ class FileKind(NamedTuple):
     fixed: Callable[[Entry], str] = _line  # the part of an entry's text no version change may change
     # The artifact hash an installed copy's entry records, "" for none; None for an entry that is no installed copy.
     hashes: Callable[[Entry], str | None] | None = None
+    # The format version a lock declares when its grammar does not read that version, or "".
+    unsupported: Callable[[str], str] | None = None
 
 
 NPM = Ecosystem("npm", repo=upstream.npm, bind=binding.npm)
@@ -204,7 +206,15 @@ _FILES = (
         hashes=_top_copy(package_lock_integrity),
     ),
     FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), fixed=_record, hashes=_top_copy(yarn_lock_integrity)),
-    FileKind(NPM, LOCK, pnpm_lock, frozenset({"pnpm-lock.yaml"}), fixed=_record, hashes=_top_copy(pnpm_lock_integrity)),
+    FileKind(
+        NPM,
+        LOCK,
+        pnpm_lock,
+        frozenset({"pnpm-lock.yaml"}),
+        fixed=_record,
+        hashes=_top_copy(pnpm_lock_integrity),
+        unsupported=pnpm_lock_unsupported_version,
+    ),
     FileKind(GO, MANIFEST, go_mod, frozenset({"go.mod"})),
     FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), fixed=_record, hashes=go_sum_hash),
     FileKind(PIP, MANIFEST, requirements, frozenset({"pyproject.toml", "setup.py", "setup.cfg", "Pipfile"})),

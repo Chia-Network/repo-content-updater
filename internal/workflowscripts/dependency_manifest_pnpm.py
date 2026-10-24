@@ -21,6 +21,7 @@ import re
 from dependency_manifest_lines import Entry, Parsed
 
 _VERSIONS = frozenset({"6.0", "6.1", "9.0"})
+_MAX_VERSION_LENGTH = 8
 _LOCKFILE_VERSION_RE = re.compile(r"""^lockfileVersion: (['"]?)([0-9.]+)\1$""")
 _SECTIONS = frozenset({"dependencies", "devDependencies", "optionalDependencies"})
 _STANZAS = frozenset({"packages", "snapshots"})
@@ -100,13 +101,24 @@ def _stanza_text(kind: str, key: str, body: list[_Line]) -> tuple[str, str]:
     return json.dumps([kind, f"{name}@{version}", text]), resolution
 
 
+def _lockfile_version(lines: list[_Line]) -> str:
+    """The one top-level lockfileVersion a lock declares, or ""."""
+    versions = [
+        _LOCKFILE_VERSION_RE.match(line.raw) for line in lines if not line.indent and line.key == "lockfileVersion"
+    ]
+    return versions[0].group(2) if len(versions) == 1 and versions[0] else ""
+
+
+def pnpm_lock_unsupported_version(text: str) -> str:
+    """The lockfileVersion of a pnpm lock when pnpm_lock does not read that version, or ""."""
+    version = _lockfile_version([_Line(raw) for raw in text.splitlines() if raw.strip()])
+    return version if version not in _VERSIONS and len(version) <= _MAX_VERSION_LENGTH else ""
+
+
 def pnpm_lock(text: str) -> Parsed | None:
     lines = [_Line(raw) for raw in text.splitlines() if raw.strip()]
     blocks = _blocks(lines, 0)
-    if blocks is None:
-        return None
-    versions = [_LOCKFILE_VERSION_RE.match(header.raw) for header, _ in blocks if header.key == "lockfileVersion"]
-    if len(versions) != 1 or not versions[0] or versions[0].group(2) not in _VERSIONS:
+    if blocks is None or _lockfile_version(lines) not in _VERSIONS:
         return None
     # A version 6 lock of one project lists its dependency sections at the top level.
     root = [line for header, body in blocks if header.key in _SECTIONS for line in (header, *body)]

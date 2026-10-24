@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from dependency_manifest_diff import Change
-from dependency_manifest_pnpm import pnpm_lock, pnpm_lock_integrity
+from dependency_manifest_pnpm import pnpm_lock, pnpm_lock_integrity, pnpm_lock_unsupported_version
 from test_dependency_manifest_diff import _package, _plan
 
 _PACKAGE = _package(dependencies={"zod": "^3.22.0"}, devDependencies={"react-dom": "18.2.0"})
@@ -81,6 +81,13 @@ class PnpmLockTest(unittest.TestCase):
         self.assertIsNone(pnpm_lock(old))
         self.assertIsNotNone(pnpm_lock(_lock()))
         self.assertIsNone(pnpm_lock(_lock() + "\n  zod@3.25.76: {}\n"))
+
+    def test_the_lockfile_version_it_does_not_read_is_named(self) -> None:
+        self.assertEqual(pnpm_lock_unsupported_version(_lock().replace("'9.0'", "'5.4'")), "5.4")
+        self.assertEqual(pnpm_lock_unsupported_version("lockfileVersion: 5.3\n#\n"), "5.3")
+        for text in (_lock(), "", "lockfileVersion: 5.4\nlockfileVersion: 5.3\n", "lockfileVersion: next\n"):
+            self.assertEqual(pnpm_lock_unsupported_version(text), "", text)
+        self.assertEqual(pnpm_lock_unsupported_version("lockfileVersion: " + "5." * 9 + "4\n"), "")
 
     def test_only_a_registry_resolution_is_an_exact_version(self) -> None:
         def zod(lock: str) -> list[str]:

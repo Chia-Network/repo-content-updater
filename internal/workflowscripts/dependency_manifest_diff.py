@@ -18,8 +18,9 @@ version move ends up in one of:
   or changed type, does not parse, or changed in a way its versions do not
   account for: residue outside the entries, an entry whose text changed at an
   unchanged version, or a line entry whose text outside the version changed.
-- unparsed_locks: a lockfile with no grammar, or one its grammar does not read,
-  beside or above a primary change.
+- unparsed_locks: (path, reason) for a lockfile with no grammar, or one its
+  grammar does not read, beside or above a primary change. The reason names
+  a lockfile version the grammar does not read.
   With no such primary change, it is a gap.
 
 hashed lists each changed file read whose row records artifact hashes, such as
@@ -56,7 +57,7 @@ class Plan(NamedTuple):
     primary: tuple[Change, ...] = ()
     unchecked: tuple[Change, ...] = ()
     gaps: tuple[tuple[str, str], ...] = ()
-    unparsed_locks: tuple[str, ...] = ()
+    unparsed_locks: tuple[tuple[str, str], ...] = ()  # (path, reason)
     hashed: tuple[str, ...] = ()  # each changed path read whose row records artifact hashes (ecosystems.locked)
 
 
@@ -145,7 +146,9 @@ def _read(old_path: str, path: str, status: str, read: Read, base: str) -> list[
     before, after = row.parse(read(base, old_path)), row.parse(read("HEAD", path))
     if before is None or after is None:
         # A lock its grammar does not read, such as a pnpm lock of another lockfile version, is opaque.
-        return [_File(path, group, _OPAQUE if row.role == LOCK else _GAP)]
+        version = row.unsupported(read("HEAD", path)) if row.unsupported and after is None else ""
+        reason = f"lockfileVersion {version} is not supported" if version else "unresolved"
+        return [_File(path, group, _OPAQUE if row.role == LOCK else _GAP, reason)]
     moves = _moves(row, directory, before[0], after[0]) if before[1] == after[1] else None
     declared = _declared(row.ecosystem, directory, read, base) if row.role == LOCK else None
     if moves is None or (row.role == LOCK and declared is None):
@@ -202,7 +205,7 @@ def _resolve(file: _File, changes: list[tuple[Change, bool]]) -> Plan:
         )
     # A workspace lock (pnpm-lock.yaml, yarn.lock) at a root covers the manifests below it.
     if file.kind == _OPAQUE and any(primary and _under(change, file.group) for change, primary in changes):
-        return Plan(unparsed_locks=(file.path,))
+        return Plan(unparsed_locks=((file.path, file.reason),))
     return Plan(gaps=((file.path, file.reason),))
 
 

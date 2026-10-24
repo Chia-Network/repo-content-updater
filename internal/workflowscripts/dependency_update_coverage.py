@@ -56,7 +56,7 @@ class Disclosure(NamedTuple):
 
     policy_warnings: tuple[dict, ...] = ()
     unchecked_upgrades: tuple[dict, ...] = ()
-    unparsed_locks: tuple[str, ...] = ()
+    unparsed_locks: tuple[tuple[str, str], ...] = ()  # (path, reason)
     trusted_packages: tuple[dict, ...] = ()  # served by a configured trusted index: change fields and its "index"
 
 
@@ -346,7 +346,7 @@ def _disclosure(report: dict) -> list[str]:
     locks = report.get("unparsed_locks") or []
     if locks:
         lines.append("- These lockfiles were not parsed, so the packages they changed were not checked:")
-        lines.extend(f"  - {_code(path)}" for path in locks)
+        lines.extend(f"  - {_code(path)} ({reason})" for path, reason in locks)
     trusted = report.get("trusted_packages") or []
     if trusted:
         lines.append("- Packages from the organization's configured package indexes are trusted and were not scanned:")
