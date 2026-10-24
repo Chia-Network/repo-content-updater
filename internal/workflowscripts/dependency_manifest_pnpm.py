@@ -31,7 +31,6 @@ _STANZAS = frozenset({"packages", "snapshots"})
 _SCOPE_FLAGS = frozenset({"dev", "optional", "peer", "devOptional"})
 _KEY_RE = re.compile(r"""^( *)('[^']+'|"[^"]+"|[^\s'"][^\s]*?):(?: (.*))?$""")
 _REGISTRY_RE = re.compile(r"^\{integrity: (\S+)\}$")
-_REFERENCE = json.dumps(["dependency reference"])
 
 
 class _Line:
@@ -172,8 +171,9 @@ def pnpm_lock(text: str) -> Parsed | None:
         entries.append(
             (name, f"{version} ({resolution})" if resolution else version, (name, version) in top, stanza_text)
         )
+        reference_text = json.dumps(["dependency reference", name])
         entries.extend(
-            (ref_name, ref_version, (ref_name, ref_version) in top, _REFERENCE)
+            (ref_name, ref_version, (ref_name, ref_version) in top, reference_text)
             for ref_name, ref_version in references
             if (ref_name, ref_version) in stanza_versions
         )

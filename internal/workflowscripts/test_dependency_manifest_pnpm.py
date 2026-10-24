@@ -85,6 +85,39 @@ snapshots:
 """
 
 
+def _shared_stanza_lock(foo_bar: str) -> str:
+    """A lock where foo, qux and baz each resolve bar, and bar has two stanzas."""
+    return f"""lockfileVersion: '9.0'
+
+packages:
+
+  foo@1.0.0:
+    resolution: {{integrity: sha512-foo}}
+  qux@1.0.0:
+    resolution: {{integrity: sha512-qux}}
+  baz@1.0.0:
+    resolution: {{integrity: sha512-baz}}
+  bar@1.0.0:
+    resolution: {{integrity: sha512-bar1}}
+  bar@2.0.0:
+    resolution: {{integrity: sha512-bar2}}
+
+snapshots:
+
+  foo@1.0.0:
+    dependencies:
+      bar: {foo_bar}
+  qux@1.0.0:
+    dependencies:
+      bar: 1.0.0
+  baz@1.0.0:
+    dependencies:
+      bar: 2.0.0
+  bar@1.0.0: {{}}
+  bar@2.0.0: {{}}
+"""
+
+
 class PnpmLockTest(unittest.TestCase):
     def test_a_lockfile_only_bump_is_a_primary_change(self) -> None:
         plan = _plan(_files(_lock()), _files(_lock(zod="3.25.77", integrity="{integrity: sha512-new}")))
@@ -110,6 +143,13 @@ class PnpmLockTest(unittest.TestCase):
         package = _package(dependencies={"foo": "^1.0.0"})
         base = {"package.json": package, "pnpm-lock.yaml": _stanza_lock("1.0.0")}
         head = {"package.json": package, "pnpm-lock.yaml": _stanza_lock("2.0.0")}
+        plan = _plan(base, head)
+        self.assertEqual((plan.primary, plan.unchecked), ((), ()))
+        self.assertEqual(plan.gaps, (("pnpm-lock.yaml", "unresolved"),))
+
+    def test_a_dependency_value_change_between_shared_versions_is_a_gap(self) -> None:
+        base = {"pnpm-lock.yaml": _shared_stanza_lock("1.0.0")}
+        head = {"pnpm-lock.yaml": _shared_stanza_lock("2.0.0")}
         plan = _plan(base, head)
         self.assertEqual((plan.primary, plan.unchecked), ((), ()))
         self.assertEqual(plan.gaps, (("pnpm-lock.yaml", "unresolved"),))
