@@ -132,6 +132,29 @@ class PythonIndexesTest(unittest.TestCase):
             indexes.Indexes(frozenset({_CHIA, _DOWNLOAD})),
         )
 
+    def test_other_registry_scalar_fields_are_accepted_and_ignored(self) -> None:
+        text = (
+            "registries:\n"
+            "  chia:\n"
+            "    type: python-index\n"
+            f"    url: {_CHIA}\n"
+            "    username: chia-user\n"
+            "    password: ${{secrets.PW}}\n"
+            "    token: token value\n"
+            "    key: key\n"
+            "    organization: chia\n"
+            "    replaces-base: true\n"
+            "    auth-key: auth\n"
+            "    public-key-fingerprint: fingerprint\n"
+        )
+        self.assertEqual(indexes._dependabot_indexes(text), indexes.Indexes(frozenset({_CHIA})))
+
+    def test_a_registry_field_that_is_a_flow_value_or_list_leaves_the_config_unread(self) -> None:
+        for field in ("    options: {a: b}\n", "    tags: [a, b]\n", "    tags:\n      - a\n", "    type:\n"):
+            with self.subTest(field=field):
+                text = f"registries:\n  chia:\n    type: python-index\n    url: {_CHIA}\n{field}"
+                self.assertEqual(indexes._dependabot_indexes(text), indexes.Indexes(other=True))
+
     def test_a_dependabot_replaces_base_does_not_replace_pypi(self) -> None:
         def config(replaces: str) -> str:
             return f"registries:\n  chia:\n    type: python-index\n    url: {_CHIA}\n    replaces-base: {replaces}\n"

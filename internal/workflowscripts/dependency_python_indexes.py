@@ -24,11 +24,20 @@ _Read = Callable[[str, str], str]
 _ListFiles = Callable[[str], list[tuple[str, str]] | None]
 
 _REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
-_REGISTRY_FIELD_RE = re.compile(r"""^    (type|url|replaces-base):\s*(["']?)([^"'\s#]+)\2\s*(#.*)?$""")
+_REGISTRY_FIELD_RE = re.compile(r"^    ([A-Za-z0-9_-]+):[ \t]+(.+?)[ \t]*$")
+_REGISTRY_FIELDS = frozenset({"type", "url", "replaces-base"})
 _SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
 _PYPI_INDEXES = frozenset({"https://pypi.org/simple/", "https://pypi.python.org/simple/"})
 _MAX_REQUIREMENTS_FILES = 64
+
+
+def _registry_scalar(value: str) -> str | None:
+    """The scalar value of a registry field, or None when it is a flow mapping or a list."""
+    value = value.strip()
+    if not value or value[0] in "[{" or value == "-" or value.startswith("- "):
+        return None
+    return value[1:-1] if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'" else value
 
 
 class Indexes(NamedTuple):
@@ -89,8 +98,12 @@ def _dependabot_indexes(text: str) -> Indexes:
                 fields = {}
                 blocks.append(fields)
                 registry_key = True
-            elif fields is not None and (match := _REGISTRY_FIELD_RE.match(line)):
-                fields[match.group(1)] = match.group(3)
+            elif fields is not None and (match := _REGISTRY_FIELD_RE.match(content)):
+                name, scalar = match.group(1), _registry_scalar(match.group(2))
+                if scalar is None:
+                    unread = True
+                elif name in _REGISTRY_FIELDS:
+                    fields[name] = scalar
             else:
                 unread = True
         if not registry_key:
