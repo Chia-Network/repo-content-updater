@@ -69,6 +69,9 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
   a requirements file whose effective index is a listed index that names no
   other source, so that index replaces PyPI for that install. Otherwise it is
   looked up and scanned as usual.
+- Each package check has its own time and byte limits for reading the index
+  page and its files. A grouped update runs one check per package, so it can
+  take up to N times those limits.
 - Trusted changes are disclosed in the review summary. They never block,
   and they are not counted as scanned.
 - Do not "fix" this by scanning or blocking these packages. Changing the

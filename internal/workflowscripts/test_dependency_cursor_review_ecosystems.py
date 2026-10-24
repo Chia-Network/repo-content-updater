@@ -388,7 +388,7 @@ class UpstreamRepoTest(unittest.TestCase):
     def _follow(self, answers: dict[str, tuple[int, str, bytes]], url: str, follow: frozenset[str]) -> object:
         self.requested: list[str] = []
 
-        def get(url: str, _limit: int, _accept: str) -> tuple[int, str, bytes]:
+        def get(url: str, _limit: int, _accept: str, _budget: object = None) -> tuple[int, str, bytes]:
             self.requested.append(url)
             return answers[url]
 
@@ -529,7 +529,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
         body = b"body"
         page = b'<a href="../../files/chiapos-2.0.4.tar.gz">s</a>\n'
 
-        def get_response(url: str, _accept: str) -> tuple[_Connection, _Reply]:
+        def get_response(url: str, _accept: str, _budget: object = None) -> tuple[_Connection, _Reply]:
             return _Connection(), _Reply([page if url == f"{_CHIA}chiapos/" else body])
 
         real_budget = upstream._DownloadBudget
@@ -541,6 +541,25 @@ class TrustedPythonIndexTest(unittest.TestCase):
                 "ChiaPos", "2.0.4", (upstream.Locked(f"sha256:{_sha(body)}"),), frozenset({_CHIA})
             )
         self.assertEqual(found, "")
+
+    def test_the_index_page_read_uses_the_check_budget(self) -> None:
+        now = [0.0]
+        page = _Reply([bytes([byte]) for byte in _PAGE], clock=now, step=1.0)
+        connection = _Connection()
+
+        def get_response(_url: str, _accept: str, _budget: object = None) -> tuple[_Connection, _Reply]:
+            return connection, page
+
+        real_budget = upstream._DownloadBudget
+        with (
+            patch.object(upstream, "_get_response", get_response),
+            patch.object(upstream, "_DownloadBudget", lambda **_kwargs: real_budget(seconds=3, clock=lambda: now[0])),
+        ):
+            found = upstream.trusted_python_index(
+                "ChiaPos", "2.0.4", (upstream.Locked("", _CHIA),), frozenset({_CHIA})
+            )
+        self.assertEqual(found, "")
+        self.assertLessEqual(now[0], 3.0)
 
     def test_an_off_host_file_link_is_not_downloaded(self) -> None:
         page = b'<a href="https://example.com/chiapos-2.0.4.tar.gz">x</a>\n'
@@ -614,7 +633,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
     def _redirect_result(self, answers: dict[str, tuple[int, str, bytes]], version: str) -> str:
         requested: list[str] = []
 
-        def get(url: str, _limit: int, _accept: str) -> tuple[int, str, bytes]:
+        def get(url: str, _limit: int, _accept: str, _budget: object = None) -> tuple[int, str, bytes]:
             requested.append(url)
             return answers[url]
 
@@ -649,19 +668,54 @@ class TrustedPythonIndexTest(unittest.TestCase):
 
 
 class _Reply:
-    def __init__(self, chunks: list[bytes], status: int = 200, location: str = "") -> None:
+    def __init__(
+        self,
+        chunks: list[bytes],
+        status: int = 200,
+        location: str = "",
+        clock: list[float] | None = None,
+        step: float = 0.0,
+    ) -> None:
         self.status = status
         self.chunks = chunks
         self.location = location
+        self._clock = clock
+        self._step = step
 
     def getheader(self, name: str) -> str | None:
         return self.location if name == "Location" else None
 
-    def read(self, _size: int) -> bytes:
-        return self.chunks.pop(0) if self.chunks else b""
+    def _advance(self, count: int) -> None:
+        if self._clock is not None:
+            self._clock[0] += self._step * count
+
+    def read(self, size: int) -> bytes:
+        if not self.chunks:
+            return b""
+        body = b"".join(self.chunks)
+        self.chunks = [body[size:]] if body[size:] else []
+        self._advance(len(body[:size]))
+        return body[:size]
+
+    def read1(self, _size: int) -> bytes:
+        if not self.chunks:
+            return b""
+        self._advance(1)
+        return self.chunks.pop(0)
+
+
+class _Socket:
+    def __init__(self) -> None:
+        self.timeouts: list[float] = []
+
+    def settimeout(self, value: float) -> None:
+        self.timeouts.append(value)
 
 
 class _Connection:
+    def __init__(self) -> None:
+        self.sock = _Socket()
+
     def close(self) -> None:
         return None
 
@@ -674,7 +728,7 @@ class Sha256DownloadTest(unittest.TestCase):
         budget: upstream._DownloadBudget | None = None,
     ) -> str | None:
         reply = _Reply(chunks)
-        with patch.object(upstream, "_get_response", lambda _url, _accept: (_Connection(), reply)):
+        with patch.object(upstream, "_get_response", lambda _url, _accept, _budget=None: (_Connection(), reply)):
             return upstream._sha256_download(f"https://{_HOST}/x", frozenset({_HOST}), limit, budget)
 
     def test_a_body_over_the_limit_has_no_digest(self) -> None:
@@ -692,6 +746,27 @@ class Sha256DownloadTest(unittest.TestCase):
         now[0] = upstream._INDEX_DOWNLOAD_SECONDS + 1
         self.assertIsNone(self.download([b"abc"], budget=budget))
 
+    def test_a_drip_body_stops_at_the_deadline(self) -> None:
+        now = [0.0]
+        budget = upstream._DownloadBudget(seconds=3, clock=lambda: now[0])
+        reply = _Reply([b"x"] * 10, clock=now, step=1.0)
+        with patch.object(upstream, "_get_response", lambda _url, _accept, _budget=None: (_Connection(), reply)):
+            self.assertIsNone(upstream._sha256_download(f"https://{_HOST}/x", frozenset({_HOST}), 100, budget))
+        self.assertLessEqual(now[0], 3.0)
+
+    def test_each_read_uses_the_remaining_budget_as_its_timeout(self) -> None:
+        now = [0.0]
+        budget = upstream._DownloadBudget(seconds=30, clock=lambda: now[0])
+        now[0] = 25.0
+        connection = _Connection()
+        reply = _Reply([b"x"])
+        with patch.object(upstream, "_get_response", lambda _url, _accept, _budget=None: (connection, reply)):
+            self.assertEqual(
+                upstream._sha256_download(f"https://{_HOST}/x", frozenset({_HOST}), 100, budget),
+                _sha(b"x"),
+            )
+        self.assertEqual(connection.sock.timeouts, [5.0, 5.0])
+
     def test_a_download_from_another_host_is_not_read(self) -> None:
         self.assertIsNone(upstream._sha256_download("https://example.com/x", frozenset({_HOST})))
 
@@ -699,7 +774,7 @@ class Sha256DownloadTest(unittest.TestCase):
         target = "https://download.chia.net/x"
         hosts = frozenset({_HOST, "download.chia.net"})
 
-        def get_response(url: str, _accept: str) -> tuple[_Connection, _Reply]:
+        def get_response(url: str, _accept: str, _budget: object = None) -> tuple[_Connection, _Reply]:
             if url == f"https://{_HOST}/x":
                 return _Connection(), _Reply([], status=302, location=target)
             return _Connection(), _Reply([b"abc"])
@@ -707,3 +782,22 @@ class Sha256DownloadTest(unittest.TestCase):
         with patch.object(upstream, "_get_response", get_response):
             self.assertEqual(upstream._sha256_download(f"https://{_HOST}/x", hosts), _sha(b"abc"))
             self.assertIsNone(upstream._sha256_download(f"https://{_HOST}/x", frozenset({_HOST})))
+
+class FetchBudgetTest(unittest.TestCase):
+    def test_a_redirect_body_and_the_next_hop_share_one_deadline(self) -> None:
+        now = [0.0]
+        budget = upstream._DownloadBudget(seconds=2, clock=lambda: now[0])
+        url = f"https://{_HOST}/a"
+        moved = f"https://{_HOST}/b"
+        requested: list[str] = []
+
+        def get_response(target: str, _accept: str, _budget: object = None) -> tuple[_Connection, _Reply]:
+            requested.append(target)
+            if target == url:
+                return _Connection(), _Reply([b"x"], status=302, location=moved, clock=now, step=1.0)
+            return _Connection(), _Reply([b"a", b"b"], clock=now, step=1.0)
+
+        with patch.object(upstream, "_get_response", get_response):
+            self.assertIsNone(upstream._fetch(url, follow={_HOST: ""}, budget=budget))
+        self.assertEqual(requested, [url, moved])
+        self.assertLessEqual(now[0], 2.0)

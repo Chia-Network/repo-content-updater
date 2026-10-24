@@ -857,20 +857,27 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             def getheader(self, _name: str) -> None:
                 return None
 
-            def read(self, size: int = -1) -> bytes:
+            def read1(self, size: int = -1) -> bytes:
                 if size < 0:
                     size = len(self.body)
                 chunk, self.body = self.body[:size], self.body[size:]
                 return chunk
 
+        class Socket:
+            def settimeout(self, _value: float) -> None:
+                return None
+
         class Connection:
+            def __init__(self) -> None:
+                self.sock = Socket()
+
             def close(self) -> None:
                 return None
 
         answers = {page_url: page, file_url: sdist}
         requested: list[str] = []
 
-        def get_response(url: str, _accept: str) -> tuple[Connection, Response]:
+        def get_response(url: str, _accept: str, _budget: object = None) -> tuple[Connection, Response]:
             requested.append(url)
             if url not in answers:
                 raise AssertionError(f"unexpected request {url}")

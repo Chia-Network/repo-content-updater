@@ -353,7 +353,7 @@ class GoTest(_Registry):
             stored: (200, "", _UTFBOM),
             _GO_INFO: (200, "", json.dumps(_origin(_GO_COMMIT)).encode()),
         }
-        with patch.object(upstream, "_get", lambda url, _limit, _accept: answers[url]):
+        with patch.object(upstream, "_get", lambda url, _limit, _accept, _budget=None: answers[url]):
             self.assertEqual(binding.go(_GO), binding.Binding(binding.CHECKSUM))
 
     def test_a_proxy_zip_redirect_outside_the_storage_path_is_not_read(self) -> None:
@@ -364,7 +364,7 @@ class GoTest(_Registry):
         ):
             with self.subTest(stored=stored):
                 answers = {_GO_ZIP: (302, stored, b""), stored: (200, "", _UTFBOM)}
-                with patch.object(upstream, "_get", lambda url, _limit, _accept, answers=answers: answers[url]):
+                with patch.object(upstream, "_get", lambda url, _limit, _accept, _budget=None, answers=answers: answers[url]):
                     found = binding.go(_GO)
                 self.assertEqual(found, binding.Binding(binding.UNBOUND, binding.REGISTRY_UNAVAILABLE))
 

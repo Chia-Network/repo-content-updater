@@ -86,29 +86,76 @@ _INDEX_DOWNLOAD_SECONDS = 120.0
 _MAX_INDEX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 
 
-def _get_response(url: str, accept: str) -> tuple[http.client.HTTPSConnection, http.client.HTTPResponse] | None:
-    """An open response to an https GET and its connection, or None when there is none."""
+def _set_timeout(connection: http.client.HTTPSConnection, budget: _DownloadBudget) -> bool:
+    """Set the socket timeout from the budget, or return False when the budget has no time left."""
+    remaining = budget.remaining_seconds()
+    if remaining <= 0:
+        return False
+    if connection.sock is not None:
+        connection.sock.settimeout(min(_TIMEOUT, remaining))
+    return True
+
+
+def _read_chunk(
+    connection: http.client.HTTPSConnection,
+    response: http.client.HTTPResponse,
+    size: int,
+    budget: _DownloadBudget,
+) -> bytes | None:
+    """Up to `size` bytes from `response`, or None when the budget has no time left."""
+    if not _set_timeout(connection, budget):
+        return None
+    return response.read1(size)
+
+
+def _get_response(
+    url: str,
+    accept: str,
+    budget: _DownloadBudget | None = None,
+) -> tuple[http.client.HTTPSConnection, http.client.HTTPResponse] | None:
+    """An open response to an https GET and its connection, or None when there is none within `budget`."""
+    budget = budget or _DownloadBudget()
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != "https" or not parts.hostname:
         return None
+    remaining = budget.remaining_seconds()
+    if remaining <= 0:
+        return None
     target = parts.path + (f"?{parts.query}" if parts.query else "")
-    connection = http.client.HTTPSConnection(parts.hostname, timeout=_TIMEOUT)
+    connection = http.client.HTTPSConnection(parts.hostname, timeout=min(_TIMEOUT, remaining))
     try:
         connection.request("GET", target, headers={"Accept": accept, "User-Agent": "dependency-review"})
+        if not _set_timeout(connection, budget):
+            connection.close()
+            return None
         return connection, connection.getresponse()
     except (OSError, http.client.HTTPException):
         connection.close()
         return None
 
 
-def _get(url: str, limit: int, accept: str = "application/json") -> tuple[int, str, bytes] | None:
+def _get(
+    url: str,
+    limit: int,
+    accept: str = "application/json",
+    budget: _DownloadBudget | None = None,
+) -> tuple[int, str, bytes] | None:
     """The status, Location header and first `limit + 1` body bytes of an https GET, or None when there is none."""
-    opened = _get_response(url, accept)
+    budget = budget or _DownloadBudget()
+    opened = _get_response(url, accept, budget)
     if opened is None:
         return None
     connection, response = opened
     try:
-        return response.status, response.getheader("Location") or "", response.read(limit + 1)
+        body = bytearray()
+        while len(body) <= limit:
+            chunk = _read_chunk(connection, response, min(_CHUNK, limit + 1 - len(body)), budget)
+            if chunk is None:
+                return None
+            if not chunk:
+                break
+            body.extend(chunk)
+        return response.status, response.getheader("Location") or "", bytes(body)
     except (OSError, http.client.HTTPException):
         return None
     finally:
@@ -140,14 +187,16 @@ def _fetch(
     limit: int = _LIMIT,
     follow: Mapping[str, str] | None = None,
     accept: str = "application/json",
+    budget: _DownloadBudget | None = None,
 ) -> bytes | None:
     """The body of a 200 response to an https GET, b"" for a 404, or None when there is no readable answer.
 
     A redirect is followed only to an https URL on a host in `follow`, within that host's path prefix, and at most
-    _MAX_REDIRECTS times.
+    _MAX_REDIRECTS times. `budget` covers every redirect hop and body read.
     """
+    budget = budget or _DownloadBudget()
     for _hop in range(_MAX_REDIRECTS + 1):
-        answer = _get(url, limit, accept)
+        answer = _get(url, limit, accept, budget)
         if answer is None:
             return None
         status, location, body = answer
@@ -172,7 +221,10 @@ def fetch_archive(url: str, limit: int, follow: Mapping[str, str] | None = None)
 
 
 class _DownloadBudget:
-    """The time and total byte allowance shared by all file downloads of one check."""
+    """The time and total byte allowance of one package check.
+
+    A grouped update runs one package check per package, so it can take up to N times these limits.
+    """
 
     def __init__(
         self,
@@ -184,8 +236,11 @@ class _DownloadBudget:
         self.deadline = clock() + seconds
         self.remaining = size
 
+    def remaining_seconds(self) -> float:
+        return self.deadline - self._clock()
+
     def expired(self) -> bool:
-        return self._clock() >= self.deadline
+        return self.remaining_seconds() <= 0
 
     def take(self, size: int) -> bool:
         """Consume `size` bytes, or return False when they exceed what is left."""
@@ -213,7 +268,7 @@ def _sha256_download(
         parts = urllib.parse.urlsplit(url)
         if parts.scheme != "https" or parts.hostname not in hosts:
             return None
-        opened = _get_response(url, "application/octet-stream")
+        opened = _get_response(url, "application/octet-stream", budget)
         if opened is None:
             return None
         connection, response = opened
@@ -228,7 +283,12 @@ def _sha256_download(
                 return None
             digest = hashlib.sha256()
             size = 0
-            while chunk := response.read(_CHUNK):
+            while True:
+                chunk = _read_chunk(connection, response, _CHUNK, budget)
+                if chunk is None:
+                    return None
+                if not chunk:
+                    break
                 size += len(chunk)
                 if size > limit or not budget.take(len(chunk)) or budget.expired():
                     return None
@@ -360,19 +420,19 @@ def _index_hosts(index: str) -> frozenset[str]:
     return frozenset({host, *TRUSTED_PYTHON_INDEX_FILE_HOSTS.get(index, ())}) if host else frozenset()
 
 
-def _index_files(index: str, name: str, version: str) -> tuple[str, ...] | None:
+def _index_files(index: str, name: str, version: str, budget: _DownloadBudget) -> tuple[str, ...] | None:
     """The urls of the files a simple index page lists for `name` at `version`, or None.
 
     Versions are compared in their canonical PEP 440 form. The page is read with a bounded regex scan, following
-    redirects only to the index's hosts over https. A page that cannot be read, lists no file for the version, or
-    lists more than _MAX_INDEX_FILES of them, leaves the package untrusted.
+    redirects only to the index's hosts over https and within `budget`. A page that cannot be read, lists no file
+    for the version, or lists more than _MAX_INDEX_FILES of them, leaves the package untrusted.
     """
     wanted = versions.pep440_key(version)
     if not wanted:
         return None
     page_url = f"{index}{_canonical(name)}/"
     hosts = _index_hosts(index)
-    body = _fetch(page_url, accept="text/html", follow={host: "" for host in hosts})
+    body = _fetch(page_url, accept="text/html", follow={host: "" for host in hosts}, budget=budget)
     if not body:
         return None
     files: list[str] = []
@@ -421,7 +481,8 @@ def trusted_python_index(
 
     An unhashed occurrence must name the trusted index its file installs from, and every such index must serve
     `name` at this version. Each sha256 a hashed occurrence records must match a file downloaded from a trusted
-    index at this version. A file link outside the index's hosts is not downloaded.
+    index at this version. A file link outside the index's hosts is not downloaded. One budget covers this
+    package check, including the index page and every file read; a grouped update runs one check per package.
     """
     if not _PYPI_NAME_RE.fullmatch(name) or not version:
         return ""
@@ -431,16 +492,13 @@ def trusted_python_index(
     wanted = {digest.removeprefix("sha256:").lower() for item in locked for digest in item.hashes.split()}
     if not wanted and not required:
         return ""
-    pages: dict[str, tuple[str, ...] | None] = {}
     served: set[str] = set()
     matched = ""
     budget = _DownloadBudget()
     for index in TRUSTED_PYTHON_INDEXES:
         if index not in configured:
             continue
-        if index not in pages:
-            pages[index] = _index_files(index, name, version)
-        files = pages[index]
+        files = _index_files(index, name, version, budget)
         if not files:
             continue
         hosts = _index_hosts(index)
