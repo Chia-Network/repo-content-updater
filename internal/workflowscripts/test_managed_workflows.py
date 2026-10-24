@@ -98,7 +98,10 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         self.assertNotIn("cursor_output_malware.json", upload)
 
     def test_python_is_pinned_before_any_managed_script_runs(self) -> None:
-        """The scripts need Python 3.11+ (`tomllib`); every job that runs them pins one interpreter by SHA."""
+        """The scripts need Python 3.11+ (`tomllib`); every runner job that runs them pins one interpreter by SHA.
+
+        go-test runs in the `golang:1` container, whose Debian python3 is 3.11+, and keeps the latest Go.
+        """
         setup = (
             "uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0\n"
             "        with:\n"
@@ -106,9 +109,12 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
         )
         workflow = _DEPENDENCY_CURSOR_REVIEW.read_text(encoding="utf-8")
         jobs = {name: self._job(workflow, name) for name in ("dependency-review-scan", "dependency-review")}
-        for name in ("go-test.yml", "workflowscripts-lint.yml"):
-            jobs[name] = (_REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
-        runs = {"go-test.yml": "run: make test", "workflowscripts-lint.yml": "python3 -m unittest"}
+        workflows = _REPO_ROOT / ".github" / "workflows"
+        jobs["workflowscripts-lint.yml"] = (workflows / "workflowscripts-lint.yml").read_text(encoding="utf-8")
+        runs = {"workflowscripts-lint.yml": "python3 -m unittest"}
+        go_test = (workflows / "go-test.yml").read_text(encoding="utf-8")
+        self.assertIn("    container: golang:1\n", go_test)
+        self.assertNotIn("actions/setup-python@", go_test)
         for name, job in jobs.items():
             with self.subTest(name):
                 self.assertEqual(job.count(setup), 1)
