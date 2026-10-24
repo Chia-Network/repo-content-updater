@@ -268,6 +268,13 @@ class NpmTest(unittest.TestCase):
         head = {"package.json": "{not json"}
         self.assertEqual(_plan(base, head).gaps, (("package.json", "unresolved"),))
 
+    def test_a_malformed_lock_beside_a_manifest_bump_keeps_the_manifest_out_of_the_primary_list(self) -> None:
+        base = {"package.json": _package(dependencies={"zod": "3.22.0"}), "package-lock.json": "{not json\n"}
+        head = {"package.json": _package(dependencies={"zod": "3.22.4"}), "package-lock.json": "{not json \n"}
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, ())
+        self.assertEqual(set(plan.gaps), {("package.json", "unresolved"), ("package-lock.json", "unresolved")})
+
     def test_yarn_stanzas_are_declared_copies(self) -> None:
         package = _package(dependencies={"ua-parser-js": "^0.7.18"})
         base = {
@@ -512,6 +519,19 @@ class PythonTest(unittest.TestCase):
             with self.subTest(name):
                 plan = _plan({**files, "poetry.lock": base}, {**files, "poetry.lock": head})
                 self.assertEqual((plan.primary, plan.gaps), ((), (("poetry.lock", "unresolved"),)))
+
+    def test_a_malformed_poetry_lock_beside_a_manifest_bump_keeps_the_manifest_out_of_the_primary_list(self) -> None:
+        base = {
+            "pyproject.toml": '[tool.poetry.dependencies]\nrequests = "^2.31"\n',
+            "poetry.lock": "[[package]\n",
+        }
+        head = {
+            "pyproject.toml": '[tool.poetry.dependencies]\nrequests = "^2.32"\n',
+            "poetry.lock": "[[package] \n",
+        }
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, ())
+        self.assertEqual(set(plan.gaps), {("pyproject.toml", "unresolved"), ("poetry.lock", "unresolved")})
 
     def test_a_pipfile_lock_supplies_the_versions_of_the_names_the_pipfile_declares(self) -> None:
         pipfile = {"Pipfile": '[packages]\nrequests = "*"\n'}

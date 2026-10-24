@@ -125,9 +125,9 @@ def _declared(ecosystem: Ecosystem, directory: str, read: Read, base: str) -> se
 
 
 def _has_lock(ecosystem: Ecosystem, directory: str, read: Read) -> bool:
-    """Whether a lock its grammar reads is beside `directory` at HEAD."""
+    """Whether a lock is beside `directory` at HEAD, unless it names a lockfile version its grammar does not read."""
     return any(
-        (text := read("HEAD", path)) and row.parse(text) is not None
+        (text := read("HEAD", path)) and not (row.unsupported and row.unsupported(text))
         for path, row in ecosystems.beside(ecosystem, LOCK, directory)
     )
 
@@ -145,10 +145,11 @@ def _read(old_path: str, path: str, status: str, read: Read, base: str) -> list[
         return [_File(path, group, _GAP, "unparsed_manifest") if row.role == MANIFEST else _File(path, group, _OPAQUE)]
     before, after = row.parse(read(base, old_path)), row.parse(read("HEAD", path))
     if before is None or after is None:
-        # A lock its grammar does not read, such as a pnpm lock of another lockfile version, is opaque.
+        # A lock that names a lockfile version its grammar does not read is opaque; every other parse failure is a gap.
         version = row.unsupported(read("HEAD", path)) if row.unsupported and after is None else ""
-        reason = f"lockfileVersion {version} is not supported" if version else "unresolved"
-        return [_File(path, group, _OPAQUE if row.role == LOCK else _GAP, reason)]
+        if version:
+            return [_File(path, group, _OPAQUE, f"lockfileVersion {version} is not supported")]
+        return [_File(path, group, _GAP)]
     moves = _moves(row, directory, before[0], after[0]) if before[1] == after[1] else None
     declared = _declared(row.ecosystem, directory, read, base) if row.role == LOCK else None
     if moves is None or (row.role == LOCK and declared is None):
