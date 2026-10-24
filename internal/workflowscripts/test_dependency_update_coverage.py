@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import subprocess
@@ -792,6 +793,102 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                     [(item["name"], item["index"]) for item in report["trusted_packages"]],
                     [("chiapos", "pypi.chia.net")] if trusted else [],
                 )
+
+    def test_pip_index_trust_end_to_end_over_http(self) -> None:
+        sdist = b"chiapos sdist"
+        page_url = "https://pypi.chia.net/simple/chiapos/"
+        file_url = "https://download.chia.net/files/chiapos-2.0.4.tar.gz"
+        page = f'<a href="{file_url}">s</a>\n'.encode()
+        digest = hashlib.sha256(sdist).hexdigest()
+        config = (
+            "registries:\n  chia:\n    type: python-index\n    url: https://pypi.chia.net/simple/\n"
+            "    replaces-base: true\n"
+        )
+        cases = {
+            "replaces base without an index": (
+                {"requirements.txt": "chiapos==2.0.4\n"},
+                ("requirements.txt",),
+                False,
+            ),
+            "last index is pypi": (
+                {
+                    "requirements.txt": (
+                        "-i https://pypi.chia.net/simple/\n-i https://pypi.org/simple/\nchiapos==2.0.4\n"
+                    )
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "trusted index in another file": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "requirements-dev.txt": "chiapos==2.0.4\n",
+                },
+                ("requirements.txt", "requirements-dev.txt"),
+                False,
+            ),
+            "hashed pin served by the index": (
+                {"requirements.txt": f"chiapos==2.0.4 --hash=sha256:{digest}\n"},
+                ("requirements.txt",),
+                True,
+            ),
+        }
+
+        class Response:
+            def __init__(self, body: bytes) -> None:
+                self.status = 200
+                self.body = body
+
+            def getheader(self, _name: str) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if size < 0:
+                    size = len(self.body)
+                chunk, self.body = self.body[:size], self.body[size:]
+                return chunk
+
+        class Connection:
+            def close(self) -> None:
+                return None
+
+        answers = {page_url: page, file_url: sdist}
+        requested: list[str] = []
+
+        def get_response(url: str, _accept: str) -> tuple[Connection, Response]:
+            requested.append(url)
+            if url not in answers:
+                raise AssertionError(f"unexpected request {url}")
+            return Connection(), Response(answers[url])
+
+        for label, (texts, hashed, trusted) in cases.items():
+            with self.subTest(label):
+                requested.clear()
+                looked_up: list[str] = []
+
+                def repo(_ecosystem: str, name: str, _version: str, seen: list[str] = looked_up) -> upstream.Repo:
+                    seen.append(name)
+                    return _found(f"upstream/{name}")
+
+                plan = _plan(("pip", ".", "chiapos", "2.0.3", "2.0.4"), hashed=hashed)
+                all_texts = {".github/dependabot.yml": config, **texts}
+                entries = [(path, "100644") for path in texts]
+                with (
+                    patch.object(coverage, "_git_text", lambda _rev, path, texts=all_texts: texts.get(path, "")),
+                    patch.object(upstream, "_get_response", get_response),
+                ):
+                    report, _summary, _output = _run_main(
+                        plan,
+                        repo=repo,
+                        scan=lambda target, *_args: _clean(target.package, target.repo.slug),
+                        files=lambda directory, entries=entries: entries if directory == "." else [],
+                    )
+                self.assertEqual(looked_up, [] if trusted else ["chiapos"])
+                self.assertEqual(
+                    [(item["name"], item["index"]) for item in report["trusted_packages"]],
+                    [("chiapos", "pypi.chia.net")] if trusted else [],
+                )
+                self.assertEqual(requested, [page_url, file_url] if trusted else [])
 
     def test_git_files_lists_one_directory_at_head(self) -> None:
         with TemporaryDirectory() as tmp:
