@@ -33,6 +33,7 @@ import json
 import re
 import shlex
 from collections.abc import Iterator
+from typing import NamedTuple
 
 import tomllib
 from dependency_manifest_lines import Entry, Parsed, Pin
@@ -51,6 +52,31 @@ _COMMENT_RE = re.compile(r"(^|\s+)#.*$")
 _ENV_VAR_RE = re.compile(r"\$\{[A-Z0-9_]+\}")
 _PATH_OR_URL_RE = re.compile(r"[./]|[A-Za-z][A-Za-z0-9+.-]*://")
 _HASH_VALUE_RE = re.compile(r"[^\s:]+:\S+")
+# Every option pip reads in a requirements file, and whether it takes a value. pip accepts any unique prefix of one.
+_PIP_FILE_OPTIONS = {
+    "--index-url": True,
+    "--extra-index-url": True,
+    "--no-index": False,
+    "--find-links": True,
+    "--requirement": True,
+    "--constraint": True,
+    "--editable": True,
+    "--trusted-host": True,
+    "--use-feature": True,
+    "--only-binary": True,
+    "--no-binary": True,
+    "--prefer-binary": False,
+    "--pre": False,
+    "--require-hashes": False,
+    "--hash": True,
+    "--config-settings": True,
+    "--global-option": True,
+}
+_PIP_SHORT_OPTIONS = {"-i": "--index-url", "-f": "--find-links", "-r": "--requirement", "-c": "--constraint"}
+_PIP_INDEXES = frozenset({"--index-url", "--extra-index-url"})
+_PIP_INCLUDES = frozenset({"--requirement", "--constraint"})
+# Package sources besides an index, which the review does not read.
+_PIP_OTHER_SOURCES = frozenset({"--find-links", "--no-index"})
 # PEP 503: lowercase, and collapse each run of `-`, `_`, or `.` to one `-`.
 _PEP503_SEPARATORS = re.compile(r"[-_.]+")
 
@@ -277,3 +303,58 @@ def pipfile_lock_hashes(text: str) -> str:
     """The `hashes` of a pipfile_lock record, or "" when it has none."""
     record = next(iter(json.loads(text)[1].values()))
     return _locked_hashes(record.get("hashes"))
+
+
+class IndexOptions(NamedTuple):
+    """The package index options of a requirements file."""
+
+    urls: tuple[str, ...] = ()  # each --index-url and --extra-index-url
+    includes: tuple[str, ...] = ()  # each --requirement and --constraint, as written
+    unread: bool = False  # whether a line may name another package source the review does not read
+
+
+def _option(word: str, words: list[str]) -> tuple[str, str | None]:
+    """(pip's option, its value or None when it is missing) for one option word; ("", "") for an unknown word, and
+    ("", None) for an abbreviation that may name an option this reads."""
+    if word.startswith("--"):
+        name, equals, value = word.partition("=")
+        names = (
+            [name] if name in _PIP_FILE_OPTIONS else [option for option in _PIP_FILE_OPTIONS if option.startswith(name)]
+        )
+        if len(names) != 1:
+            read = _PIP_INDEXES | _PIP_INCLUDES | _PIP_OTHER_SOURCES
+            return ("", None) if any(option in read for option in names) else ("", "")
+        option = names[0]
+    elif word[:2] in _PIP_SHORT_OPTIONS:
+        option, value = _PIP_SHORT_OPTIONS[word[:2]], word[2:]
+        equals = value
+    else:
+        return "", ""
+    if _PIP_FILE_OPTIONS[option] and not equals:
+        value = words.pop(0) if words else None
+    return option, value
+
+
+def requirements_index_options(text: str) -> IndexOptions:
+    """The index URLs and included files a requirements file names, read as pip reads its option lines."""
+    urls: list[str] = []
+    includes: list[str] = []
+    for line, original in _pip_lines(text):
+        if not line.startswith("-"):
+            # A line pip fills from the environment may be any option.
+            if not line and _ENV_VAR_RE.search(original) and original.lstrip().startswith("-"):
+                return IndexOptions(unread=True)
+            continue
+        try:
+            words = shlex.split(line)
+        except ValueError:
+            return IndexOptions(unread=True)
+        while words:
+            option, value = _option(words.pop(0), words)
+            if value is None or option in _PIP_OTHER_SOURCES:
+                return IndexOptions(unread=True)
+            if option in _PIP_INDEXES:
+                urls.append(value)
+            elif option in _PIP_INCLUDES:
+                includes.append(value)
+    return IndexOptions(tuple(urls), tuple(includes))

@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -32,6 +33,7 @@ import dependency_cursor_review_ecosystems as _ecosystems
 import dependency_cursor_review_upstream as _upstream
 import dependency_cursor_review_versions as _versions
 import dependency_manifest_diff as _diff
+import dependency_manifest_python as _python
 from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN
 
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
@@ -352,6 +354,10 @@ def _disclosure(report: dict) -> list[str]:
     return lines
 
 
+# A plain sentence for a reason code the code alone does not explain.
+_REASON_NOTES = {"configured_index": ". pip may install this from a package index the review does not read."}
+
+
 def render_summary(report: dict, records: list[dict]) -> str:
     lines = ["## Malware Scan Summary", ""]
     if report.get("scan_conclusive") is True:
@@ -373,7 +379,7 @@ def render_summary(report: dict, records: list[dict]) -> str:
             lines.append(f"- {label} ({repo}): covered, artifact not bound (`{reason}`){named}")
         else:
             reason = record.get("not_scanned_reason") or "not_conclusive"
-            lines.append(f"- {label} ({repo}): not covered ({reason})")
+            lines.append(f"- {label} ({repo}): not covered ({reason}){_REASON_NOTES.get(reason, '')}")
     lines.extend(_disclosure(report))
     if not any_read(report):
         lines.append("- No release tree was read. This is not evidence the package is benign.")
@@ -391,7 +397,8 @@ _DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
 
 
 class Indexes(NamedTuple):
-    """The Python package indexes the Dependabot config names besides PyPI."""
+    """The Python package indexes pip may install from besides PyPI, named by the Dependabot config or a
+    requirements file."""
 
     trusted: frozenset[str] = frozenset()  # each one in upstream.TRUSTED_PYTHON_INDEXES
     other: bool = False  # whether it names any other one, or one this cannot read
@@ -413,16 +420,61 @@ def _python_indexes(text: str) -> Indexes:
         elif fields is not None and (match := _REGISTRY_FIELD_RE.match(line)):
             fields[match.group(1)] = match.group(3)
     urls = [block.get("url", "") for block in blocks if block.get("type") == "python-index"]
+    # Every python-index this reads has a URL, or the config is not read and nothing is trusted.
+    return _indexes(urls, len(urls) != text.count("python-index"))
+
+
+def _indexes(urls: list[str], unread: bool, *more: Indexes) -> Indexes:
+    """Indexes of `urls` and `more`. Any index that is not in TRUSTED_PYTHON_INDEXES, or `unread`, trusts none."""
     urls = [url if url.endswith("/") else f"{url}/" for url in urls]
     trusted = frozenset(url for url in urls if url in _upstream.TRUSTED_PYTHON_INDEXES)
-    # Every python-index this reads has a URL, or the config is not read and nothing is trusted.
-    other = len(urls) != text.count("python-index") or len(trusted) != len(set(urls))
-    return Indexes(frozenset() if other else trusted, other)
+    other = unread or len(trusted) != len(set(urls)) or any(item.other for item in more)
+    return Indexes(frozenset() if other else trusted.union(*(item.trusted for item in more)), other)
 
 
 def _configured_indexes() -> Indexes:
-    found = [_python_indexes(_git_text("HEAD", path)) for path in _DEPENDABOT_CONFIGS]
-    return Indexes(frozenset().union(*(item.trusted for item in found)), any(item.other for item in found))
+    return _indexes([], False, *(_python_indexes(_git_text("HEAD", path)) for path in _DEPENDABOT_CONFIGS))
+
+
+_MAX_REQUIREMENTS_FILES = 64
+
+
+def _requirements_indexes(directory: str, configured: Indexes) -> Indexes:
+    """`configured` with the indexes of the requirements files in `directory` at HEAD and each file they include.
+
+    A file listing that fails, an include outside the repository, or another package source trusts none.
+    """
+    files = _git_files(directory)
+    if files is None:
+        return Indexes(other=True)
+    pending = [path for path in files if (row := _ecosystems.file_kind(path)) and row.parse is _python.requirements_txt]
+    seen: set[str] = set()
+    urls: list[str] = []
+    while pending:
+        path = pending.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        options = _python.requirements_index_options(_git_text("HEAD", path))
+        included = [posixpath.normpath(posixpath.join(posixpath.dirname(path), item)) for item in options.includes]
+        outside = any("://" in item or item.startswith(("/", "../")) or item == ".." for item in included)
+        if options.unread or outside or len(seen) > _MAX_REQUIREMENTS_FILES:
+            return Indexes(other=True)
+        urls += options.urls
+        pending += included
+    return _indexes(urls, False, configured)
+
+
+def _git_files(directory: str) -> list[str] | None:
+    """The paths of the files directly in `directory` at HEAD, or None when git cannot list them."""
+    prefix = "" if directory in {"", "."} else f"{directory}/"
+    proc = subprocess.run(
+        ["git", "ls-tree", "-z", "--name-only", "HEAD", "--", prefix or "."],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return [path for path in proc.stdout.split("\0") if path] if proc.returncode == 0 else None
 
 
 def _git_text(rev: str, path: str) -> str:
@@ -600,24 +652,23 @@ def _exact(change: _diff.Change) -> tuple[Target, str]:
 
 
 def _trusted(
-    changes: list[_diff.Change], indexes: Indexes, hashed: tuple[str, ...]
+    changes: list[_diff.Change], indexes: dict[str, Indexes], hashed: tuple[str, ...]
 ) -> tuple[list[_diff.Change], tuple[dict, ...]]:
     """The changes still to scan, and the pip changes a configured trusted index serves (with its host).
 
     Packages from the organization's configured package indexes are trusted and not scanned (AGENTS.md). With any
-    other index configured, none is.
+    other index configured for its directory, none is.
     """
-    if indexes.other or not indexes.trusted:
-        return changes, ()
 
     def host(change: _diff.Change) -> str:
         version = _versions.exact_body(change.new, mode=change.ecosystem)
-        if change.ecosystem != "pip" or not version:
+        found = indexes.get(change.dir, Indexes())
+        if change.ecosystem != "pip" or not version or found.other or not found.trusted:
             return ""
         locked = _ecosystems.locked(
             change.ecosystem, change.dir, change.name, version, lambda path: _git_text("HEAD", path), hashed
         )
-        return _upstream.trusted_python_index(change.name, version, locked, indexes.trusted)
+        return _upstream.trusted_python_index(change.name, version, locked, found.trusted)
 
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
         hosts = list(pool.map(host, changes))
@@ -625,16 +676,22 @@ def _trusted(
     return rest, tuple({**change._asdict(), "index": found} for change, found in zip(changes, hosts) if found)
 
 
-def _targets(changes: list[_diff.Change], indexes: Indexes) -> list[tuple[_diff.Change, Target, str]]:
+def _targets(changes: list[_diff.Change], indexes: dict[str, Indexes]) -> list[tuple[_diff.Change, Target, str]]:
     """Each change as (change, Target with its repository, why it is not scanned or "").
 
     Each distinct (ecosystem, name, version) is looked up once, and the lookups run concurrently. A pip change is
-    "configured_index" when the Dependabot config names a Python package index that is not trusted: the lookups
+    "configured_index" when the Dependabot config or a requirements file beside it names a Python package index that
+    is not trusted: the lookups
     read PyPI, which may not be where pip installs it from.
     """
     exact = [(change, *_exact(change)) for change in changes]
     exact = [
-        (change, target, why or ("configured_index" if indexes.other and change.ecosystem == "pip" else ""))
+        (
+            change,
+            target,
+            why
+            or ("configured_index" if change.ecosystem == "pip" and indexes.get(change.dir, Indexes()).other else ""),
+        )
         for change, target, why in exact
     ]
     keys = [(change.ecosystem, change.name, target.new) for change, target, _why in exact]
@@ -761,7 +818,7 @@ def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
 
 
 def _scan_all(
-    changes: list[_diff.Change], work: Path, scan_script: Path, hashed: tuple[str, ...], indexes: Indexes
+    changes: list[_diff.Change], work: Path, scan_script: Path, hashed: tuple[str, ...], indexes: dict[str, Indexes]
 ) -> tuple[list[dict], list[tuple[dict, Path]], tuple[dict, ...]]:
     """(records, (record, scan directory) per scan, policy warnings the scans found) for the changes to scan.
 
@@ -801,7 +858,9 @@ def main() -> None:
     gaps = plan.gaps if plan else (("pull request diff", "unresolved"),)
     plan = plan or _diff.Plan()
     changes, warnings = _split(plan)
-    indexes = _configured_indexes()
+    configured = _configured_indexes()
+    pip_dirs = sorted({change.dir for change in changes if change.ecosystem == "pip"})
+    indexes = {directory: _requirements_indexes(directory, configured) for directory in pip_dirs}
     changes, trusted = _trusted(changes, indexes, plan.hashed)
     work = Path(".dcr-dependency-scans")
     remove_entry(work)

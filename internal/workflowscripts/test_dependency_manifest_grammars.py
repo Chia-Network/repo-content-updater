@@ -16,12 +16,14 @@ from dependency_manifest_go import go_mod, go_sum, go_sum_hash, go_zip_hash
 from dependency_manifest_lines import Pin, dockerfile_from, terraform_config, terraform_lock, workflow_uses
 from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
 from dependency_manifest_python import (
+    IndexOptions,
     pipfile_lock,
     pipfile_lock_hashes,
     poetry_lock,
     poetry_lock_hashes,
     requirements,
     requirements_hashes,
+    requirements_index_options,
     requirements_txt,
 )
 
@@ -629,3 +631,25 @@ class LineGrammarTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RequirementsIndexOptionsTest(unittest.TestCase):
+    def test_every_form_pip_accepts_names_an_index(self) -> None:
+        cases = {
+            "-i https://a/\nattrs==1.0\n": IndexOptions(("https://a/",)),
+            "-ihttps://a/": IndexOptions(("https://a/",)),
+            "--index-url=https://a/": IndexOptions(("https://a/",)),
+            "--index-url \\\n  https://a/  # note": IndexOptions(("https://a/",)),
+            "--extra-index-url https://b/": IndexOptions(("https://b/",)),
+            "--extra=https://b/": IndexOptions(("https://b/",)),
+            "--ind https://a/ --pre": IndexOptions(("https://a/",)),
+            "-r ../base.txt\n--constraint=c.txt": IndexOptions(includes=("../base.txt", "c.txt")),
+            "--trusted-host h --pre\n# -i https://x/\nattrs==1.0 --hash=sha256:aa": IndexOptions(),
+        }
+        unread = ("-i", "--index-url ${URL}", "--find-links ./wheels", "-f x", "--no-index", "--extra-index-url 'a")
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(requirements_index_options(text), expected)
+        for text in unread:
+            with self.subTest(text=text):
+                self.assertEqual(requirements_index_options(text), IndexOptions(unread=True))

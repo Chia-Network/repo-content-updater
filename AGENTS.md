@@ -45,6 +45,14 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
 - A repository's Dependabot config can select among the listed indexes. It
   cannot add one. A config naming any other Python index, or one the
   scripts cannot read, leaves every pip change inconclusive.
+- A requirements file's `--index-url`, `-i` and `--extra-index-url` options
+  select indexes the same way for the pip changes in its directory, along
+  with the files it includes. Any other index, `--find-links`, `--no-index`,
+  an option filled from the environment, or an include outside the
+  repository leaves those changes inconclusive.
+- pip configuration outside the repository, such as `pip.conf` or
+  `PIP_INDEX_URL`, is out of scope: the review reads only the pull request's
+  tree.
 - A pip change is trusted only when a listed, configured index serves that
   exact version and every file hash its lock records. Otherwise it is
   looked up and scanned as usual.

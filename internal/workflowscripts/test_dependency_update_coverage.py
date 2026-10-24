@@ -100,8 +100,10 @@ def _run_main(
     scan: Callable[..., dict] | None = None,
     repo: Callable[[str, str, str], upstream.Repo] = lambda _ecosystem, name, _version: _found(f"upstream/{name}"),
     clone: Callable[[str, Path], bool] = lambda *_args: False,
+    files: Callable[[str], list[str] | None] = lambda _directory: [],
 ) -> tuple[dict, str, str]:
-    """coverage.main() over `plan`: (report, summary, GITHUB_OUTPUT text). `scan` replaces _scan_one."""
+    """coverage.main() over `plan`: (report, summary, GITHUB_OUTPUT text). `scan` replaces _scan_one, and `files`
+    lists a directory at HEAD."""
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         output = root / "github_output.txt"
@@ -111,6 +113,7 @@ def _run_main(
             stack.enter_context(patch.object(coverage, "_plan", return_value=plan))
             stack.enter_context(patch.object(coverage._ecosystems, "upstream_repo", repo))
             stack.enter_context(patch.object(coverage, "_clone", clone))
+            stack.enter_context(patch.object(coverage, "_git_files", files))
             if scan is not None:
                 stack.enter_context(patch.object(coverage, "_scan_one", scan))
             coverage.main()
@@ -638,6 +641,10 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertEqual(looked_up, ["lodash"])
         self.assertIs(report["scan_conclusive"], False)
         self.assertIn("configured_index", summary)
+        self.assertIn(
+            "not covered (configured_index). pip may install this from a package index the review does not read.",
+            summary,
+        )
         published = formatter.compose_published_review(
             report, "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n", "COMPATIBILITY_RECOMMENDATION: Merge\n"
         )
@@ -692,6 +699,82 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             "COMPATIBILITY_RECOMMENDATION: Merge\n",
         )
         self.assertEqual((published["verdict"], published["check"]), (without["verdict"], without["check"]))
+
+    def test_a_requirements_index_option_decides_its_directory(self) -> None:
+        chia = "https://pypi.chia.net/simple/"
+        tree = {
+            "plain": ["plain/requirements.txt"],
+            "other": ["other/requirements.txt", "other/README.md"],
+            "chia": ["chia/requirements.txt"],
+            "chained": ["chained/requirements.txt"],
+            "outside": ["outside/requirements.txt"],
+            "sibling": ["sibling/requirements.txt"],
+            "unlisted": None,
+        }
+        texts = {
+            "plain/requirements.txt": "attrs==23.2.0\n",
+            "other/requirements.txt": "--extra-index-url=https://example.com/simple\nattrs==23.2.0\n",
+            "chia/requirements.txt": f"-i {chia.rstrip('/')}\nattrs==23.2.0\n",
+            "chained/requirements.txt": "-r base/requirements-base.txt\n",
+            "chained/base/requirements-base.txt": "-ihttps://example.com/simple/\n",
+            "outside/requirements.txt": "-r ../../shared/requirements.txt\n",
+            "sibling/requirements.txt": "-c ../other/requirements.txt\n",
+        }
+        expected = {
+            "plain": coverage.Indexes(),
+            "other": coverage.Indexes(other=True),
+            "chia": coverage.Indexes(frozenset({chia})),
+            "chained": coverage.Indexes(other=True),
+            "outside": coverage.Indexes(other=True),
+            "sibling": coverage.Indexes(other=True),
+            "unlisted": coverage.Indexes(other=True),
+        }
+        with (
+            patch.object(coverage, "_git_files", tree.get),
+            patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path, "")),
+        ):
+            for directory, indexes in expected.items():
+                with self.subTest(directory):
+                    self.assertEqual(coverage._requirements_indexes(directory, coverage.Indexes()), indexes)
+            download = coverage.Indexes(frozenset({"https://download.chia.net/simple/"}))
+            self.assertEqual(
+                coverage._requirements_indexes("chia", download),
+                coverage.Indexes(frozenset({chia, "https://download.chia.net/simple/"})),
+            )
+            self.assertEqual(coverage._requirements_indexes("plain", coverage.Indexes(other=True)).other, True)
+
+    def test_git_files_lists_one_directory_at_head(self) -> None:
+        with TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            _git_repo(repo)
+            _commit(repo, "requirements.txt", "attrs==1.0\n", "root")
+            _commit(repo, "app/requirements.txt", "six==1.0\n", "app")
+            _commit(repo, "app/deep/requirements.txt", "six==1.0\n", "deep")
+            with contextlib.chdir(repo):
+                self.assertEqual(coverage._git_files("."), ["app", "requirements.txt"])
+                self.assertEqual(coverage._git_files("app"), ["app/deep", "app/requirements.txt"])
+            with contextlib.chdir(tmp):
+                self.assertIsNone(coverage._git_files("."))
+
+    def test_a_requirements_index_makes_only_its_directory_inconclusive(self) -> None:
+        looked_up: list[str] = []
+
+        def repo(_ecosystem: str, name: str, _version: str) -> upstream.Repo:
+            looked_up.append(name)
+            return _found(f"upstream/{name}")
+
+        plan = _plan(("pip", "app", "attrs", "23.1.0", "23.2.0"), ("pip", "tools", "six", "1.15.0", "1.16.0"))
+        texts = {"app/requirements.txt": "--index-url https://example.com/simple/\nattrs==23.2.0\n"}
+        with patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path, "")):
+            report, summary, _output = _run_main(
+                plan,
+                repo=repo,
+                scan=lambda target, *_args: _clean(target.package, target.repo.slug),
+                files=lambda directory: [f"{directory}/requirements.txt"],
+            )
+        self.assertEqual(looked_up, ["six"])
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertIn("`attrs 23.1.0 -> 23.2.0` (no repository): not covered (configured_index)", summary)
 
     def test_only_listed_indexes_are_trusted_and_anything_else_trusts_none(self) -> None:
         chia = "https://pypi.chia.net/simple/"
