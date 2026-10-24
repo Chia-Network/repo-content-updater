@@ -109,39 +109,74 @@ class PolicyTest(_Diff):
     def test_a_major_minor_action_tag_is_a_moving_ref_too(self) -> None:
         self._not_scanned("v4.1", "v4.2", "moving_ref")
 
-    def test_a_commit_to_commit_action_bump_is_inconclusive_with_a_named_warning_and_passes(self) -> None:
-        self._not_scanned(_SHA, _SHA[::-1], "unresolved_sha")
+    def _action(self, old: str, new: str, scan: Callable[..., dict] | None = None) -> tuple[dict, str]:
+        return self.run_main(
+            {".github/workflows/ci.yml": _WORKFLOW.format(old)},
+            {".github/workflows/ci.yml": _WORKFLOW.format(new)},
+            scan=scan,
+        )
 
-    def test_a_bump_between_a_commit_and_a_release_tag_is_unresolved_and_fails(self) -> None:
-        """Commit -> tag and tag -> commit are not policy rows: the commit is not an exact version, so it is a gap."""
+    def test_commit_pinned_action_bumps_scan_the_commit_range_and_are_intrinsically_bound(self) -> None:
+        """Commit -> commit, commit -> tag and tag -> commit are scanned; the case of a SHA is not part of it."""
+        target = coverage.Target(package="actions/checkout", repo="actions/checkout")
+        for old, new, scanned in (
+            (_SHA, _SHA[::-1].upper(), target._replace(old=_SHA, new=_SHA[::-1])),
+            ("v4.1.0", _SHA, target._replace(old="4.1.0", new=_SHA)),
+        ):
+            with self.subTest(old=old, new=new):
+                self.setUp()
+                report, summary = self._action(old, new)
+                self.assertEqual(self.scanned, [scanned])
+                self.assertEqual((report["policy_warnings"], report["scan_conclusive"]), ([], True))
+                self.assertEqual(report["binding"], {"kind": "intrinsic", "reason": ""})
+                self.assertIn("covered, artifact binding `intrinsic`", summary)
+                published = formatter.compose_published_review(report, _BENIGN, _MERGE)
+                self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+
+    def _unresolved(self, update: coverage.Target, *_args: object) -> dict:
+        self.scanned.append(update)
+        return coverage.uncovered(update._replace(repo="actions/checkout"), "to_ref_unresolved")
+
+    def test_a_commit_to_commit_bump_the_scan_cannot_resolve_is_unresolved_sha(self) -> None:
+        report, summary = self._action(_SHA, _SHA[::-1], scan=self._unresolved)
+        self.assertEqual(len(self.scanned), 1)
+        self.assertEqual(report["not_scanned_reason"], coverage.NOTHING_TO_SCAN)
+        change = {"ecosystem": "github-actions", "dir": ".github/workflows", "name": "actions/checkout"}
+        self.assertEqual(
+            report["policy_warnings"], [{**change, "old": _SHA, "new": _SHA[::-1], "reason": "unresolved_sha"}]
+        )
+        self.assertIn("(`unresolved_sha`)", summary)
+        for warn_only in (True, False):
+            published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
+            self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+            self.assertIn(formatter._POLICY_WARNINGS["unresolved_sha"], published["malware_text"])
+
+    def test_a_bump_between_a_commit_and_a_tag_the_scan_cannot_resolve_is_a_gap(self) -> None:
         for old, new in ((_SHA, "v4.2.0"), ("v4.1.0", _SHA)):
             with self.subTest(old=old, new=new):
                 self.setUp()
-                report, summary = self.run_main(
-                    {".github/workflows/ci.yml": _WORKFLOW.format(old)},
-                    {".github/workflows/ci.yml": _WORKFLOW.format(new)},
-                )
-                self.assertEqual(self.scanned, [])
+                report, summary = self._action(old, new, scan=self._unresolved)
                 self.assertEqual(report["policy_warnings"], [])
                 self.assertIs(report["scan_conclusive"], False)
-                self.assertIn("not covered (unresolved)", summary)
+                self.assertIn("not covered (to_ref_unresolved)", summary)
                 for warn_only in (True, False):
                     published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
                     self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
 
-    def test_a_full_action_tag_is_scanned_from_the_action_repository(self) -> None:
-        report, _summary = self.run_main(
-            {".github/workflows/ci.yml": _WORKFLOW.format("v4.1.0")},
-            {".github/workflows/ci.yml": _WORKFLOW.format("v4.2.0")},
-        )
+    def test_a_full_action_tag_is_scanned_and_not_bound(self) -> None:
+        """A tag can be moved after the scan, so only a commit SHA pin binds an action."""
+        report, summary = self._action("v4.1.0", "v4.2.0")
         self.assertEqual(
             self.scanned,
             [coverage.Target(package="actions/checkout", old="4.1.0", new="4.2.0", repo="actions/checkout")],
         )
-        self.assertEqual(report["policy_warnings"], [])
-        self.assertIs(report["scan_conclusive"], True)
-        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
-        self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+        self.assertEqual((report["policy_warnings"], report["scan_conclusive"]), ([], True))
+        self.assertEqual(report["binding"], {"kind": "unbound", "reason": "mutable_ref"})
+        self.assertIn("covered, artifact not bound (`mutable_ref`)", summary)
+        for warn_only in (True, False):
+            published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
+            self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+            self.assertIn("artifact_unbound(mutable_ref)", published["malware_text"])
 
     def test_docker_and_terraform_beside_a_clean_scan_are_never_benign(self) -> None:
         lock = 'provider "registry.terraform.io/hashicorp/aws" {{\n  version = "{}"\n}}\n'
@@ -210,14 +245,16 @@ class UncheckedUpgradeTest(_Diff):
         self.assertIs(report["scan_conclusive"], True)
         return report, summary
 
-    def test_a_clean_scan_of_every_changed_package_is_benign(self) -> None:
+    def test_a_clean_scan_of_every_changed_package_without_a_lock_hash_is_inconclusive(self) -> None:
         report, _summary = self._lodash(
             {"package-lock.json": _lock({"lodash": "4.17.20", "qs": "6.5.2"})},
             {"package-lock.json": _lock({"lodash": "4.17.21", "qs": "6.5.2"})},
         )
         self.assertEqual((report["unchecked_upgrades"], report["unparsed_locks"]), ([], []))
+        self.assertEqual(report["binding"], {"kind": "unbound", "reason": "no_lock_hash"})
         published = formatter.compose_published_review(report, _BENIGN, _MERGE)
-        self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+        self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+        self.assertIn("artifact_unbound(no_lock_hash)", published["malware_text"])
 
     def test_unchecked_upgrades_beside_a_clean_scan_are_inconclusive_not_benign(self) -> None:
         report, summary = self._lodash(

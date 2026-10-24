@@ -3,8 +3,10 @@
 The manifest diff (dependency_manifest_diff.plan) is the update list. A
 primary change is scanned unless its ecosystem's policy warns; a dependency is
 covered only when its scan is conclusive and both from_tag and to_tag are set.
-Anything else makes the group inconclusive. Policy warnings, other upgraded
-packages and unparsed lockfiles are disclosed in the report and the summary.
+Anything else makes the group inconclusive. Each covered scan carries the
+binding of the scanned commit to the installed artifact. Policy warnings,
+other upgraded packages and unparsed lockfiles are disclosed in the report and
+the summary.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import dependency_cursor_review_binding as _binding
 import dependency_cursor_review_ecosystems as _ecosystems
 import dependency_cursor_review_versions as _versions
 import dependency_manifest_diff as _diff
@@ -31,6 +34,8 @@ from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
 # Registry lookups run at once; each waits on the network, not on the others.
 _LOOKUPS = 8
+# Scan reasons for refs the cloned repository does not resolve; a clone that failed is "unresolved".
+_UNRESOLVED_REFS = frozenset({"unresolved", "from_ref_unresolved", "to_ref_unresolved"})
 
 
 class Target(NamedTuple):
@@ -100,7 +105,7 @@ def _tagged(report: dict) -> bool:
 
 
 def _covered(report: dict) -> bool:
-    """Conclusive tag-to-tag scan. A branch, raw SHA, or HEAD does not count."""
+    """Conclusive tag-to-tag scan. A branch or HEAD does not count; an action's commit SHA is its own tag."""
     return report.get("scan_conclusive") is True and _tagged(report)
 
 
@@ -270,6 +275,7 @@ def aggregate(records: list[dict], disclosed: Disclosure = _NONE_DISCLOSED) -> d
             "errors": errors,
             "findings": findings,
             "unread": _unread_items(records),
+            "binding": _weakest(records),
             "dependencies": [
                 {
                     "package_name": record.get("package_name") or "",
@@ -278,6 +284,7 @@ def aggregate(records: list[dict], disclosed: Disclosure = _NONE_DISCLOSED) -> d
                     "to_version": record.get("to_version") or "",
                     "scan_conclusive": _covered(record),
                     "not_scanned_reason": record.get("not_scanned_reason") or "",
+                    "binding": record.get("binding"),
                 }
                 for record in records
             ],
@@ -286,6 +293,16 @@ def aggregate(records: list[dict], disclosed: Disclosure = _NONE_DISCLOSED) -> d
         target,
         disclosed,
     )
+
+
+def _bound(record: dict) -> bool:
+    found = record.get("binding")
+    return isinstance(found, dict) and found.get("kind") in _binding.BOUND
+
+
+def _weakest(records: list[dict]) -> dict | None:
+    """The first unbound record's binding, else the first record's: one value for the group."""
+    return next((record.get("binding") for record in records if not _bound(record)), records[0].get("binding"))
 
 
 def _record_label(record: dict) -> str:
@@ -332,8 +349,11 @@ def render_summary(report: dict, records: list[dict]) -> str:
         span = f"{record.get('from_version') or '?'} -> {record.get('to_version') or '?'}"
         label = _code(f"{_record_label(record)} {span}") if record.get("package_name") else _code(_record_label(record))
         repo = record.get("upstream_repo") or "no repository"
-        if _covered(record):
-            lines.append(f"- {label} ({repo}): covered")
+        if _covered(record) and _bound(record):
+            lines.append(f"- {label} ({repo}): covered, artifact binding `{record['binding']['kind']}`")
+        elif _covered(record):
+            reason = (record.get("binding") or {}).get("reason") or "missing"
+            lines.append(f"- {label} ({repo}): covered, artifact not bound (`{reason}`)")
         else:
             reason = record.get("not_scanned_reason") or "not_conclusive"
             lines.append(f"- {label} ({repo}): not covered ({reason})")
@@ -538,7 +558,22 @@ def _targets(changes: list[_diff.Change]) -> list[tuple[Target, str]]:
     return resolved
 
 
-def _scan_one(target: Target, dest: Path, scan_script: Path) -> dict:
+def _bind(change: _diff.Change, target: Target, record: dict, checkout: Path) -> dict:
+    """The binding of a covered scan to the artifact the change installs, as report fields."""
+    subject = _binding.Subject(
+        name=target.package,
+        version=target.new,
+        repo=target.repo,
+        commit=str(record.get("resolved_to") or ""),
+        checkout=str(checkout),
+        locked=_ecosystems.locked(
+            change.ecosystem, change.dir, target.package, target.new, lambda path: _git_text("HEAD", path)
+        ),
+    )
+    return _ecosystems.bind(change.ecosystem, subject)._asdict()
+
+
+def _scan_one(target: Target, dest: Path, scan_script: Path, ecosystem: str = "") -> dict:
     dest = dest.absolute()
     checkout = dest / ".upstream-dependency"
     if not _clone(target.repo, checkout):
@@ -548,6 +583,7 @@ def _scan_one(target: Target, dest: Path, scan_script: Path) -> dict:
     env["PACKAGE_NAME"] = target.package
     env["FROM_VERSION"] = target.old
     env["TO_VERSION"] = target.new
+    env["DEPENDENCY_ECOSYSTEM"] = ecosystem
     proc = subprocess.run(
         ["bash", str(scan_script)],
         cwd=dest,
@@ -649,15 +685,27 @@ def main() -> None:
     work.mkdir()
     scans: list[tuple[dict, Path]] = []
     try:
-        for index, (target, why) in enumerate(_targets(scanned)):
+        late: list[dict] = []
+        for index, (change, (target, why)) in enumerate(zip(scanned, _targets(scanned))):
             if why:
                 records.append(uncovered(target, why))
                 continue
             dest = work / str(index)
             dest.mkdir()
-            record = _scan_one(target, dest, scan_script)
+            record = _scan_one(target, dest, scan_script, change.ecosystem)
+            fallback = _ecosystems.unresolved_reason(change.ecosystem, change.old, change.new)
+            if (
+                fallback
+                and record.get("status") == "not_scanned"
+                and record.get("not_scanned_reason") in _UNRESOLVED_REFS
+            ):
+                late.append({**change._asdict(), "reason": fallback})
+                continue
+            if _covered(record):
+                record["binding"] = _bind(change, target, record, dest / ".upstream-dependency")
             records.append(record)
             scans.append((record, dest))
+        disclosed = disclosed._replace(policy_warnings=disclosed.policy_warnings + tuple(late))
         report = aggregate(records, disclosed)
         summary = render_summary(report, records)
         _write_report(out, report, summary)

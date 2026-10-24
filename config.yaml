@@ -73,6 +73,7 @@ files:
       - dependency-cursor-review-versions
       - dependency-cursor-review-ecosystems
       - dependency-cursor-review-upstream
+      - dependency-cursor-review-binding
       - dependency-manifest-go
       - dependency-manifest-npm
       - dependency-manifest-python
@@ -125,6 +126,10 @@ files:
   - name: dependency-cursor-review-upstream
     template_name: dependency-cursor-review-upstream.py
     repo_path: .github/scripts/dependency_cursor_review_upstream.py
+
+  - name: dependency-cursor-review-binding
+    template_name: dependency-cursor-review-binding.py
+    repo_path: .github/scripts/dependency_cursor_review_binding.py
 
   - name: dependency-manifest-go
     template_name: dependency-cursor-review-manifest-go.py

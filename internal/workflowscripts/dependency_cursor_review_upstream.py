@@ -59,9 +59,10 @@ def _fetch(url: str) -> bytes:
     return body if len(body) <= _LIMIT else b""
 
 
-def _json(body: bytes) -> dict:
+def fetch_json(url: str) -> dict:
+    """The JSON object an https GET answers with, or {} for any other answer."""
     try:
-        doc = json.loads(body.decode("utf-8"))
+        doc = json.loads(_fetch(url).decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         return {}
     return doc if isinstance(doc, dict) else {}
@@ -77,7 +78,7 @@ def npm(name: str, version: str) -> str:
     """The version document's `repository`: a URL, `{url}`, or `owner/repo` / `github:owner/repo` shorthand."""
     if not _NPM_NAME_RE.fullmatch(name):
         return ""
-    doc = _json(_fetch(f"https://registry.npmjs.org/{name}/{urllib.parse.quote(version, safe='')}"))
+    doc = fetch_json(f"https://registry.npmjs.org/{name}/{urllib.parse.quote(version, safe='')}")
     repository = doc.get("repository")
     url = repository.get("url") if isinstance(repository, dict) else repository
     if not isinstance(url, str):
@@ -91,7 +92,7 @@ def pypi(name: str, version: str) -> str:
     if not _PYPI_NAME_RE.fullmatch(name):
         return ""
     quoted = urllib.parse.quote(version, safe="")
-    info = _json(_fetch(f"https://pypi.org/pypi/{name}/{quoted}/json")).get("info")
+    info = fetch_json(f"https://pypi.org/pypi/{name}/{quoted}/json").get("info")
     if not isinstance(info, dict):
         return ""
     urls = info.get("project_urls") if isinstance(info.get("project_urls"), dict) else {}

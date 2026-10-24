@@ -97,6 +97,45 @@ class ReleaseTagTest(_TagRepo):
                 self.assertEqual(versions.release_tag(str(self.repo), version), absent)
 
 
+class CommitRefTest(_TagRepo):
+    """An action's commit SHA is its own release when a branch or tag of the repository contains it."""
+
+    def _found(self, sha: str) -> versions.ReleaseTag:
+        return versions.ReleaseTag(versions.TagStatus.FOUND, sha, sha)
+
+    def test_a_commit_on_a_branch_or_tag_names_itself_in_either_case(self) -> None:
+        for version in (self.commits[0], self.commits[1], self.commits[0].upper()):
+            with self.subTest(version=version):
+                found = versions.release_tag(str(self.repo), version, "github-actions")
+                self.assertEqual(found, self._found(version.lower()))
+        _git(self.repo, "checkout", "-q", "--detach", self.commits[0])
+        _git(self.repo, "branch", "-D", "main")
+        self._tag("v1.0.0")
+        self.assertEqual(
+            versions.release_tag(str(self.repo), self.commits[0], "github-actions"), self._found(self.commits[0])
+        )
+
+    def test_a_commit_off_every_branch_and_tag_or_missing_is_absent(self) -> None:
+        _commit_file(self.repo, "index.js", "fork only", "fork only")
+        dangling = _git(self.repo, "rev-parse", "HEAD")
+        _git(self.repo, "reset", "-q", "--hard", self.commits[1])
+        absent = versions.ReleaseTag(versions.TagStatus.ABSENT)
+        for version in (dangling, "f" * 40, self.commits[0][:12]):
+            with self.subTest(version=version):
+                self.assertEqual(versions.release_tag(str(self.repo), version, "github-actions"), absent)
+
+    def test_only_an_action_ref_is_read_as_a_commit(self) -> None:
+        for mode in ("", "pip", "npm", "go"):
+            with self.subTest(mode=mode):
+                found = versions.release_tag(str(self.repo), self.commits[0], mode)
+                self.assertEqual(found, versions.ReleaseTag(versions.TagStatus.ABSENT))
+
+    def test_the_command_line_takes_the_mode(self) -> None:
+        found = _cli("release-tag", str(self.repo), self.commits[0], "github-actions")
+        self.assertEqual((found.returncode, found.stdout), (0, f"{self.commits[0]}\t{self.commits[0]}\n"), found.stderr)
+        self.assertEqual(_cli("release-tag", str(self.repo), self.commits[0]).returncode, 3)
+
+
 class VersionJumpTest(unittest.TestCase):
     def test_jumps(self) -> None:
         for frm, to in (
@@ -157,7 +196,7 @@ class ExactVersionTest(unittest.TestCase):
             },
             "npm": {"1.2.3": "1.2.3", "v1.2.3": "1.2.3", "1.2.3-rc.1": "1.2.3-rc.1", "1.2.3+build.5": "1.2.3+build.5"},
             "go": {"v1.8.1": "1.8.1", "v0.0.0-20240101000000-abcdef123456": "0.0.0-20240101000000-abcdef123456"},
-            "github-actions": {"v4.1.2": "4.1.2", "4.1.2": "4.1.2"},
+            "github-actions": {"v4.1.2": "4.1.2", "4.1.2": "4.1.2", "ABCDEF" + "0" * 34: "abcdef" + "0" * 34},
         }
         for mode, exact in cases.items():
             for token, body in exact.items():
@@ -169,7 +208,7 @@ class ExactVersionTest(unittest.TestCase):
             "pip": (">=2.31", "~=2.31", "!=1.0", "1.*", "1.x", "latest", ""),
             "npm": ("^1.2.3", "~1.2.3", "1.2", "1", "1.x", "1.2.3.4", "==1.2.3", ">=1.0.0", "*", ""),
             "go": ("v1", "1", "latest", ""),
-            "github-actions": ("v4", "v4.1", "main", "4", ""),
+            "github-actions": ("v4", "v4.1", "main", "4", "", "v" + "a" * 40, "a" * 39, "g" * 40),
             "docker": ("1.2.3",),
             "terraform": ("5.31.0",),
         }
@@ -192,7 +231,7 @@ class MovingRefTest(unittest.TestCase):
                 self.assertTrue(versions.moving_ref(ref))
 
     def test_a_full_release_tag_or_a_commit_sha_does_not_move(self) -> None:
-        for ref in ("v4.1.2", "4.1.2", "v4.1.2-beta.1", "0123456789abcdef0123456789abcdef01234567"):
+        for ref in ("v4.1.2", "4.1.2", "v4.1.2-beta.1", "0123456789abcdef0123456789abcdef01234567", "AB" * 20):
             with self.subTest(ref=ref):
                 self.assertFalse(versions.moving_ref(ref))
 

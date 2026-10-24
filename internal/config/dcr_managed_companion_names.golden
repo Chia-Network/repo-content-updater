@@ -7,6 +7,7 @@ dependency-manifest-diff
 dependency-cursor-review-versions
 dependency-cursor-review-ecosystems
 dependency-cursor-review-upstream
+dependency-cursor-review-binding
 dependency-manifest-go
 dependency-manifest-npm
 dependency-manifest-python

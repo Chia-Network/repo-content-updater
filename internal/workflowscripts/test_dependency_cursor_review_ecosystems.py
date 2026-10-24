@@ -6,6 +6,7 @@ import json
 import unittest
 from unittest.mock import patch
 
+import dependency_cursor_review_binding as binding
 import dependency_cursor_review_ecosystems as ecosystems
 import dependency_cursor_review_upstream as upstream
 import malware_verdict_formatter as formatter
@@ -62,17 +63,31 @@ class WarnPolicyTest(unittest.TestCase):
             ("v4.1.0", "v4.2"),
             ("main", "v4.2.0"),
             (_SHA, "v4"),
-            (_SHA, _SHA.upper()),
+            (_SHA[:39], _SHA),
         ):
             with self.subTest(old=old, new=new):
                 self.assertEqual(ecosystems.warn_reason("github-actions", old, new), ecosystems.MOVING_REF)
 
-    def test_a_commit_to_commit_action_bump_is_unresolved_sha(self) -> None:
-        self.assertEqual(ecosystems.warn_reason("github-actions", _SHA, _SHA[::-1]), ecosystems.UNRESOLVED_SHA)
-
-    def test_full_action_tags_mixed_sha_and_tag_bumps_and_other_ecosystems_have_no_warn_reason(self) -> None:
-        """A commit on one side and a full release tag on the other is not a policy row: coverage reads it as unresolved."""
+    def test_a_commit_to_commit_action_bump_is_scanned_and_is_unresolved_sha_only_when_the_scan_cannot_resolve_it(
+        self,
+    ) -> None:
+        for old, new in ((_SHA, _SHA[::-1]), (_SHA, _SHA.upper()), (_SHA.upper(), _SHA[::-1])):
+            with self.subTest(old=old, new=new):
+                self.assertEqual(ecosystems.warn_reason("github-actions", old, new), "")
+                self.assertEqual(ecosystems.unresolved_reason("github-actions", old, new), ecosystems.UNRESOLVED_SHA)
         for ecosystem, old, new in (
+            ("github-actions", _SHA, "v4.2.0"),
+            ("github-actions", "v4.1.0", _SHA),
+            ("github-actions", "v4.1.0", "v4.2.0"),
+            ("npm", _SHA, _SHA[::-1]),
+            ("docker", _SHA, _SHA[::-1]),
+        ):
+            with self.subTest(ecosystem=ecosystem, old=old, new=new):
+                self.assertEqual(ecosystems.unresolved_reason(ecosystem, old, new), "")
+
+    def test_full_action_tags_commit_bumps_and_other_ecosystems_have_no_warn_reason(self) -> None:
+        for ecosystem, old, new in (
+            ("github-actions", _SHA, _SHA[::-1]),
             ("github-actions", "v4.1.0", "v4.2.0"),
             ("github-actions", _SHA, "v4.2.0"),
             ("github-actions", "v4.1.0", _SHA),
@@ -87,6 +102,39 @@ class WarnPolicyTest(unittest.TestCase):
 
     def test_every_warn_reason_has_a_named_warning(self) -> None:
         self.assertEqual(set(formatter._POLICY_WARNINGS), set(ecosystems.WARN_REASONS))
+
+
+class BindTest(unittest.TestCase):
+    def _bind(self, ecosystem: str, version: str) -> binding.Binding:
+        return ecosystems.bind(ecosystem, binding.Subject("a/b", version, "a/b", _SHA, "."))
+
+    def test_go_modules_and_commit_pinned_actions_are_intrinsic(self) -> None:
+        for ecosystem, version in (("go", "v1.2.3"), ("github-actions", _SHA), ("github-actions", _SHA.upper())):
+            with self.subTest(ecosystem=ecosystem, version=version):
+                self.assertEqual(self._bind(ecosystem, version), binding.Binding(binding.INTRINSIC))
+
+    def test_a_tag_pinned_action_and_ecosystems_without_a_binding_are_unbound(self) -> None:
+        for ecosystem, version, reason in (
+            ("github-actions", "4.2.0", binding.MUTABLE_REF),
+            ("docker", "1.0", binding.UNSUPPORTED),
+            ("cargo", "1.0.0", binding.UNSUPPORTED),
+            ("unknown", "1.0.0", binding.UNSUPPORTED),
+        ):
+            with self.subTest(ecosystem=ecosystem):
+                self.assertEqual(self._bind(ecosystem, version), binding.Binding(binding.UNBOUND, reason))
+
+    def test_locked_reads_the_top_entries_for_the_version_in_each_parsed_lock_beside_the_change(self) -> None:
+        record = {"version": "1.0.1", "resolved": "https://registry.npmjs.org/a/-/a-1.0.1.tgz", "integrity": "sha512-x"}
+        nested = {**record, "integrity": "sha512-nested"}
+        lock = {"packages": {"node_modules/a": record, "node_modules/b/node_modules/a": nested}}
+        yarn = 'a@^1.0.0:\n  version "1.0.1"\n  resolved "https://registry.yarnpkg.com/a/-/a-1.0.1.tgz"\n'
+        files = {"web/package-lock.json": json.dumps(lock), "web/yarn.lock": yarn, "package-lock.json": "{}"}
+        found = ecosystems.locked("npm", "web", "a", "1.0.1", lambda path: files.get(path, ""))
+        self.assertEqual(len(found), 2)
+        self.assertIn('"sha512-x"', found[0])
+        self.assertIn("  version", found[1])
+        self.assertEqual(ecosystems.locked("npm", "web", "a", "1.0.0", lambda path: files.get(path, "")), ())
+        self.assertEqual(ecosystems.locked("docker", "web", "a", "1.0.1", lambda path: files.get(path, "")), ())
 
 
 class _Fetch:
