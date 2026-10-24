@@ -113,8 +113,9 @@ def poetry_lock(text: str) -> Parsed | None:
     entries: list[Entry] = []
     for package in packages:
         name = _requirement_name(package["name"])
-        claimed = "files" not in package and name in claims
-        item = {**package, "files": legacy.pop(claims[name])} if claimed else package
+        # Each table joins at most one package; a repeated name finds its claim gone.
+        key = claims.pop(name, None) if "files" not in package else None
+        item = {**package, "files": legacy.pop(key)} if key is not None else package
         version = str(item.get("version") or "")
         source = item.get("source")
         if source is not None:

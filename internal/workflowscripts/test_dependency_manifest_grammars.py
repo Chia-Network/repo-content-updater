@@ -353,6 +353,15 @@ class PythonLockGrammarTest(unittest.TestCase):
         both = poetry_lock(poetry_lock_text({"idna": "3.7"}) + '[metadata.files]\nidna = [{file = "x", hash = "y"}]\n')
         self.assertIn('"file":"x"', both[1])
 
+    def test_a_repeated_package_name_joins_its_metadata_files_table_once(self) -> None:
+        text = poetry_lock_text({"idna": "3.7"}, legacy=True)
+        repeated = text.replace("\n[metadata]", '\n[[package]]\nname = "IDNA"\nversion = "3.8"\n\n[metadata]', 1)
+        entries, _residue = poetry_lock(repeated)
+        hashes = [poetry_lock_hashes(entry[3]) for entry in entries if entry[0] == "idna"]
+        self.assertEqual(len(hashes), 2)
+        self.assertEqual(hashes[1], "")
+        self.assertNotEqual(hashes[0], "")
+
     def test_a_poetry_package_from_another_source_is_never_an_index_version(self) -> None:
         source = '[package.source]\ntype = "legacy"\nurl = "https://example.com/simple"\nreference = "private"\n'
         text = poetry_lock_text({"idna": "3.7"}).replace("\n[metadata]", source + "\n[metadata]")
