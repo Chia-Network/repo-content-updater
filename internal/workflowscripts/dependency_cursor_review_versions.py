@@ -1,4 +1,4 @@
-"""The one version model: an exact-version grammar per ecosystem, moving action refs, release tags and version jumps.
+"""The one version model: an exact-version grammar per ecosystem, action refs, release tags and version jumps.
 
 The manifest diff, the coverage scan and the upstream scan shell all read
 versions here. Each mode is an ecosystem and names which prefix its tokens
@@ -71,9 +71,14 @@ def _exact_body(value: str, *, mode: str) -> str:
     return match.group(0) if match else ""
 
 
+def commit_ref(ref: str) -> bool:
+    """True for a GitHub Actions ref that is a full lowercase commit SHA."""
+    return bool(_COMMIT_RE.fullmatch(ref))
+
+
 def moving_ref(ref: str) -> bool:
     """True for a GitHub Actions ref that is neither a full release tag nor a commit SHA: `v4`, `v4.1`, a branch."""
-    return not _COMMIT_RE.fullmatch(ref) and not _exact_body(ref, mode="github-actions")
+    return not commit_ref(ref) and not _exact_body(ref, mode="github-actions")
 
 
 class TagStatus(enum.IntEnum):

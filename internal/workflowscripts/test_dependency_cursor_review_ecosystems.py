@@ -45,6 +45,9 @@ class FileKindTest(unittest.TestCase):
                 self.assertIsNone(ecosystems.file_kind(path))
 
 
+_SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
 class WarnPolicyTest(unittest.TestCase):
     def test_docker_and_terraform_are_unscannable(self) -> None:
         for ecosystem in ("docker", "terraform"):
@@ -52,15 +55,28 @@ class WarnPolicyTest(unittest.TestCase):
                 self.assertEqual(ecosystems.warn_reason(ecosystem, "1.0", "1.1"), ecosystems.UNSCANNABLE_ECOSYSTEM)
 
     def test_major_and_major_minor_action_tags_and_branches_are_moving_refs(self) -> None:
-        for old, new in (("v4", "v5"), ("v4.1", "v4.2"), ("v4.1", "v4.2.0"), ("v4.1.0", "v4.2"), ("main", "v4.2.0")):
+        for old, new in (
+            ("v4", "v5"),
+            ("v4.1", "v4.2"),
+            ("v4.1", "v4.2.0"),
+            ("v4.1.0", "v4.2"),
+            ("main", "v4.2.0"),
+            (_SHA, "v4"),
+            (_SHA, _SHA.upper()),
+        ):
             with self.subTest(old=old, new=new):
                 self.assertEqual(ecosystems.warn_reason("github-actions", old, new), ecosystems.MOVING_REF)
 
-    def test_full_action_tags_shas_and_other_ecosystems_are_scanned(self) -> None:
-        sha = "0123456789abcdef0123456789abcdef01234567"
+    def test_a_commit_to_commit_action_bump_is_unresolved_sha(self) -> None:
+        self.assertEqual(ecosystems.warn_reason("github-actions", _SHA, _SHA[::-1]), ecosystems.UNRESOLVED_SHA)
+
+    def test_full_action_tags_mixed_sha_and_tag_bumps_and_other_ecosystems_have_no_warn_reason(self) -> None:
+        """A commit on one side and a full release tag on the other is not a policy row: coverage reads it as unresolved."""
         for ecosystem, old, new in (
             ("github-actions", "v4.1.0", "v4.2.0"),
-            ("github-actions", sha, sha[::-1]),
+            ("github-actions", _SHA, "v4.2.0"),
+            ("github-actions", "v4.1.0", _SHA),
+            ("github-actions", "", _SHA),
             ("github-actions", "", "v4.2.0"),
             ("npm", "1", "2"),
             ("go", "v1", "v2"),

@@ -21,6 +21,7 @@ from test_dependency_update_coverage import _clean, _commit, _git, _git_repo
 _SCRIPTS = Path(__file__).resolve().parent
 _BENIGN = "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n"
 _MERGE = "COMPATIBILITY_RECOMMENDATION: Merge\n\nFine.\n"
+_SHA = "0123456789abcdef0123456789abcdef01234567"
 _WORKFLOW = "on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@{}\n"
 
 
@@ -83,7 +84,7 @@ class _Diff(unittest.TestCase):
 
 
 class PolicyTest(_Diff):
-    def _moving(self, old: str, new: str) -> None:
+    def _not_scanned(self, old: str, new: str, reason: str) -> None:
         report, summary = self.run_main(
             {".github/workflows/ci.yml": _WORKFLOW.format(old)},
             {".github/workflows/ci.yml": _WORKFLOW.format(new)},
@@ -91,22 +92,42 @@ class PolicyTest(_Diff):
         self.assertEqual(self.scanned, [])
         self.assertEqual(report["not_scanned_reason"], coverage.NOTHING_TO_SCAN)
         change = {"ecosystem": "github-actions", "dir": ".github/workflows", "name": "actions/checkout"}
-        self.assertEqual(report["policy_warnings"], [{**change, "old": old, "new": new, "reason": "moving_ref"}])
+        self.assertEqual(report["policy_warnings"], [{**change, "old": old, "new": new, "reason": reason}])
         self.assertIn(
             f"- Not scanned by policy: github-actions `actions/checkout {old} -> {new}` in "
-            "`.github/workflows` (`moving_ref`)",
+            f"`.github/workflows` (`{reason}`)",
             summary,
         )
         for warn_only in (True, False):
             published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
             self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
-            self.assertIn(formatter._POLICY_WARNINGS["moving_ref"], published["malware_text"])
+            self.assertIn(formatter._POLICY_WARNINGS[reason], published["malware_text"])
 
     def test_a_moving_major_action_tag_is_inconclusive_with_a_named_warning_and_passes(self) -> None:
-        self._moving("v4", "v5")
+        self._not_scanned("v4", "v5", "moving_ref")
 
     def test_a_major_minor_action_tag_is_a_moving_ref_too(self) -> None:
-        self._moving("v4.1", "v4.2")
+        self._not_scanned("v4.1", "v4.2", "moving_ref")
+
+    def test_a_commit_to_commit_action_bump_is_inconclusive_with_a_named_warning_and_passes(self) -> None:
+        self._not_scanned(_SHA, _SHA[::-1], "unresolved_sha")
+
+    def test_a_bump_between_a_commit_and_a_release_tag_is_unresolved_and_fails(self) -> None:
+        """Commit -> tag and tag -> commit are not policy rows: the commit is not an exact version, so it is a gap."""
+        for old, new in ((_SHA, "v4.2.0"), ("v4.1.0", _SHA)):
+            with self.subTest(old=old, new=new):
+                self.setUp()
+                report, summary = self.run_main(
+                    {".github/workflows/ci.yml": _WORKFLOW.format(old)},
+                    {".github/workflows/ci.yml": _WORKFLOW.format(new)},
+                )
+                self.assertEqual(self.scanned, [])
+                self.assertEqual(report["policy_warnings"], [])
+                self.assertIs(report["scan_conclusive"], False)
+                self.assertIn("not covered (unresolved)", summary)
+                for warn_only in (True, False):
+                    published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
+                    self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
 
     def test_a_full_action_tag_is_scanned_from_the_action_repository(self) -> None:
         report, _summary = self.run_main(

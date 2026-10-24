@@ -2,9 +2,9 @@
 
 A FileKind row names a file by its name or path shape, its ecosystem, its
 role and the grammar that reads it (None when no grammar does). An Ecosystem
-row carries the policy. A change in a `warn` ecosystem, or an action ref that
-can move, is never scanned and never benign: decide() reports it inconclusive
-with a named warning and does not block on it.
+row carries the policy. A change in a `warn` ecosystem, or a change one of its
+`ref_rules` matches, is never scanned and never benign: decide() reports it
+inconclusive with a named warning and does not block on it.
 
 Roles: a manifest declares dependencies; a lock records the installed copies
 of the dependencies the manifest beside it declares; checksums hash the
@@ -24,17 +24,19 @@ from pathlib import PurePosixPath
 from typing import NamedTuple
 
 import dependency_cursor_review_upstream as upstream
-from dependency_cursor_review_versions import moving_ref
+from dependency_cursor_review_versions import commit_ref, moving_ref
 from dependency_manifest_go import go_mod, go_sum
 from dependency_manifest_lines import Parsed, dockerfile_from, terraform_config, terraform_lock, workflow_uses
 from dependency_manifest_npm import package_json, package_lock, yarn_lock
 from dependency_manifest_python import requirements
 
 # Why a change is not scanned. Docker images and Terraform providers have no
-# source tree to read; a moving tag can resolve to another commit after the review.
+# source tree to read; a moving tag can resolve to another commit after the review;
+# a bump from one commit to another is not resolved to release tags, so no release is scanned.
 UNSCANNABLE_ECOSYSTEM = "unscannable_ecosystem"
 MOVING_REF = "moving_ref"
-WARN_REASONS = frozenset({UNSCANNABLE_ECOSYSTEM, MOVING_REF})
+UNRESOLVED_SHA = "unresolved_sha"
+WARN_REASONS = frozenset({UNSCANNABLE_ECOSYSTEM, MOVING_REF, UNRESOLVED_SHA})
 
 MANIFEST, LOCK, CHECKSUMS = "manifest", "lock", "checksums"
 
@@ -43,10 +45,19 @@ def _no_repo(_name: str, _version: str) -> str:
     return ""
 
 
+# (warn reason, applies to (old, new)).
+_RefRule = tuple[str, Callable[[str, str], bool]]
+# The rules match disjoint changes: a moving ref is never a commit.
+_ACTION_REFS: tuple[_RefRule, ...] = (
+    (MOVING_REF, lambda old, new: any(ref and moving_ref(ref) for ref in (old, new))),
+    (UNRESOLVED_SHA, lambda old, new: commit_ref(old) and commit_ref(new)),
+)
+
+
 class Ecosystem(NamedTuple):
     name: str
     warn: str = ""  # the warn reason for every change, "" when changes are scanned
-    moving_refs: bool = False  # a ref that is neither a release tag nor a commit is MOVING_REF
+    ref_rules: tuple[_RefRule, ...] = ()  # the first rule that applies names the warn reason
     repo: Callable[[str, str], str] = _no_repo  # GitHub repository of (name, exact version)
 
 
@@ -62,7 +73,7 @@ class FileKind(NamedTuple):
 NPM = Ecosystem("npm", repo=upstream.npm)
 PIP = Ecosystem("pip", repo=upstream.pypi)
 GO = Ecosystem("go", repo=upstream.go)
-ACTIONS = Ecosystem("github-actions", moving_refs=True, repo=upstream.action)
+ACTIONS = Ecosystem("github-actions", ref_rules=_ACTION_REFS, repo=upstream.action)
 DOCKER = Ecosystem("docker", warn=UNSCANNABLE_ECOSYSTEM)
 TERRAFORM = Ecosystem("terraform", warn=UNSCANNABLE_ECOSYSTEM)
 # Ecosystems with no grammar: a manifest change is a gap, and so is a lock change without a primary change beside it.
@@ -138,9 +149,7 @@ def warn_reason(ecosystem: str, old: str, new: str) -> str:
     row = _BY_NAME.get(ecosystem)
     if row is None:
         return ""
-    if row.warn:
-        return row.warn
-    return MOVING_REF if row.moving_refs and any(ref and moving_ref(ref) for ref in (old, new)) else ""
+    return row.warn or next((reason for reason, applies in row.ref_rules if applies(old, new)), "")
 
 
 def upstream_repo(ecosystem: str, name: str, version: str) -> str:
