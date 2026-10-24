@@ -35,7 +35,7 @@ from typing import NamedTuple
 
 import dependency_cursor_review_ecosystems as ecosystems
 from dependency_cursor_review_ecosystems import CHECKSUMS, LOCK, MANIFEST, Ecosystem
-from dependency_manifest_lines import Entry
+from dependency_manifest_lines import Entry, EntryText
 
 # (revision, path) -> the file's text, "" when it is absent.
 Read = Callable[[str, str], str]
@@ -77,7 +77,7 @@ class _File(NamedTuple):
     hashed: bool = False  # whether its row records artifact hashes (Plan.hashed)
 
 
-def _fixed(fixed: Callable[[str], str], texts: dict[str, set[str]]) -> set[str]:
+def _fixed(fixed: Callable[[EntryText], str], texts: dict[str, set[EntryText]]) -> set[str]:
     return {fixed(text) for each in texts.values() for text in each}
 
 

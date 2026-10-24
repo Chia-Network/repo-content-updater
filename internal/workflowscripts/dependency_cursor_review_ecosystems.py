@@ -35,7 +35,15 @@ import dependency_cursor_review_binding as binding
 import dependency_cursor_review_upstream as upstream
 from dependency_cursor_review_versions import commit_ref, exact_body, moving_ref
 from dependency_manifest_go import go_mod, go_sum, go_sum_hash
-from dependency_manifest_lines import Entry, Parsed, dockerfile_from, terraform_config, terraform_lock, workflow_uses
+from dependency_manifest_lines import (
+    Entry,
+    EntryText,
+    Parsed,
+    dockerfile_from,
+    terraform_config,
+    terraform_lock,
+    workflow_uses,
+)
 from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
 from dependency_manifest_python import (
     pipfile_lock,
@@ -112,11 +120,12 @@ class Ecosystem(NamedTuple):
     bind: Callable[[binding.Subject], binding.Binding] = binding.unsupported
 
 
-def _line(text: str) -> str:
+def _line(text: EntryText) -> str:
+    assert isinstance(text, str)
     return text
 
 
-def _record(_text: str) -> str:
+def _record(_text: EntryText) -> str:
     return ""
 
 
@@ -126,7 +135,7 @@ class FileKind(NamedTuple):
     parse: Callable[[str], Parsed | None] | None
     names: frozenset[str] = frozenset()  # exact file names
     match: Callable[[PurePosixPath], bool] | None = None  # any other path shape
-    fixed: Callable[[str], str] = _line  # the part of an entry's text no version change may change
+    fixed: Callable[[EntryText], str] = _line  # the part of an entry's text no version change may change
     # The artifact hash an installed copy's entry records, "" for none; None for an entry that is no installed copy.
     hashes: Callable[[Entry], str | None] | None = None
 

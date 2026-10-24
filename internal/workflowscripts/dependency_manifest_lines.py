@@ -22,7 +22,8 @@ class Pin(NamedTuple):
 
 
 # (name, version, top, text)
-Entry = tuple[str, str, bool, str | Pin]
+EntryText = str | Pin
+Entry = tuple[str, str, bool, EntryText]
 Parsed = tuple[list[Entry], str]
 
 # `uses: owner/repo[/path]@ref`, optionally a list item, optionally quoted, optionally with a trailing comment.
