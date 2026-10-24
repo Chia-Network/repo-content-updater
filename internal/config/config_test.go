@@ -435,6 +435,8 @@ func TestLoadConfigRejectsInvalidRetiredPaths(t *testing.T) {
 		{name: "a dot segment", retired: ".github/./second.yml", wantErr: "is still a managed path"},
 		{name: "a doubled slash", retired: ".github//second.yml", wantErr: "is still a managed path"},
 		{name: "a backslash", retired: `.github\\second.yml`, wantErr: "is still a managed path"},
+		{name: "a dot segment in a managed path", retired: ".github/third.yml", wantErr: "is still a managed path"},
+		{name: "a doubled slash in a managed path", retired: ".github/fourth.yml", wantErr: "is still a managed path"},
 		{name: "a trailing slash", retired: ".github/second.yml/", wantErr: "must name a file"},
 		{name: "the repo root", retired: "./", wantErr: "must name a file"},
 		{name: "a lone dot", retired: ".", wantErr: "must name a file"},
@@ -454,6 +456,12 @@ files:
   - name: second
     template_name: second.yml
     repo_path: .github/second.yml
+  - name: third
+    template_name: third.yml
+    repo_path: .github/./third.yml
+  - name: fourth
+    template_name: fourth.yml
+    repo_path: .github//fourth.yml
 `), 0o644)
 			assert.Nil(t, err)
 

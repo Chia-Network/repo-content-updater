@@ -171,11 +171,11 @@ func (c *Config) validatePaths() error {
 			return err
 		}
 		for _, retired := range file.RetiredPaths {
-			key := strings.ReplaceAll(strings.TrimSpace(retired), "\\", "/")
-			if strings.HasSuffix(key, "/") || path.Clean(key) == "." {
+			key := managedPathKey(retired)
+			if strings.HasSuffix(strings.TrimSpace(retired), "/") || key == "" {
 				return fmt.Errorf("file %q retired_paths entry %q must name a file", file.Name, retired)
 			}
-			if owners := c.managedPathOwners[normalizeManagedFileKey(path.Clean(key))]; len(owners) > 0 {
+			if owners := c.managedPathOwners[key]; len(owners) > 0 {
 				return fmt.Errorf("file %q retired_paths entry %q is still a managed path", file.Name, retired)
 			}
 		}
@@ -245,6 +245,19 @@ func normalizeManagedFileKey(key string) string {
 	return strings.ToLower(key)
 }
 
+// managedPathKey is the one comparable spelling of a repo-relative path:
+// slash-separated, cleaned and lowercased, or "" when it names no file.
+func managedPathKey(repoPath string) string {
+	key := strings.ReplaceAll(strings.TrimSpace(repoPath), "\\", "/")
+	if key == "" {
+		return ""
+	}
+	if key = normalizeManagedFileKey(path.Clean(key)); key == "." {
+		return ""
+	}
+	return key
+}
+
 func (c *Config) registerManagedFileLookup(key, canonicalName string) {
 	key = normalizeManagedFileKey(key)
 	if key == "" {
@@ -286,7 +299,7 @@ func (c *Config) buildManagedFileLookup() {
 func (c *Config) repoPathKeys(file *File) []string {
 	keys := make([]string, 0, 1+len(file.AlternatePaths))
 	add := func(filePath string) {
-		key := normalizeManagedFileKey(filePath)
+		key := managedPathKey(filePath)
 		if key != "" {
 			keys = append(keys, key)
 		}
