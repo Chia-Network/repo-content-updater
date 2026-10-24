@@ -137,7 +137,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
 
     def test_one_unresolvable_entry_is_inconclusive(self) -> None:
         gap = coverage.uncovered(
-            coverage.Target(package="k8s.io/api", old="0.29.1", new="0.29.2", repo=""),
+            coverage.Target(package="k8s.io/api", old="0.29.1", new="0.29.2"),
             "unresolved",
         )
         records = [_clean("cobra", "spf13/cobra"), gap]
@@ -209,9 +209,11 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
 
         plan = _plan(("npm", "a", "lodash", "4.17.20", "4.17.21"), ("npm", "b", "lodash", "4.17.20", "4.17.21"))
         seen: list[coverage.Target] = []
-        _run_main(plan, repo=repo, scan=lambda target, *_args: seen.append(target) or _clean("lodash", target.repo))
+        _run_main(
+            plan, repo=repo, scan=lambda target, *_args: seen.append(target) or _clean("lodash", target.repo.slug)
+        )
         self.assertEqual(looked_up, [("npm", "lodash", "4.17.21")])
-        self.assertEqual([target.repo for target in seen], ["upstream/lodash", "upstream/lodash"])
+        self.assertEqual([target.repo.slug for target in seen], ["upstream/lodash", "upstream/lodash"])
 
     def test_versions_that_are_not_exact_stop_before_the_repository_lookup(self) -> None:
         looked_up: list[str] = []
@@ -236,8 +238,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                     package="github.com/spf13/cobra",
                     old="1.8.0",
                     new="1.8.1",
-                    repo="upstream/github.com/spf13/cobra",
-                    repo_source="identity",
+                    repo=upstream.Repo("upstream/github.com/spf13/cobra", "identity"),
                 )
             ],
         )
@@ -295,7 +296,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 dest = child / to_version.replace("/", "-")
                 dest.mkdir()
                 return coverage._scan_one(
-                    coverage.Target(package="lodash", old="1.0.0", new=to_version, repo="lodash/lodash"),
+                    coverage.Target(package="lodash", old="1.0.0", new=to_version, repo=upstream.Repo("lodash/lodash")),
                     dest,
                     Path(__file__).resolve().parent / "upstream_malware_scan.sh",
                 )
@@ -481,7 +482,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIn("Scan coverage: **incomplete**", summary)
 
     def test_empty_from_still_scans_the_to_tree(self) -> None:
-        update = coverage.Target(package="lodash", old="", new="1.1.0", repo="lodash/lodash")
+        update = coverage.Target(package="lodash", old="", new="1.1.0", repo=upstream.Repo("lodash/lodash"))
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root / "scan.sh"
@@ -526,7 +527,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 os.chdir(previous)
 
     def test_missing_scan_report_fails_the_check(self) -> None:
-        update = coverage.Target(package="left-pad", old="1.2.3", new="1.2.4", repo="left-pad/left-pad")
+        update = coverage.Target(package="left-pad", old="1.2.3", new="1.2.4", repo=upstream.Repo("left-pad/left-pad"))
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root / "scan.sh"
@@ -547,7 +548,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIs(concluded["may_complete"], False)
 
     def test_nonzero_exit_after_report_is_a_scanner_error(self) -> None:
-        update = coverage.Target(package="left-pad", old="1.2.3", new="1.2.4", repo="left-pad/left-pad")
+        update = coverage.Target(package="left-pad", old="1.2.3", new="1.2.4", repo=upstream.Repo("left-pad/left-pad"))
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root / "scan.sh"
@@ -576,7 +577,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIs(published["may_complete"], False)
 
     def test_scan_one_passes_an_absolute_github_output(self) -> None:
-        update = coverage.Target(package="left-pad", old="1.2.3", new="1.2.4", repo="left-pad/left-pad")
+        update = coverage.Target(package="left-pad", old="1.2.3", new="1.2.4", repo=upstream.Repo("left-pad/left-pad"))
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root / "scan.sh"

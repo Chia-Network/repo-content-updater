@@ -44,10 +44,9 @@ class Target(NamedTuple):
 
     package: str = ""
     path: str = ""
-    repo: str = ""
+    repo: _upstream.Repo = _upstream.Repo()
     old: str = ""
     new: str = ""
-    repo_source: str = ""  # dependency_cursor_review_upstream source of `repo`
 
 
 class Disclosure(NamedTuple):
@@ -66,8 +65,8 @@ def _fields(target: Target) -> dict[str, str]:
     return {
         "package_name": target.package,
         "path": target.path,
-        "upstream_repo": target.repo,
-        "repo_source": target.repo_source,
+        "upstream_repo": target.repo.slug,
+        "repo_source": target.repo.source,
         "from_version": target.old,
         "to_version": target.new,
     }
@@ -567,7 +566,7 @@ def _targets(changes: list[_diff.Change]) -> list[tuple[_diff.Change, Target, st
     resolved: list[tuple[_diff.Change, Target, str]] = []
     for key, (change, target, why) in zip(keys, exact):
         repo = _upstream.Repo() if why else repos[key]
-        found = target._replace(repo=repo.slug, repo_source=repo.source)
+        found = target._replace(repo=repo)
         resolved.append((change, found, why or ("" if repo.slug else "no_upstream_link")))
     return resolved
 
@@ -577,7 +576,7 @@ def _bind(change: _diff.Change, target: Target, record: dict) -> _binding.Bindin
     subject = _binding.Subject(
         name=target.package,
         version=target.new,
-        repo=target.repo,
+        repo=target.repo.slug,
         commit=str(record.get("resolved_to") or ""),
         locked=_ecosystems.locked(
             change.ecosystem, change.dir, target.package, target.new, lambda path: _git_text("HEAD", path)
@@ -589,7 +588,7 @@ def _bind(change: _diff.Change, target: Target, record: dict) -> _binding.Bindin
 def _scan_one(target: Target, dest: Path, scan_script: Path, ecosystem: str = "") -> dict:
     dest = dest.absolute()
     checkout = dest / ".upstream-dependency"
-    if not _clone(target.repo, checkout):
+    if not _clone(target.repo.slug, checkout):
         return uncovered(target, "unresolved")
     env = os.environ.copy()
     env["GITHUB_OUTPUT"] = str(dest / "github_output.txt")
@@ -712,7 +711,7 @@ def _scan_all(
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
         for (_change, target, record), found in zip(covered, pool.map(lambda item: _bind(*item), covered)):
             record["binding"] = found._asdict()
-            record["repo_source"] = _binding.repo_source(target.repo_source, found)
+            record["repo_source"] = _binding.repo_source(target.repo.source, found)
     return records, scans, tuple(warnings)
 
 

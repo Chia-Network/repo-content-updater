@@ -39,7 +39,7 @@ class NpmBindingTest(_Diff):
     def _run(self, integrity: str | None, attestations: bytes | None) -> tuple[dict, str]:
         def scan(update: coverage.Target, *_args: object) -> dict:
             self.scanned.append(update)
-            return {**_clean(update.package, update.repo), "resolved_to": _NPM_COMMIT}
+            return {**_clean(update.package, update.repo.slug), "resolved_to": _NPM_COMMIT}
 
         doc = {"repository": "github:sigstore/sigstore-js", "dist": {"integrity": _NPM_INTEGRITY}}
         return self.run_main(
@@ -52,7 +52,7 @@ class NpmBindingTest(_Diff):
     def test_a_clean_scan_with_provenance_for_the_lock_hash_is_benign(self) -> None:
         attestations = (_DATA / "npm-sigstore-3.0.0.json").read_bytes()
         report, summary = self._run(_NPM_INTEGRITY, attestations)
-        self.assertEqual([(u.package, u.repo) for u in self.scanned], [("sigstore", "sigstore/sigstore-js")])
+        self.assertEqual([(u.package, u.repo.slug) for u in self.scanned], [("sigstore", "sigstore/sigstore-js")])
         self.assertEqual(report["binding"], {"kind": "provenance", "reason": ""})
         self.assertEqual(report["repo_source"], "attested")
         self.assertIn("covered, artifact binding `provenance`", summary)
@@ -158,7 +158,7 @@ class PypiBindingTest(_Diff):
 
         def scan(update: coverage.Target, *_args: object) -> dict:
             self.scanned.append(update)
-            return {**_clean(update.package, update.repo), "resolved_to": _PYPI_COMMIT}
+            return {**_clean(update.package, update.repo.slug), "resolved_to": _PYPI_COMMIT}
 
         doc = {
             "info": {"project_urls": {"Source": "https://github.com/sigstore/sigstore-python"}},
@@ -171,7 +171,7 @@ class PypiBindingTest(_Diff):
             fetch={_PYPI_DOC: json.dumps(doc).encode(), _integrity_url(_SDIST): provenance},
             scan=scan,
         )
-        self.assertEqual([(u.package, u.repo) for u in self.scanned], [("sigstore", "sigstore/sigstore-python")])
+        self.assertEqual([(u.package, u.repo.slug) for u in self.scanned], [("sigstore", "sigstore/sigstore-python")])
         return report, summary
 
     def _poetry(self, sha256: str = _SDIST_SHA256) -> dict[str, tuple[str, str]]:
