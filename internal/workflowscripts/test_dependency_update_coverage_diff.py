@@ -98,7 +98,7 @@ class PolicyTest(_Diff):
             summary,
         )
         for warn_only in (True, False):
-            published = formatter.compose_published_review({**report, "warn_only": warn_only}, _BENIGN, _MERGE)
+            published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
             self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
             self.assertIn(formatter._POLICY_WARNINGS["moving_ref"], published["malware_text"])
 
@@ -158,7 +158,7 @@ class PolicyTest(_Diff):
             {".github/workflows/ci.yml": _WORKFLOW.format("v5"), "Cargo.toml": '[dependencies]\nserde = "1.0.2"\n'},
         )
         self.assertIs(report["scan_conclusive"], False)
-        published = formatter.compose_published_review({**report, "warn_only": True}, _BENIGN, _MERGE)
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=True)
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
 
 
@@ -186,22 +186,45 @@ class UncheckedUpgradeTest(_Diff):
         self.assertIn("- 2 other packages were upgraded and were not checked by this run:", summary)
         self.assertIn("  - npm `qs 6.5.2 -> 6.5.3` in `.`", summary)
 
-    def test_unchecked_upgrades_beside_a_clean_scan_keep_the_verdict(self) -> None:
+    def _lodash(self, base: dict[str, str], head: dict[str, str]) -> tuple[dict, str]:
         report, summary = self.run_main(
-            {
-                "package.json": _package({"lodash": "^4.17.20"}),
-                "package-lock.json": _lock({"lodash": "4.17.20", "qs": "6.5.2"}),
-            },
-            {
-                "package.json": _package({"lodash": "^4.17.21"}),
-                "package-lock.json": _lock({"lodash": "4.17.21", "qs": "6.5.3"}),
-            },
+            {"package.json": _package({"lodash": "4.17.20"}), **base},
+            {"package.json": _package({"lodash": "4.17.21"}), **head},
             fetch={"https://registry.npmjs.org/lodash/4.17.21": b'{"repository": "github:lodash/lodash"}'},
         )
         self.assertEqual([(u["packageName"], u["upstreamRepo"]) for u in self.scanned], [("lodash", "lodash/lodash")])
-        self.assertIn("- 1 other package was upgraded and was not checked by this run:", summary)
+        self.assertIs(report["scan_conclusive"], True)
+        return report, summary
+
+    def test_a_clean_scan_of_every_changed_package_is_benign(self) -> None:
+        report, _summary = self._lodash(
+            {"package-lock.json": _lock({"lodash": "4.17.20", "qs": "6.5.2"})},
+            {"package-lock.json": _lock({"lodash": "4.17.21", "qs": "6.5.2"})},
+        )
+        self.assertEqual((report["unchecked_upgrades"], report["unparsed_locks"]), ([], []))
         published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+
+    def test_unchecked_upgrades_beside_a_clean_scan_are_inconclusive_not_benign(self) -> None:
+        report, summary = self._lodash(
+            {"package-lock.json": _lock({"lodash": "4.17.20", "qs": "6.5.2"})},
+            {"package-lock.json": _lock({"lodash": "4.17.21", "qs": "6.5.3"})},
+        )
+        self.assertIn("- 1 other package was upgraded and was not checked by this run:", summary)
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
+        self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+        self.assertNotIn("**Verdict: benign**", published["malware_text"])
+
+    def test_an_unparsed_lock_beside_a_clean_scan_is_inconclusive_not_benign(self) -> None:
+        report, summary = self._lodash(
+            {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n"},
+            {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n#\n"},
+        )
+        self.assertEqual(report["unparsed_locks"], ["pnpm-lock.yaml"])
+        self.assertIn("- These lockfiles were not parsed, so the packages they changed were not checked:", summary)
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
+        self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+        self.assertNotIn("**Verdict: benign**", published["malware_text"])
 
     def test_a_transitive_only_bump_scans_nothing_and_does_not_block(self) -> None:
         report, summary = self.run_main(
@@ -274,7 +297,6 @@ class PublishedStatusTest(_Diff):
             return {
                 **_clean("requests", update["upstreamRepo"]),
                 "status": "warn",
-                "warn_only": False,
                 "findings": findings,
             }
 

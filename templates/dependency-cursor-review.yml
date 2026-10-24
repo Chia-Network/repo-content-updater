@@ -118,8 +118,6 @@ jobs:
           PR_BASE_SHA: ${{`{{ steps.target_pr.outputs.base_sha }}`}}
           DCR_OUT: ${{`{{ runner.temp }}`}}/dcr-out
           DCR_FETCH_TOKEN: ${{`{{ github.token }}`}}
-          MALWARE_WARN_ONLY: >-
-            {{ .DEPENDABOT_CURSOR_MALWARE_WARN_ONLY }}
           MALWARE_IOC_PATTERNS: >-
             {{ .DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS }}
           MALWARE_IOC_ALLOWLIST: >-
@@ -512,6 +510,10 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    env:
+      # A policy input to decide(), read once by the combine step.
+      MALWARE_WARN_ONLY: >-
+        {{ .DEPENDABOT_CURSOR_MALWARE_WARN_ONLY }}
     steps:
       - name: Fail closed when scan or agent failed
         if: ${{`{{ needs.dependency-review-scan.result != 'success' || (needs.dependency-review-agent.result != 'success' && needs.dependency-review-agent.result != 'skipped') }}`}}

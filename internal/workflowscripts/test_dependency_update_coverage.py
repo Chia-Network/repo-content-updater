@@ -56,7 +56,6 @@ def _commit(repo: Path, rel: str, content: str, message: str) -> None:
 def _clean(name: str, repo: str) -> dict:
     return {
         "status": "clean",
-        "warn_only": True,
         "scan_conclusive": True,
         "not_scanned_reason": "",
         "verdict_token_in_tree": False,
@@ -259,7 +258,6 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 name: os.environ.get(name)
                 for name in (
                     "MALWARE_IOC_PATTERNS",
-                    "MALWARE_WARN_ONLY",
                     "MALWARE_IOC_ALLOWLIST",
                     "MALWARE_UNICODE_ALLOWLIST",
                     "MALWARE_CONFUSABLE_ALLOWLIST",
@@ -268,9 +266,8 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             }
             os.chdir(root)
             os.environ["MALWARE_IOC_PATTERNS"] = json.dumps([marker])
-            os.environ["MALWARE_WARN_ONLY"] = "1"
             for name in saved_env:
-                if name not in {"MALWARE_IOC_PATTERNS", "MALWARE_WARN_ONLY"}:
+                if name != "MALWARE_IOC_PATTERNS":
                     os.environ[name] = "[]"
 
             def scan(to_version: str) -> dict:

@@ -21,6 +21,7 @@ class CombineCompleteTest(unittest.TestCase):
         malware: str | None,
         compatibility: str | None,
         report: dict | None = None,
+        warn_only: str = "0",
     ) -> dict:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -45,6 +46,7 @@ class CombineCompleteTest(unittest.TestCase):
             env["DCR_COMPAT_JSON"] = str(root / "cursor_output_compatibility.json")
             env["DCR_COMBINED_JSON"] = str(root / "cursor_output.json")
             env["MALWARE_SCAN_REPORT_SHA256"] = hashlib.sha256(payload).hexdigest()
+            env["MALWARE_WARN_ONLY"] = warn_only
             proc = subprocess.run(
                 [sys.executable, "-I", str(_COMBINE)],
                 check=False,

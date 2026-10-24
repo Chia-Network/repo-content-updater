@@ -1,4 +1,4 @@
-"""The published check fails closed for omitted findings, unread blobs, and a stored pass."""
+"""The published check fails closed for omitted findings, unread blobs, and a stored pass, under either warn-only setting."""
 
 from __future__ import annotations
 
@@ -112,6 +112,7 @@ class PublishedCheckTest(unittest.TestCase):
         drop_report: bool = False,
         stored: str | None = None,
         malware: str | None = None,
+        warn_only: str | None = "0",
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -130,6 +131,9 @@ class PublishedCheckTest(unittest.TestCase):
             env["DCR_COMPAT_JSON"] = str(root / "cursor_output_compatibility.json")
             env["DCR_COMBINED_JSON"] = str(stored_path)
             env["MALWARE_SCAN_REPORT_SHA256"] = digest if digest is not None else hashlib.sha256(payload).hexdigest()
+            env.pop("MALWARE_WARN_ONLY", None)
+            if warn_only is not None:
+                env["MALWARE_WARN_ONLY"] = warn_only
             return subprocess.run(
                 [sys.executable, "-I", str(_COMBINE), "--enforce-check"],
                 cwd=root,
@@ -183,6 +187,36 @@ class PublishedCheckTest(unittest.TestCase):
         mismatch = self._enforce(clean, digest=hashlib.sha256(b"other").hexdigest())
         self.assertNotEqual(mismatch.returncode, 0)
         self.assertIn("digest mismatch", mismatch.stderr)
+
+    def test_enforce_reads_warn_only_once_from_the_environment(self) -> None:
+        clean = {
+            "status": "clean",
+            "scan_conclusive": True,
+            "unread": [],
+            "verdict_token_in_tree": False,
+            "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+        }
+        finding = {"kind": "unicode", "file": "pkg/index.js", "line": "1", "match": "bidi"}
+        suspicious = {**clean, "status": "warn", "findings": {**clean["findings"], "unicode": [finding]}}
+        benign = json.dumps({"result": "MALWARE_REVIEW_VERDICT: benign\n\nClear.\n"})
+        for value in ("1", "", None):
+            with self.subTest(warn_only=value):
+                advisory = self._enforce(suspicious, malware=benign, warn_only=value)
+                self.assertEqual(advisory.returncode, 0, msg=advisory.stderr or advisory.stdout)
+        for value in ("0", "false", "no"):
+            with self.subTest(warn_only=value):
+                self.assertNotEqual(self._enforce(suspicious, malware=benign, warn_only=value).returncode, 0)
+        incomplete = {**clean, "status": "not_scanned", "scan_conclusive": False, "not_scanned_reason": "unresolved"}
+        malicious = json.dumps({"result": "MALWARE_REVIEW_VERDICT: malicious\n\nEVIDENCE: a.js:1: beacon\n"})
+        blocked = (
+            ("missing verdict", {**clean, "status": "not_scanned", "scan_conclusive": False}, None),
+            ("incomplete primary coverage", incomplete, benign),
+            ("planted verdict line", {**clean, "verdict_token_in_tree": True}, benign),
+            ("malicious verdict", clean, malicious),
+        )
+        for name, report, malware in blocked:
+            with self.subTest(name):
+                self.assertNotEqual(self._enforce(report, malware=malware, warn_only="1").returncode, 0)
 
     def test_enforce_keeps_malicious_final_message_without_official_parse(self) -> None:
         clean = {

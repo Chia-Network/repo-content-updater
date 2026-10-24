@@ -180,12 +180,6 @@ def _unread_items(records: list[dict]) -> list[dict]:
     return found
 
 
-def _warn_only(records: list[dict]) -> bool:
-    """The MALWARE_WARN_ONLY policy each scan recorded. Strict when no scan ran or the records disagree."""
-    recorded = [record["warn_only"] for record in records if "warn_only" in record]
-    return bool(recorded) and all(value is True for value in recorded)
-
-
 def aggregate(records: list[dict], disclosed: dict | None = None) -> dict:
     """Covered only when every record was scanned conclusively.
 
@@ -235,7 +229,6 @@ def aggregate(records: list[dict], disclosed: dict | None = None) -> dict:
     return _stamp(
         {
             "status": status,
-            "warn_only": _warn_only(records),
             "scan_conclusive": conclusive,
             "not_scanned_reason": "" if conclusive else "incomplete_coverage",
             "verdict_token_in_tree": any(record.get("verdict_token_in_tree") is True for record in records),
