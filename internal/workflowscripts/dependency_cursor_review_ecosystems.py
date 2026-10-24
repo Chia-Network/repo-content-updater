@@ -73,10 +73,17 @@ def known_repo(ecosystem: str, name: str) -> str:
     if exact:
         return exact
     for (eco, prefix), owner in KNOWN_REPO_PREFIXES.items():
-        segment = name[len(prefix) :].split("/", 1)[0] if eco == ecosystem and name.startswith(prefix) else ""
-        if _REPO_SEGMENT.fullmatch(segment) and segment.strip("."):
+        if eco != ecosystem or not name.startswith(prefix):
+            continue
+        segment = name[len(prefix) :].split("/", 1)[0]
+        if _is_repo_name(segment):
             return f"{owner}/{segment}"
     return ""
+
+
+def _is_repo_name(segment: str) -> bool:
+    """A single GitHub repository name: allowed characters only, and not made of dots alone ("." or "..")."""
+    return _REPO_SEGMENT.fullmatch(segment) is not None and segment.strip(".") != ""
 
 
 def _no_repo(_name: str, _version: str) -> upstream.Repo:
