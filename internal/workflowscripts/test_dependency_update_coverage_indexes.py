@@ -187,6 +187,38 @@ class DependencyUpdateCoverageIndexTest(unittest.TestCase):
                 ("requirements.txt",),
                 True,
             ),
+            "workflow yaml mention is not an includer": (
+                {
+                    "requirements.txt": f"-i https://pypi.chia.net/simple/\n{hashed_pin}",
+                    ".github/workflows/ci.yml": "      - run: pip install -r requirements.txt\n",
+                },
+                ("requirements.txt",),
+                True,
+            ),
+            "makefile mention is not an includer": (
+                {
+                    "requirements.txt": f"-i https://pypi.chia.net/simple/\n{hashed_pin}",
+                    "Makefile": "\tpip install -r requirements.txt --extra-index-url https://pypi.org/simple/\n",
+                },
+                ("requirements.txt",),
+                True,
+            ),
+            "readme mention is not an includer": (
+                {
+                    "requirements.txt": f"-i https://pypi.chia.net/simple/\n{hashed_pin}",
+                    "README.md": "Run `pip install -r requirements.txt` to install.\n",
+                },
+                ("requirements.txt",),
+                True,
+            ),
+            "indented includer adds an extra source": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "dev-requirements.txt": "  -r requirements.txt\n--extra-index-url https://pypi.org/simple/\n",
+                },
+                ("requirements.txt",),
+                False,
+            ),
             "pyproject pin has no index": (
                 {
                     "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",

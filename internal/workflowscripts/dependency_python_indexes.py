@@ -32,6 +32,19 @@ _SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
 _PYPI_INDEXES = frozenset({"https://pypi.org/simple/", "https://pypi.python.org/simple/"})
 _MAX_REQUIREMENTS_FILES = 64
+_INCLUDE_PREFIXES = ("-r", "-c", "--requirement", "--constraint")
+
+
+def _mentions_include(text: str, name: str) -> bool:
+    """Whether a line of `text`, after leading whitespace, starts with an include option naming `name`."""
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith(_INCLUDE_PREFIXES):
+            continue
+        options = _python.requirements_index_options(stripped).options
+        if any(option.kind == _python.INCLUDE and posixpath.basename(option.value) == name for option in options):
+            return True
+    return False
 
 
 def _registry_scalar(value: str) -> str | None:
@@ -250,12 +263,18 @@ class _Requirements:
         return self._searched[needle]
 
     def _consider(self, candidate: str, path: str, roots: set[str], pending: list[str]) -> None:
-        """Add `candidate` to `roots` when it includes `path`, or leave `path` unread when that cannot be decided."""
+        """Add `candidate` to `roots` when it includes `path`; ignore it when no leading include option names `path`.
+
+        A candidate that names `path` in a leading include option but cannot be read, parsed or resolved leaves
+        `path` unread.
+        """
         if candidate == path:
             return
         mode = self._mode(candidate)
-        if mode is None or not _is_blob(mode) or not self._text(candidate):
+        if mode is None or not _is_blob(mode) or not (text := self._text(candidate)):
             self._broken.add(path)
+            return
+        if not _mentions_include(text, posixpath.basename(path)):
             return
         options = self._options_for(candidate)
         included = self._resolve_includes(candidate)
