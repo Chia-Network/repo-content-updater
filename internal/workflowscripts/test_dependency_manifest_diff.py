@@ -332,9 +332,7 @@ class NpmTest(unittest.TestCase):
             "packages/web/pnpm-lock.yaml": lock + "#\n",
             "packages/api/package.json": head["packages/web/package.json"],
         }
-        self.assertEqual(
-            _plan(beside, moved).gaps, (("packages/web/pnpm-lock.yaml", "unsupported_lockfile_version"),)
-        )
+        self.assertEqual(_plan(beside, moved).gaps, (("packages/web/pnpm-lock.yaml", "unsupported_lockfile_version"),))
 
     def test_an_unparsed_lock_with_no_primary_change_beside_it_is_a_gap(self) -> None:
         package = _package(dependencies={"zod": "^3.22.0"})
