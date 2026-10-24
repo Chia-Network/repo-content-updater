@@ -4,13 +4,16 @@ The scan reads a commit in the GitHub repository the registry names, and the
 publisher controls that name. A binding ties the installed artifact back to
 the scanned commit:
 
-- intrinsic: the ecosystem installs that git content itself. A Go module zip
-  is built from the tag and pinned by go.sum; an action runs the commit its
-  full tag or commit SHA resolves to in the action's own repository, which is
-  the commit scanned.
-- provenance: the lockfile's artifact hash equals the registry's, and every
-  provenance attestation the registry serves for the artifact names the
-  scanned repository, the scanned commit itself and the artifact's digest.
+- intrinsic: the ecosystem installs that git content itself. An action runs
+  the commit its full tag or commit SHA resolves to in the action's own
+  repository, which is the commit scanned.
+- checksum: the module zip the Go proxy serves for the version hashes to the
+  go.sum entry beside the change, and the proxy records that it built the
+  zip from the scanned commit itself.
+- provenance: every artifact hash the lockfile records is the registry's for
+  a file of the version, and every provenance attestation the registry serves
+  for that file names the scanned repository, the scanned commit itself and
+  the file's digest.
 - unbound: anything else, with a reason. decide() never reports it benign.
 
 Provenance is read, not verified: the registry checks the Sigstore signature
@@ -24,27 +27,45 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import io
 import json
+import re
 import urllib.parse
+import zipfile
+import zlib
 from typing import NamedTuple
 
 import dependency_cursor_review_certificate as certificate
 import dependency_cursor_review_upstream as upstream
 
-INTRINSIC, PROVENANCE, UNBOUND = "intrinsic", "provenance", "unbound"
-BOUND = frozenset({INTRINSIC, PROVENANCE})
+INTRINSIC, CHECKSUM, PROVENANCE, UNBOUND = "intrinsic", "checksum", "provenance", "unbound"
+BOUND = frozenset({INTRINSIC, CHECKSUM, PROVENANCE})
 # Why a scan is unbound.
-NO_LOCK_HASH = "no_lock_hash"  # no lockfile records one sha512 integrity for the version
-HASH_MISMATCH = "hash_mismatch"  # the registry's integrity for the version is not the lockfile's
+NO_LOCK_HASH = "no_lock_hash"  # no lock beside the change records a usable artifact hash for the version
+HASH_MISMATCH = "hash_mismatch"  # the registry's artifact hash for the version is not the lock's
+COMMIT_MISMATCH = "commit_mismatch"  # the registry names no commit, or another one, as the artifact's source
 NO_PROVENANCE = "no_provenance"  # the registry serves no provenance attestation for the artifact
 PROVENANCE_MISMATCH = "provenance_mismatch"  # an attestation names another repository, commit or digest
 REGISTRY_UNAVAILABLE = "registry_unavailable"  # the registry gave no readable answer
 UNSUPPORTED = "unsupported"  # the ecosystem has no binding
 REASONS = frozenset(
-    {NO_LOCK_HASH, HASH_MISMATCH, NO_PROVENANCE, PROVENANCE_MISMATCH, REGISTRY_UNAVAILABLE, UNSUPPORTED}
+    {
+        NO_LOCK_HASH,
+        HASH_MISMATCH,
+        COMMIT_MISMATCH,
+        NO_PROVENANCE,
+        PROVENANCE_MISMATCH,
+        REGISTRY_UNAVAILABLE,
+        UNSUPPORTED,
+    }
 )
 
 _SLSA_V1 = "https://slsa.dev/provenance/v1"
+_GO_PROXY = "https://proxy.golang.org"
+# golang.org/x/mod/zip.MaxZipFile: the go command reads no module zip, and extracts no content, larger than this.
+_GO_ZIP_LIMIT = 500 << 20
+_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 class Binding(NamedTuple):
@@ -59,10 +80,11 @@ class Subject(NamedTuple):
     version: str
     repo: str  # owner/repo that was scanned
     commit: str  # the scanned commit (the peeled to tag)
-    locked: tuple[str, ...] = ()  # the integrity each top lock entry for name at version records, "" for none
+    locked: tuple[str, ...] = ()  # what each lock entry for name at version records (ecosystems.locked), "" for none
 
 
 _INTRINSIC = Binding(INTRINSIC)
+_CHECKSUM = Binding(CHECKSUM)
 _PROVENANCE = Binding(PROVENANCE)
 
 
@@ -157,23 +179,85 @@ def npm(subject: Subject) -> Binding:
     return _provenance(subject, pairs, "sha512", digest)
 
 
-def pypi(subject: Subject) -> Binding:
-    """Every file of the release has publish attestations for its sha256 and the scan.
+def _go_escaped(text: str) -> str:
+    """A module path or version as the module proxy spells it: an upper-case letter is `!` and its lower case."""
+    escaped = re.sub(r"[A-Z]", lambda match: "!" + match.group(0).lower(), text)
+    return urllib.parse.quote(escaped, safe="/!+")
 
-    pip may install any file of the release, so each one is checked.
+
+def _hash1(archive: bytes) -> str:
+    """Go's dirhash.Hash1 of a module zip, as go.sum records it, or "" when it is not a zip the go command reads.
+
+    Hash1 is the sha256 of one `<sha256 hex>  <name>` line per file, in byte order of the names the zip stores.
     """
+    lines: dict[bytes, bytes] = {}
+    total = 0
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+            for info in zipped.infolist():
+                name = info.orig_filename.encode("utf-8" if info.flag_bits & 0x800 else "cp437")
+                if b"\n" in name or name in lines:
+                    return ""
+                digest = hashlib.sha256()
+                with zipped.open(info) as handle:
+                    while chunk := handle.read(1 << 20):
+                        total += len(chunk)
+                        if total > _GO_ZIP_LIMIT:
+                            return ""
+                        digest.update(chunk)
+                lines[name] = digest.hexdigest().encode() + b"  " + name + b"\n"
+    except (zipfile.BadZipFile, NotImplementedError, RuntimeError, EOFError, OSError, ValueError, zlib.error):
+        return ""
+    summary = hashlib.sha256(b"".join(lines[name] for name in sorted(lines)))
+    return "h1:" + base64.b64encode(summary.digest()).decode()
+
+
+def go(subject: Subject) -> Binding:
+    """The proxy's module zip hashes to the go.sum entry, and the proxy built that zip from the scanned commit.
+
+    The go command installs a module only when its zip hashes to the go.sum entry, so that zip is the one checked.
+    """
+    sums = set(subject.locked) - {""}
+    want = sums.pop() if len(sums) == 1 else ""
+    if not want.startswith("h1:"):
+        return _unbound(NO_LOCK_HASH)
+    base = f"{_GO_PROXY}/{_go_escaped(subject.name)}/@v/{_go_escaped('v' + subject.version)}"
+    archive = upstream.fetch_archive(base + ".zip", _GO_ZIP_LIMIT)
+    found = _hash1(archive) if archive else ""
+    if not found:
+        return _UNAVAILABLE
+    if found != want:
+        return _unbound(HASH_MISMATCH)
+    info = upstream.fetch_json(base + ".info")
+    if info is None:
+        return _UNAVAILABLE
+    if not subject.commit or _dig(info, "Origin", "Hash") != subject.commit:
+        return _unbound(COMMIT_MISMATCH)
+    return _CHECKSUM
+
+
+def pypi(subject: Subject) -> Binding:
+    """Each sha256 the lock records is a file of the release, with publish attestations for its digest and the scan.
+
+    pip, Poetry and Pipenv install only a file whose hash the lock records, so each of those files is checked.
+    """
+    entries = [set(hashes.split()) for hashes in subject.locked]
+    locked = sorted(set().union(*entries))
+    if not entries or not all(entries) or not all(_SHA256_RE.fullmatch(digest) for digest in locked):
+        return _unbound(NO_LOCK_HASH)
     project, version = subject.name, urllib.parse.quote(subject.version, safe="")
     doc = upstream.fetch_json(f"https://pypi.org/pypi/{project}/{version}/json")
     if doc is None:
         return _UNAVAILABLE
-    files = _dig(doc, "urls")
-    if not isinstance(files, list) or not files:
-        return _unbound(NO_PROVENANCE)
-    for item in files:
+    urls, files = _dig(doc, "urls"), {}
+    for item in urls if isinstance(urls, list) else []:
         filename, sha256 = _dig(item, "filename"), _dig(item, "digests", "sha256")
-        if not isinstance(filename, str) or not isinstance(sha256, str):
-            return _unbound(NO_PROVENANCE)
-        quoted = urllib.parse.quote(filename, safe="")
+        if isinstance(filename, str) and isinstance(sha256, str):
+            files.setdefault(f"sha256:{sha256}", filename)
+    if not all(digest in files for digest in locked):
+        return _unbound(HASH_MISMATCH)
+    for digest in locked:
+        quoted = urllib.parse.quote(files[digest], safe="")
         found = upstream.fetch_json(f"https://pypi.org/integrity/{project}/{version}/{quoted}/provenance")
         if found is None:
             return _UNAVAILABLE
@@ -182,7 +266,7 @@ def pypi(subject: Subject) -> Binding:
             for bundle in _dig(found, "attestation_bundles") or []
             for attestation in _dig(bundle, "attestations") or []
         ]
-        binding = _provenance(subject, pairs, "sha256", sha256)
+        binding = _provenance(subject, pairs, "sha256", digest.removeprefix("sha256:"))
         if binding != _PROVENANCE:
             return binding
     return _PROVENANCE

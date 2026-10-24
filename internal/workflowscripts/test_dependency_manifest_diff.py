@@ -7,6 +7,7 @@ import unittest
 
 import dependency_manifest_diff as diff
 from dependency_manifest_diff import Change
+from test_dependency_manifest_grammars import pipfile_lock_text, poetry_lock_text
 
 _BASE = "base"
 
@@ -378,12 +379,42 @@ class PythonTest(unittest.TestCase):
         head = {"requirements.txt": "requests==2.31.0 --hash=sha256:bbb\n"}
         self.assertEqual(_plan(base, head).gaps, (("requirements.txt", "unresolved"),))
 
-    def test_a_poetry_lock_beside_a_pin_is_disclosed(self) -> None:
-        base = {"pyproject.toml": '[tool.poetry.dependencies]\nrequests = "2.31.0"\n', "poetry.lock": "a\n"}
-        head = {"pyproject.toml": '[tool.poetry.dependencies]\nrequests = "2.32.0"\n', "poetry.lock": "b\n"}
-        plan = _plan(base, head)
-        self.assertEqual(plan.primary, (Change("pip", ".", "requests", "2.31.0", "2.32.0"),))
-        self.assertEqual(plan.unparsed_locks, ("poetry.lock",))
+    def test_a_poetry_lock_supplies_the_versions_of_the_names_the_pyproject_declares(self) -> None:
+        manifest = '[tool.poetry.dependencies]\npython = "^3.11"\nrequests = "{}"\n'
+        for name, pin in (("lock-only update", ("^2.31", "^2.31")), ("pin and lock", ("2.31.0", "2.32.0"))):
+            with self.subTest(name):
+                base = {
+                    "pyproject.toml": manifest.format(pin[0]),
+                    "poetry.lock": poetry_lock_text({"requests": "2.31.0", "idna": "3.6"}, content_hash="a"),
+                }
+                head = {
+                    "pyproject.toml": manifest.format(pin[1]),
+                    "poetry.lock": poetry_lock_text({"requests": "2.32.0", "idna": "3.7"}, content_hash="b"),
+                }
+                plan = _plan(base, head)
+                self.assertEqual(plan.primary, (Change("pip", ".", "requests", "2.31.0", "2.32.0"),))
+                self.assertEqual(plan.unchecked, (Change("pip", ".", "idna", "3.6", "3.7"),))
+                self.assertEqual((plan.gaps, plan.unparsed_locks), ((), ()))
+
+    def test_a_poetry_lock_change_outside_its_records_or_without_a_manifest_is_a_gap(self) -> None:
+        manifest = {"pyproject.toml": '[tool.poetry.dependencies]\nrequests = "^2.31"\n'}
+        base = poetry_lock_text({"requests": "2.31.0"})
+        for name, head, files in (
+            ("lock version", base.replace('"2.0"', '"2.1"').replace("2.31.0", "2.32.0"), manifest),
+            ("unparsable", "[[package]\n", manifest),
+            ("no manifest", poetry_lock_text({"requests": "2.32.0"}), {}),
+        ):
+            with self.subTest(name):
+                plan = _plan({**files, "poetry.lock": base}, {**files, "poetry.lock": head})
+                self.assertEqual((plan.primary, plan.gaps), ((), (("poetry.lock", "unresolved"),)))
+
+    def test_a_pipfile_lock_supplies_the_versions_of_the_names_the_pipfile_declares(self) -> None:
+        pipfile = {"Pipfile": '[packages]\nrequests = "*"\n'}
+        base = {**pipfile, "Pipfile.lock": pipfile_lock_text({"requests": "2.31.0"}, meta_hash="a")}
+        head = {**pipfile, "Pipfile.lock": pipfile_lock_text({"requests": "2.32.0"}, meta_hash="b")}
+        self.assertEqual(
+            _plan(base, head), diff.Plan(primary=(Change("pip", ".", "requests", "==2.31.0", "==2.32.0"),))
+        )
 
 
 class LineGrammarTest(unittest.TestCase):

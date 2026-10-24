@@ -29,11 +29,17 @@ from typing import NamedTuple
 
 import dependency_cursor_review_binding as binding
 import dependency_cursor_review_upstream as upstream
-from dependency_cursor_review_versions import commit_ref, moving_ref
-from dependency_manifest_go import go_mod, go_sum
+from dependency_cursor_review_versions import _exact_body, commit_ref, moving_ref
+from dependency_manifest_go import go_mod, go_sum, go_sum_hash
 from dependency_manifest_lines import Parsed, dockerfile_from, terraform_config, terraform_lock, workflow_uses
 from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
-from dependency_manifest_python import requirements
+from dependency_manifest_python import (
+    pipfile_lock,
+    pipfile_lock_hashes,
+    poetry_lock,
+    poetry_lock_hashes,
+    requirements,
+)
 
 # Why a change is not scanned. Docker images and Terraform providers have no
 # source tree to read; a moving tag can resolve to another commit after the review;
@@ -76,12 +82,12 @@ class FileKind(NamedTuple):
     names: frozenset[str] = frozenset()  # exact file names
     match: Callable[[PurePosixPath], bool] | None = None  # any other path shape
     records: bool = False  # entries are whole records, not lines
-    integrity: Callable[[str], str] | None = None  # a lock entry's recorded artifact hash, "" when it has none
+    integrity: Callable[[str], str] | None = None  # the artifact hash a lock or checksum entry records, "" for none
 
 
 NPM = Ecosystem("npm", repo=upstream.npm, bind=binding.npm)
 PIP = Ecosystem("pip", repo=upstream.pypi, bind=binding.pypi)
-GO = Ecosystem("go", repo=upstream.go, bind=binding.intrinsic)
+GO = Ecosystem("go", repo=upstream.go, bind=binding.go)
 ACTIONS = Ecosystem(
     "github-actions",
     ref_rules=_ACTION_REFS,
@@ -131,11 +137,12 @@ _FILES = (
     FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), records=True, integrity=yarn_lock_integrity),
     FileKind(NPM, LOCK, None, frozenset({"pnpm-lock.yaml"})),
     FileKind(GO, MANIFEST, go_mod, frozenset({"go.mod"})),
-    FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), records=True),
+    FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), records=True, integrity=go_sum_hash),
     FileKind(
         PIP, MANIFEST, requirements, frozenset({"pyproject.toml", "setup.py", "setup.cfg", "Pipfile"}), _requirements
     ),
-    FileKind(PIP, LOCK, None, frozenset({"poetry.lock", "Pipfile.lock"})),
+    FileKind(PIP, LOCK, poetry_lock, frozenset({"poetry.lock"}), records=True, integrity=poetry_lock_hashes),
+    FileKind(PIP, LOCK, pipfile_lock, frozenset({"Pipfile.lock"}), records=True, integrity=pipfile_lock_hashes),
     FileKind(ACTIONS, MANIFEST, workflow_uses, match=_workflow),
     FileKind(DOCKER, MANIFEST, dockerfile_from, match=_dockerfile),
     FileKind(TERRAFORM, MANIFEST, terraform_lock, frozenset({".terraform.lock.hcl"}), records=True),
@@ -171,13 +178,22 @@ def _first(rules: tuple[_RefRule, ...], old: str, new: str) -> str:
 
 
 def locked(ecosystem: str, directory: str, name: str, version: str, read: Callable[[str], str]) -> tuple[str, ...]:
-    """The integrity of each top entry for `name` at `version` in the locks beside `directory`, "" for none."""
+    """The hash each entry for `name` at exact `version` records in the locks and checksums beside `directory`.
+
+    A lock entry counts when it is top; a checksum file has one entry per version. "" is an entry with no hash.
+    """
     row = _BY_NAME.get(ecosystem)
     found: list[str] = []
-    for path, kind in beside(row, LOCK, directory) if row else ():
+    for path, kind in [item for role in (LOCK, CHECKSUMS) for item in beside(row, role, directory)] if row else ():
         parsed = kind.parse(read(path)) if kind.integrity else None
-        entries = parsed[0] if parsed else []
-        found += [kind.integrity(text) for entry, at, top, text in entries if top and (entry, at) == (name, version)]
+        for entry, at, top, text in parsed[0] if parsed else ():
+            if (
+                (top or kind.role == CHECKSUMS)
+                and entry == name
+                and version
+                and _exact_body(at, mode=ecosystem) == version
+            ):
+                found.append(kind.integrity(text))
     return tuple(found)
 
 

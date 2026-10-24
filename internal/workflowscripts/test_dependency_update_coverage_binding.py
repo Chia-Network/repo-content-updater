@@ -8,9 +8,21 @@ from unittest.mock import patch
 
 import dependency_update_coverage as coverage
 import malware_verdict_formatter as formatter
-from test_dependency_cursor_review_binding import _DATA, _NPM_ATTESTATIONS, _NPM_COMMIT, _NPM_DOC, _NPM_INTEGRITY
+from test_dependency_cursor_review_binding import (
+    _CONTEXT_H1,
+    _DATA,
+    _NPM_ATTESTATIONS,
+    _NPM_COMMIT,
+    _NPM_DOC,
+    _NPM_INTEGRITY,
+    _PYPI_COMMIT,
+    _PYPI_DOC,
+    _SDIST,
+    _SDIST_SHA256,
+    _integrity_url,
+)
 from test_dependency_update_coverage import _clean
-from test_dependency_update_coverage_diff import _BENIGN, _MERGE, _Diff, _package
+from test_dependency_update_coverage_diff import _BENIGN, _MERGE, GoBump, _Diff, _package
 
 
 def _lock(version: str, integrity: str | None) -> str:
@@ -63,6 +75,85 @@ class NpmBindingTest(_Diff):
         published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
         self.assertIn("artifact_unbound(registry_unavailable)", published["malware_text"])
+
+
+def _inconclusive(test: unittest.TestCase, report: dict, summary: str, reason: str) -> None:
+    """A covered clean scan whose artifact is not bound for `reason`: inconclusive, and the check still passes."""
+    test.assertEqual(report["binding"], {"kind": "unbound", "reason": reason})
+    test.assertIn(f"covered, artifact not bound (`{reason}`)", summary)
+    for warn_only in (True, False):
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
+        test.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+        test.assertIn(f"artifact_unbound({reason})", published["malware_text"])
+
+
+class GoBindingTest(GoBump):
+    """The go.sum entry the pull request records must be the proxy zip's hash, and the zip the scanned commit's."""
+
+    def test_a_go_sum_hash_that_is_not_the_proxy_zip_is_inconclusive(self) -> None:
+        report, summary = self.bump(self.HEAD_SUM.replace(self.HEAD_SUM.split()[2], _CONTEXT_H1))
+        _inconclusive(self, report, summary, "hash_mismatch")
+
+    def test_no_go_sum_entry_for_the_module_tree_is_inconclusive(self) -> None:
+        report, summary = self.bump(self.HEAD_SUM.splitlines(keepends=True)[1])
+        _inconclusive(self, report, summary, "no_lock_hash")
+
+    def test_a_zip_the_proxy_built_from_another_commit_is_inconclusive(self) -> None:
+        report, summary = self.bump(self.HEAD_SUM, origin="c" * 40)
+        _inconclusive(self, report, summary, "commit_mismatch")
+
+
+_POETRY = 'name = "sigstore"\nversion = "{0}"\nfiles = [{{file = "{1}", hash = "sha256:{2}"}}]\n'
+
+
+class PypiBindingTest(_Diff):
+    _MANIFEST = '[tool.poetry.dependencies]\npython = "^3.11"\nsigstore = "^3.5"\n'
+
+    def _run(self, files: dict[str, tuple[str, str]], sha256: str = _SDIST_SHA256) -> tuple[dict, str]:
+        """sigstore 3.5.0 -> 3.6.1, with `files` mapping each path to its (base, head) text, against the real release."""
+
+        def scan(update: coverage.Target, *_args: object) -> dict:
+            self.scanned.append(update)
+            return {**_clean(update.package, update.repo), "resolved_to": _PYPI_COMMIT}
+
+        doc = {
+            "info": {"project_urls": {"Source": "https://github.com/sigstore/sigstore-python"}},
+            "urls": [{"filename": _SDIST, "digests": {"sha256": sha256}}],
+        }
+        provenance = (_DATA / f"pypi-{_SDIST}.json").read_bytes()
+        report, summary = self.run_main(
+            {path: base for path, (base, _head) in files.items()},
+            {path: head for path, (_base, head) in files.items()},
+            fetch={_PYPI_DOC: json.dumps(doc).encode(), _integrity_url(_SDIST): provenance},
+            scan=scan,
+        )
+        self.assertEqual([(u.package, u.repo) for u in self.scanned], [("sigstore", "sigstore/sigstore-python")])
+        return report, summary
+
+    def _poetry(self, sha256: str = _SDIST_SHA256) -> dict[str, tuple[str, str]]:
+        lock = "[[package]]\n" + _POETRY + '\n[metadata]\nlock-version = "2.0"\ncontent-hash = "x"\n'
+        return {
+            "pyproject.toml": (self._MANIFEST, self._MANIFEST),
+            "poetry.lock": (
+                lock.format("3.5.0", "sigstore-3.5.0.tar.gz", "0" * 64),
+                lock.format("3.6.1", _SDIST, sha256),
+            ),
+        }
+
+    def test_a_poetry_lock_hash_with_provenance_for_the_scan_is_benign(self) -> None:
+        report, summary = self._run(self._poetry())
+        self.assertEqual(report["binding"], {"kind": "provenance", "reason": ""})
+        self.assertIn("covered, artifact binding `provenance`", summary)
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
+        self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+
+    def test_a_poetry_lock_hash_that_is_not_the_registry_file_is_inconclusive(self) -> None:
+        report, summary = self._run(self._poetry("1" * 64))
+        _inconclusive(self, report, summary, "hash_mismatch")
+
+    def test_a_pin_with_no_lock_hash_is_inconclusive_even_with_provenance(self) -> None:
+        report, summary = self._run({"requirements.txt": ("sigstore==3.5.0\n", "sigstore==3.6.1\n")})
+        _inconclusive(self, report, summary, "no_lock_hash")
 
 
 class PooledBindingTest(_Diff):

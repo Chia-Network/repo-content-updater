@@ -1,11 +1,14 @@
-"""Artifact binding: lock hashes, registry integrity and provenance attestations, with recorded registry answers."""
+"""Artifact binding: lock hashes, registry hashes, provenance attestations and Go proxy origins, recorded offline."""
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import unittest
+import warnings
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -72,7 +75,7 @@ class _Registry(unittest.TestCase):
         """A URL with no answer is a 404; None is no readable answer; bytes are the body as served."""
         self.urls: list[str] = []
 
-        def fetch(url: str) -> bytes | None:
+        def fetch(url: str, *_limit: int) -> bytes | None:
             self.urls.append(url)
             answer = answers.get(url, b"")
             return answer if answer is None or isinstance(answer, bytes) else json.dumps(answer).encode()
@@ -204,58 +207,216 @@ def _pypi_provenance(*pairs: tuple[str, str]) -> dict:
     return {"attestation_bundles": [{"attestations": attestations}]}
 
 
+_SDIST_LOCK = f"sha256:{_SDIST_SHA256}"
+_WHEEL_SHA256 = hashlib.sha256(b"wheel").hexdigest()
+
+
 class PypiTest(_Registry):
     def _files(self, *files: tuple[str, str]) -> dict:
         return {"urls": [{"filename": name, "digests": {"sha256": digest}} for name, digest in files]}
 
-    def test_every_file_of_the_release_needs_provenance_for_its_hash_and_the_scan(self) -> None:
-        sdist = {
-            _PYPI_DOC: self._files((_SDIST, _SDIST_SHA256)),
+    def _answers(self, **extra: object) -> dict[str, object]:
+        return {
+            _PYPI_DOC: self._files((_SDIST, _SDIST_SHA256), (_WHEEL, _WHEEL_SHA256)),
             _integrity_url(_SDIST): _fixture(f"pypi-{_SDIST}.json"),
+            **extra,
         }
-        self.assertEqual(self.bind(binding.pypi, _PYPI, sdist), binding.Binding(binding.PROVENANCE))
-        wheel_sha = hashlib.sha256(b"wheel").hexdigest()
-        both = {**sdist, _PYPI_DOC: self._files((_SDIST, _SDIST_SHA256), (_WHEEL, wheel_sha))}
-        self.assertEqual(self.bind(binding.pypi, _PYPI, both), binding.Binding(_UNBOUND, binding.NO_PROVENANCE))
-        wheel = _pypi_provenance(
-            (_certificate("sigstore/sigstore-python", _PYPI_COMMIT), _statement("sha256", wheel_sha))
-        )
-        found = self.bind(binding.pypi, _PYPI, {**both, _integrity_url(_WHEEL): wheel})
-        self.assertEqual(found, binding.Binding(binding.PROVENANCE))
 
-    def test_another_repository_commit_or_file_hash_is_a_mismatch(self) -> None:
-        real = {_integrity_url(_SDIST): _fixture(f"pypi-{_SDIST}.json")}
-        for name, subject, digest in (
-            ("benign repository named", _PYPI._replace(repo="psf/requests"), _SDIST_SHA256),
-            ("another commit", _PYPI._replace(commit="f" * 40), _SDIST_SHA256),
-            ("another file hash", _PYPI, "0" * 64),
+    def test_a_locked_file_with_provenance_for_its_hash_and_the_scan_is_provenance(self) -> None:
+        found = self.bind(binding.pypi, _PYPI._replace(locked=(_SDIST_LOCK,)), self._answers())
+        self.assertEqual(found, binding.Binding(binding.PROVENANCE))
+        self.assertEqual(self.urls, [_PYPI_DOC, _integrity_url(_SDIST)])
+
+    def test_every_locked_file_needs_provenance_and_an_unlocked_file_is_not_read(self) -> None:
+        both = _PYPI._replace(locked=(f"{_SDIST_LOCK} sha256:{_WHEEL_SHA256}",))
+        self.assertEqual(
+            self.bind(binding.pypi, both, self._answers()), binding.Binding(_UNBOUND, binding.NO_PROVENANCE)
+        )
+        wheel = _pypi_provenance(
+            (_certificate("sigstore/sigstore-python", _PYPI_COMMIT), _statement("sha256", _WHEEL_SHA256))
+        )
+        found = self.bind(binding.pypi, both, self._answers(**{_integrity_url(_WHEEL): wheel}))
+        self.assertEqual(found, binding.Binding(binding.PROVENANCE))
+        # Two locks for the version: the files either one locks are checked.
+        two = _PYPI._replace(locked=(_SDIST_LOCK, f"sha256:{_WHEEL_SHA256}"))
+        self.assertEqual(
+            self.bind(binding.pypi, two, self._answers()), binding.Binding(_UNBOUND, binding.NO_PROVENANCE)
+        )
+
+    def test_no_usable_lock_hash_is_no_lock_hash_and_reads_nothing(self) -> None:
+        for locked in (
+            (),
+            ("",),
+            (_SDIST_LOCK, ""),
+            (f"md5:{'0' * 32}",),
+            (f"sha512:{'0' * 128}",),
+            (_SDIST_LOCK.upper(),),
+            ("sha256:abc",),
+            (f"{_SDIST_LOCK} sha384:{'0' * 96}",),
+        ):
+            with self.subTest(locked=locked):
+                found = self.bind(binding.pypi, _PYPI._replace(locked=locked), self._answers())
+                self.assertEqual(found, binding.Binding(_UNBOUND, binding.NO_LOCK_HASH))
+                self.assertEqual(self.urls, [])
+
+    def test_a_lock_hash_that_is_no_file_of_the_release_is_a_hash_mismatch(self) -> None:
+        for name, answers in (
+            ("another file hash", self._answers(**{_PYPI_DOC: self._files((_SDIST, "0" * 64))})),
+            ("no release", {}),
+            ("no files", {_PYPI_DOC: {"urls": []}}),
+            ("unreadable files", {_PYPI_DOC: {"urls": "x"}}),
+            ("a file with no sha256", {_PYPI_DOC: {"urls": [{"filename": _SDIST}]}}),
         ):
             with self.subTest(name):
-                answers = {**real, _PYPI_DOC: self._files((_SDIST, digest))}
-                found = self.bind(binding.pypi, subject, answers)
+                found = self.bind(binding.pypi, _PYPI._replace(locked=(_SDIST_LOCK,)), answers)
+                self.assertEqual(found, binding.Binding(_UNBOUND, binding.HASH_MISMATCH))
+                self.assertEqual(self.urls, [_PYPI_DOC])
+
+    def test_another_repository_commit_or_attested_digest_is_a_mismatch(self) -> None:
+        zero = "0" * 64
+        for name, subject, files in (
+            ("benign repository named", _PYPI._replace(repo="psf/requests", locked=(_SDIST_LOCK,)), _SDIST_SHA256),
+            ("another commit", _PYPI._replace(commit="f" * 40, locked=(_SDIST_LOCK,)), _SDIST_SHA256),
+            ("attested for another digest", _PYPI._replace(locked=(f"sha256:{zero}",)), zero),
+        ):
+            with self.subTest(name):
+                found = self.bind(binding.pypi, subject, self._answers(**{_PYPI_DOC: self._files((_SDIST, files))}))
                 self.assertEqual(found, binding.Binding(_UNBOUND, binding.PROVENANCE_MISMATCH))
 
-    def test_a_release_with_no_files_or_unreadable_files_is_no_provenance(self) -> None:
-        for answers in (
-            {},
-            {_PYPI_DOC: {"urls": []}},
-            {_PYPI_DOC: {"urls": [{"filename": _SDIST}]}},
-            {_PYPI_DOC: {"urls": "x"}},
-        ):
-            with self.subTest(answers=answers):
-                found = self.bind(binding.pypi, _PYPI, answers)
-                self.assertEqual(found, binding.Binding(_UNBOUND, binding.NO_PROVENANCE))
-
-    def test_an_unreadable_registry_answer_is_registry_unavailable_not_no_provenance(self) -> None:
-        good = {
-            _PYPI_DOC: self._files((_SDIST, _SDIST_SHA256)),
-            _integrity_url(_SDIST): _fixture(f"pypi-{_SDIST}.json"),
-        }
+    def test_an_unreadable_registry_answer_is_registry_unavailable(self) -> None:
         for url in (_PYPI_DOC, _integrity_url(_SDIST)):
             for body in (None, b"not json", b"[]"):
                 with self.subTest(url=url, body=body):
-                    found = self.bind(binding.pypi, _PYPI, {**good, url: body})
+                    subject = _PYPI._replace(locked=(_SDIST_LOCK,))
+                    found = self.bind(binding.pypi, subject, self._answers(**{url: body}))
                     self.assertEqual(found, binding.Binding(_UNBOUND, binding.REGISTRY_UNAVAILABLE))
+
+
+_GO_DATA = Path(__file__).resolve().parent / "testdata" / "go"
+# Module zips as proxy.golang.org served them, with the h1: hash the go command recorded for each.
+_UTFBOM = (_GO_DATA / "github.com-dimchansky-utfbom-v1.1.1.zip").read_bytes()
+_UTFBOM_H1 = "h1:vV6w1AhK4VMnhBno/TPVCoK9U/LP0PkLCS9tbxHdi/U="
+_CONTEXT = (_GO_DATA / "github.com-jbenet-go-context-v0.0.0-20150711004518-d14ea06fba99.zip").read_bytes()
+_CONTEXT_H1 = "h1:BQSFePA1RWJOlocH6Fxy8MmwDt+yVQYULKfN0RoTN8A="
+_GO_COMMIT = "c" * 40
+_GO = binding.Subject("github.com/dimchansky/utfbom", "1.1.1", "dimchansky/utfbom", _GO_COMMIT, (_UTFBOM_H1,))
+_GO_ZIP = "https://proxy.golang.org/github.com/dimchansky/utfbom/@v/v1.1.1.zip"
+_GO_INFO = "https://proxy.golang.org/github.com/dimchansky/utfbom/@v/v1.1.1.info"
+
+
+def _zip(*files: tuple[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with warnings.catch_warnings(), zipfile.ZipFile(buffer, "w") as archive:
+        warnings.simplefilter("ignore")  # a duplicate name is one of the cases
+        for name, data in files:
+            archive.writestr(zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0)), data)
+    return buffer.getvalue()
+
+
+def _origin(commit: str) -> dict:
+    return {"Version": "v1.1.1", "Origin": {"VCS": "git", "Ref": "refs/tags/v1.1.1", "Hash": commit}}
+
+
+class Hash1Test(unittest.TestCase):
+    """Expected hashes are golang.org/x/mod/sumdb/dirhash.HashZip's for the same zips."""
+
+    def test_proxy_zips_hash_to_their_go_sum_entries(self) -> None:
+        self.assertEqual(binding._hash1(_UTFBOM), _UTFBOM_H1)
+        self.assertEqual(binding._hash1(_CONTEXT), _CONTEXT_H1)
+
+    def test_names_hash_in_byte_order_whatever_order_the_zip_stores(self) -> None:
+        with zipfile.ZipFile(io.BytesIO(_UTFBOM)) as archive:
+            files = [(info.filename, archive.read(info)) for info in archive.infolist()]
+        self.assertEqual(binding._hash1(_zip(*reversed(files))), _UTFBOM_H1)
+        found = binding._hash1(
+            _zip(("m@v1.0.0/b.go", b"package b\n"), ("m@v1.0.0/a.go", b"package a\n"), ("m@v1.0.0/A.go", b""))
+        )
+        self.assertEqual(found, "h1:3pzSCMVVmw4tgP34iOomYzRsoW4niDuZH67QHuuSScg=")
+        self.assertEqual(
+            binding._hash1(_zip(("m@v1.0.0/\u00e9.go", b"x"), ("m@v1.0.0/z.go", b"y"))),
+            "h1:FR/Zov1UYpiM4jZqEwhAWjdOpRIqg+0PlD93WQsbCAg=",
+        )
+
+    def test_a_zip_the_go_command_would_not_read_has_no_hash(self) -> None:
+        for name, archive in (
+            ("not a zip", b"not a zip"),
+            ("empty", b""),
+            ("truncated", _UTFBOM[: len(_UTFBOM) // 2]),
+            ("a duplicate name", _zip(("m@v1.0.0/a.go", b"a"), ("m@v1.0.0/a.go", b"b"))),
+            (
+                "a newline in a name",
+                _zip(
+                    ("m@v1.0.0/a\n.go", b"a"),
+                ),
+            ),
+        ):
+            with self.subTest(name):
+                self.assertEqual(binding._hash1(archive), "")
+        with patch.object(binding, "_GO_ZIP_LIMIT", 1024):
+            self.assertEqual(binding._hash1(_zip(("m@v1.0.0/big", b"0" * 2048))), "")
+
+
+class GoTest(_Registry):
+    def _answers(self, **extra: object) -> dict[str, object]:
+        return {_GO_ZIP: _UTFBOM, _GO_INFO: _origin(_GO_COMMIT), **extra}
+
+    def test_a_proxy_zip_hashing_to_go_sum_built_from_the_scanned_commit_is_checksum_bound(self) -> None:
+        self.assertEqual(self.bind(binding.go, _GO, self._answers()), binding.Binding(binding.CHECKSUM))
+        self.assertEqual(self.urls, [_GO_ZIP, _GO_INFO])
+
+    def test_a_proxy_zip_that_does_not_hash_to_go_sum_is_a_hash_mismatch(self) -> None:
+        for name, subject, answers in (
+            ("another go.sum hash", _GO._replace(locked=(_CONTEXT_H1,)), self._answers()),
+            ("another zip", _GO, self._answers(**{_GO_ZIP: _CONTEXT})),
+        ):
+            with self.subTest(name):
+                self.assertEqual(
+                    self.bind(binding.go, subject, answers), binding.Binding(_UNBOUND, binding.HASH_MISMATCH)
+                )
+                self.assertEqual(self.urls, [_GO_ZIP])
+
+    def test_no_single_go_sum_entry_is_no_lock_hash_and_reads_nothing(self) -> None:
+        for locked in ((), ("",), (_UTFBOM_H1, _CONTEXT_H1), ("h2:abc",)):
+            with self.subTest(locked=locked):
+                found = self.bind(binding.go, _GO._replace(locked=locked), self._answers())
+                self.assertEqual(found, binding.Binding(_UNBOUND, binding.NO_LOCK_HASH))
+                self.assertEqual(self.urls, [])
+        found = self.bind(binding.go, _GO._replace(locked=(_UTFBOM_H1, "", _UTFBOM_H1)), self._answers())
+        self.assertEqual(found, binding.Binding(binding.CHECKSUM))
+
+    def test_only_the_scanned_commit_itself_as_the_zip_origin_is_bound(self) -> None:
+        for name, subject, info in (
+            ("another commit", _GO, _origin("d" * 40)),
+            ("an abbreviation", _GO, _origin(_GO_COMMIT[:12])),
+            ("an upper-case spelling", _GO, _origin(_GO_COMMIT.upper())),
+            ("no origin", _GO, {"Version": "v1.1.1"}),
+            ("unknown to the proxy", _GO, {}),
+            ("no scanned commit", _GO._replace(commit=""), _origin("")),
+        ):
+            with self.subTest(name):
+                found = self.bind(binding.go, subject, self._answers(**{_GO_INFO: info}))
+                self.assertEqual(found, binding.Binding(_UNBOUND, binding.COMMIT_MISMATCH))
+                self.assertEqual(self.urls, [_GO_ZIP, _GO_INFO])
+
+    def test_an_unreadable_proxy_answer_is_registry_unavailable(self) -> None:
+        for url, body in (
+            (_GO_ZIP, None),
+            (_GO_ZIP, b""),
+            (_GO_ZIP, b"not a zip"),
+            (_GO_INFO, None),
+            (_GO_INFO, b"not json"),
+            (_GO_INFO, b"[]"),
+        ):
+            with self.subTest(url=url, body=body):
+                found = self.bind(binding.go, _GO, self._answers(**{url: body}))
+                self.assertEqual(found, binding.Binding(_UNBOUND, binding.REGISTRY_UNAVAILABLE))
+
+    def test_upper_case_letters_are_escaped_in_proxy_urls(self) -> None:
+        subject = _GO._replace(name="github.com/Azure/go-autorest", version="14.2.0+incompatible")
+        self.bind(binding.go, subject, {})
+        self.assertEqual(
+            self.urls, ["https://proxy.golang.org/github.com/!azure/go-autorest/@v/v14.2.0+incompatible.zip"]
+        )
 
 
 if __name__ == "__main__":

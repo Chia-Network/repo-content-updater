@@ -41,7 +41,7 @@ def github_repo(url: object) -> str:
     return _repo(match.group(1), match.group(2)) if match else ""
 
 
-def _fetch(url: str) -> bytes | None:
+def _fetch(url: str, limit: int = _LIMIT) -> bytes | None:
     """The body of a 200 response to an https GET, b"" for a 404, or None when there is no readable answer.
 
     Redirects are not followed.
@@ -54,14 +54,19 @@ def _fetch(url: str) -> bytes | None:
     try:
         connection.request("GET", target, headers={"Accept": "application/json", "User-Agent": "dependency-review"})
         response = connection.getresponse()
-        status, body = response.status, response.read(_LIMIT + 1)
+        status, body = response.status, response.read(limit + 1)
     except (OSError, http.client.HTTPException):
         return None
     finally:
         connection.close()
     if status == 404:
         return b""
-    return body if status == 200 and len(body) <= _LIMIT else None
+    return body if status == 200 and len(body) <= limit else None
+
+
+def fetch_archive(url: str, limit: int) -> bytes | None:
+    """The body of a 200 response to an https GET of at most `limit` bytes, or None for anything else."""
+    return _fetch(url, limit) or None
 
 
 def fetch_json(url: str) -> dict | None:

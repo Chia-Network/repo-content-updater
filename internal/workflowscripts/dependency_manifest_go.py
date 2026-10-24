@@ -8,6 +8,7 @@ directive, stay in residue.
 go_sum returns one entry per checksum line: (module, version, False, line).
 The version keeps a `/go.mod` suffix, so the hash of a module's go.mod and the
 hash of its tree are separate entries. Any other line is residue.
+go_sum_hash reads the `h1:` hash of an entry's line.
 """
 
 from __future__ import annotations
@@ -68,3 +69,8 @@ def go_sum(text: str) -> Parsed:
         else:
             residue.append(line)
     return entries, "".join(residue)
+
+
+def go_sum_hash(text: str) -> str:
+    """The `h1:` hash of a go_sum entry's line."""
+    return text.rsplit(" ", 1)[-1]

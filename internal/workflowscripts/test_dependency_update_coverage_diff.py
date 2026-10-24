@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import dependency_update_coverage as coverage
 import malware_verdict_formatter as formatter
+from test_dependency_cursor_review_binding import _GO, _GO_INFO, _GO_ZIP, _UTFBOM, _UTFBOM_H1, _origin
 from test_dependency_update_coverage import _clean, _commit, _git, _git_repo
 
 _SCRIPTS = Path(__file__).resolve().parent
@@ -74,7 +75,7 @@ class _Diff(unittest.TestCase):
         with (
             contextlib.chdir(self.root),
             patch.dict(os.environ, variables),
-            patch.object(coverage._ecosystems.upstream, "_fetch", lambda url: answers.get(url, b"")),
+            patch.object(coverage._ecosystems.upstream, "_fetch", lambda url, *_limit: answers.get(url, b"")),
             patch.object(coverage, "_scan_one", scan or clean_scan),
         ):
             os.environ.pop("GITHUB_BASE_REF", None)
@@ -331,30 +332,43 @@ class UncheckedUpgradeTest(_Diff):
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
 
 
-class GoSumTest(_Diff):
-    _MOD = "module example.com/app\n\ngo 1.22\n\nrequire github.com/spf13/cobra {}\n"
-    _SUM = "github.com/spf13/cobra {0} h1:tree-{0}=\ngithub.com/spf13/cobra {0}/go.mod h1:mod-{0}=\n"
+class GoBump(_Diff):
+    _MOD = "module example.com/app\n\ngo 1.22\n\nrequire github.com/dimchansky/utfbom {}\n"
+    _SUM = "github.com/dimchansky/utfbom {0} {1}\ngithub.com/dimchansky/utfbom {0}/go.mod h1:mod-{0}=\n"
+    BASE_SUM = _SUM.format("v1.1.0", "h1:tree-v1.1.0=")
+    HEAD_SUM = _SUM.format("v1.1.1", _UTFBOM_H1)
 
-    def _bump(self, head_sum: str) -> dict:
-        """The published review of cobra v1.8.0 -> v1.8.1 in go.mod, beside go.sum moving to `head_sum`."""
-        report, _summary = self.run_main(
-            {"go.mod": self._MOD.format("v1.8.0"), "go.sum": self._SUM.format("v1.8.0")},
-            {"go.mod": self._MOD.format("v1.8.1"), "go.sum": head_sum},
+    def bump(self, head_sum: str, origin: str = "b" * 40) -> tuple[dict, str]:
+        """(report, summary) of utfbom v1.1.0 -> v1.1.1 in go.mod, beside go.sum moving to `head_sum`.
+
+        The proxy serves the real v1.1.1 module zip and names `origin` as its commit; the scan is of "b" * 40.
+        """
+        report, summary = self.run_main(
+            {"go.mod": self._MOD.format("v1.1.0"), "go.sum": self.BASE_SUM},
+            {"go.mod": self._MOD.format("v1.1.1"), "go.sum": head_sum},
+            fetch={_GO_ZIP: _UTFBOM, _GO_INFO: json.dumps(_origin(origin)).encode()},
         )
-        self.assertEqual([(u.package, u.repo) for u in self.scanned], [("github.com/spf13/cobra", "spf13/cobra")])
-        return formatter.compose_published_review(report, _BENIGN, _MERGE)
+        self.assertEqual([(u.package, u.repo) for u in self.scanned], [(_GO.name, _GO.repo)])
+        return report, summary
 
+
+class GoSumTest(GoBump):
     def test_go_sum_lines_for_the_go_mod_move_are_accounted_for(self) -> None:
-        published = self._bump(self._SUM.format("v1.8.1"))
+        report, summary = self.bump(self.HEAD_SUM)
+        self.assertEqual(report["binding"], {"kind": "checksum", "reason": ""})
+        self.assertIn("covered, artifact binding `checksum`", summary)
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
 
     def test_a_go_sum_version_no_go_mod_move_accounts_for_is_inconclusive(self) -> None:
-        published = self._bump(self._SUM.format("v1.8.1") + "github.com/other/mod v0.2.0/go.mod h1:x=\n")
+        report, _summary = self.bump(self.HEAD_SUM + "github.com/other/mod v0.2.0/go.mod h1:x=\n")
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
 
     def test_a_go_sum_hash_rewrite_is_inconclusive_and_blocks(self) -> None:
-        rewritten = self._SUM.format("v1.8.0").replace("h1:tree-v1.8.0=", "h1:other=")
-        published = self._bump(rewritten + self._SUM.format("v1.8.1"))
+        rewritten = self.BASE_SUM.replace("h1:tree-v1.1.0=", "h1:other=")
+        report, _summary = self.bump(rewritten + self.HEAD_SUM)
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
 
 

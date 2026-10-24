@@ -10,6 +10,7 @@ import dependency_cursor_review_binding as binding
 import dependency_cursor_review_ecosystems as ecosystems
 import dependency_cursor_review_upstream as upstream
 import malware_verdict_formatter as formatter
+from test_dependency_manifest_grammars import pipfile_lock_text, poetry_lock_text
 
 
 class FileKindTest(unittest.TestCase):
@@ -24,7 +25,8 @@ class FileKindTest(unittest.TestCase):
             "requirements-dev.txt": ("pip", ecosystems.MANIFEST, True),
             "requirements/base.txt": ("pip", ecosystems.MANIFEST, True),
             "pyproject.toml": ("pip", ecosystems.MANIFEST, True),
-            "poetry.lock": ("pip", ecosystems.LOCK, False),
+            "poetry.lock": ("pip", ecosystems.LOCK, True),
+            "Pipfile.lock": ("pip", ecosystems.LOCK, True),
             ".github/workflows/ci.yaml": ("github-actions", ecosystems.MANIFEST, True),
             "actions/setup/action.yml": ("github-actions", ecosystems.MANIFEST, True),
             "Dockerfile": ("docker", ecosystems.MANIFEST, True),
@@ -126,15 +128,20 @@ class BindTest(unittest.TestCase):
     def _bind(self, ecosystem: str, version: str) -> binding.Binding:
         return ecosystems.bind(ecosystem, binding.Subject("a/b", version, "a/b", _SHA))
 
-    def test_go_modules_and_actions_pinned_to_a_full_tag_or_commit_are_intrinsic(self) -> None:
+    def test_actions_pinned_to_a_full_tag_or_commit_are_intrinsic(self) -> None:
         for ecosystem, version in (
-            ("go", "v1.2.3"),
             ("github-actions", _SHA),
             ("github-actions", _SHA.upper()),
             ("github-actions", "4.2.0"),
         ):
             with self.subTest(ecosystem=ecosystem, version=version):
                 self.assertEqual(self._bind(ecosystem, version), binding.Binding(binding.INTRINSIC))
+
+    def test_go_and_pypi_with_no_lock_hash_are_unbound_before_any_lookup(self) -> None:
+        for ecosystem in ("go", "pip"):
+            with self.subTest(ecosystem=ecosystem), patch.object(upstream, "_fetch") as fetch:
+                self.assertEqual(self._bind(ecosystem, "1.2.3"), binding.Binding(binding.UNBOUND, binding.NO_LOCK_HASH))
+                fetch.assert_not_called()
 
     def test_ecosystems_without_a_binding_are_unbound(self) -> None:
         for ecosystem, version, reason in (
@@ -159,6 +166,31 @@ class BindTest(unittest.TestCase):
         )
         self.assertEqual(ecosystems.locked("npm", "web", "a", "1.0.0", lambda path: files.get(path, "")), ())
         self.assertEqual(ecosystems.locked("docker", "web", "a", "1.0.1", lambda path: files.get(path, "")), ())
+
+    def test_locked_reads_the_go_sum_tree_hash_for_the_exact_version(self) -> None:
+        go_sum = (
+            "github.com/a/b v1.2.3 h1:tree=\ngithub.com/a/b v1.2.3/go.mod h1:mod=\ngithub.com/a/b v1.2.4 h1:next=\n"
+        )
+        files = {"svc/go.sum": go_sum, "go.sum": "github.com/a/b v1.2.3 h1:root=\n"}
+
+        def read(path: str) -> str:
+            return files.get(path, "")
+
+        self.assertEqual(ecosystems.locked("go", "svc", "github.com/a/b", "1.2.3", read), ("h1:tree=",))
+        self.assertEqual(ecosystems.locked("go", "svc", "github.com/a/b", "1.2.5", read), ())
+        self.assertEqual(ecosystems.locked("go", "svc", "github.com/a/c", "1.2.3", read), ())
+
+    def test_locked_reads_the_file_hashes_of_each_python_lock_beside_the_change(self) -> None:
+        files = {"poetry.lock": poetry_lock_text({"requests": "2.32.0"}), "Pipfile.lock": pipfile_lock_text({})}
+
+        def read(path: str) -> str:
+            return files.get(path, "")
+
+        (poetry,) = ecosystems.locked("pip", ".", "requests", "2.32.0", read)
+        self.assertEqual(len(poetry.split()), 2)
+        files["Pipfile.lock"] = pipfile_lock_text({"requests": "2.32.0"})
+        self.assertEqual(len(ecosystems.locked("pip", ".", "requests", "2.32.0", read)), 2)
+        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.31.0", read), ())
 
 
 class _Fetch:
