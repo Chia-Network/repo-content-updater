@@ -721,14 +721,17 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         )
         self.assertEqual((published["verdict"], published["check"]), (without["verdict"], without["check"]))
 
-    def test_pip_index_trust_follows_each_requirements_file(self) -> None:
-        digest = "a" * 64
-        page = b'<a href="../../files/chiapos-2.0.4.tar.gz">s</a>\n'
+    def test_pip_index_trust_end_to_end_over_http(self) -> None:
+        sdist = b"chiapos sdist"
+        page_url = "https://pypi.chia.net/simple/chiapos/"
+        file_url = "https://download.chia.net/files/chiapos-2.0.4.tar.gz"
+        page = f'<a href="{file_url}">s</a>\n'.encode()
+        digest = hashlib.sha256(sdist).hexdigest()
+        hashed_pin = f"chiapos==2.0.4 --hash=sha256:{digest}\n"
         config = (
             "registries:\n  chia:\n    type: python-index\n    url: https://pypi.chia.net/simple/\n"
             "    replaces-base: true\n"
         )
-        hashed_pin = f"chiapos==2.0.4 --hash=sha256:{digest}\n"
         cases = {
             "dependabot replaces-base alone": (
                 {"requirements.txt": "chiapos==2.0.4\n"},
@@ -765,70 +768,8 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
                 ("requirements.txt", "requirements-dev.txt"),
                 True,
             ),
-        }
-        for label, (texts, hashed, trusted) in cases.items():
-            with self.subTest(label):
-                looked_up: list[str] = []
-
-                def repo(_ecosystem: str, name: str, _version: str, seen: list[str] = looked_up) -> upstream.Repo:
-                    seen.append(name)
-                    return _found(f"upstream/{name}")
-
-                plan = _plan(("pip", ".", "chiapos", "2.0.3", "2.0.4"), hashed=hashed)
-                all_texts = {".github/dependabot.yml": config, **texts}
-                files = [("requirements.txt", "100644"), ("requirements-dev.txt", "100644")]
-                with (
-                    patch.object(coverage, "_git_text", lambda _rev, path, texts=all_texts: texts.get(path, "")),
-                    patch.object(upstream, "_fetch", lambda *_args, **_kwargs: page),
-                    patch.object(upstream, "_sha256_download", lambda *_args, **_kwargs: digest),
-                ):
-                    report, _summary, _output = _run_main(
-                        plan,
-                        repo=repo,
-                        scan=lambda target, *_args: _clean(target.package, target.repo.slug),
-                        files=lambda directory, entries=files: entries if directory == "." else [],
-                    )
-                self.assertEqual(looked_up, [] if trusted else ["chiapos"])
-                self.assertEqual(
-                    [(item["name"], item["index"]) for item in report["trusted_packages"]],
-                    [("chiapos", "pypi.chia.net")] if trusted else [],
-                )
-
-    def test_pip_index_trust_end_to_end_over_http(self) -> None:
-        sdist = b"chiapos sdist"
-        page_url = "https://pypi.chia.net/simple/chiapos/"
-        file_url = "https://download.chia.net/files/chiapos-2.0.4.tar.gz"
-        page = f'<a href="{file_url}">s</a>\n'.encode()
-        digest = hashlib.sha256(sdist).hexdigest()
-        config = (
-            "registries:\n  chia:\n    type: python-index\n    url: https://pypi.chia.net/simple/\n"
-            "    replaces-base: true\n"
-        )
-        cases = {
-            "replaces base without an index": (
-                {"requirements.txt": "chiapos==2.0.4\n"},
-                ("requirements.txt",),
-                False,
-            ),
-            "last index is pypi": (
-                {
-                    "requirements.txt": (
-                        "-i https://pypi.chia.net/simple/\n-i https://pypi.org/simple/\nchiapos==2.0.4\n"
-                    )
-                },
-                ("requirements.txt",),
-                False,
-            ),
-            "trusted index in another file": (
-                {
-                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
-                    "requirements-dev.txt": "chiapos==2.0.4\n",
-                },
-                ("requirements.txt", "requirements-dev.txt"),
-                False,
-            ),
             "hashed pin served by the index": (
-                {"requirements.txt": f"chiapos==2.0.4 --hash=sha256:{digest}\n"},
+                {"requirements.txt": hashed_pin},
                 ("requirements.txt",),
                 True,
             ),
