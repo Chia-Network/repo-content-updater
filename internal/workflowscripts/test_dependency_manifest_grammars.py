@@ -7,7 +7,7 @@ import unittest
 
 from dependency_manifest_go import go_mod, go_sum
 from dependency_manifest_lines import dockerfile_from, terraform_config, terraform_lock, workflow_uses
-from dependency_manifest_npm import package_json, package_lock, yarn_lock
+from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
 from dependency_manifest_python import requirements
 
 
@@ -107,6 +107,26 @@ class NpmGrammarTest(unittest.TestCase):
     def test_a_yarn_stanza_without_a_quoted_version_does_not_parse(self) -> None:
         self.assertIsNone(yarn_lock('lodash@^4:\n  resolved "x"\n'))
         self.assertIsNone(yarn_lock("lodash@^4:\n  version: 4.17.21\n"))
+
+    def test_each_lock_entry_reads_the_integrity_it_records(self) -> None:
+        integrity = "sha512-" + "A" * 86 + "=="
+        lock = {
+            "dependencies": {"lodash": "^4"},
+            "packages": {
+                "node_modules/lodash": _meta("lodash", "4.17.21", integrity=integrity),
+                "node_modules/left-pad": _meta("left-pad", "1.3.0"),
+                "node_modules/odd": _meta("odd", "1.0.0", integrity=["sha512-x"]),
+            },
+        }
+        found = sorted((entry[0], package_lock_integrity(entry[3])) for entry in package_lock(json.dumps(lock))[0])
+        self.assertEqual(found, [("left-pad", ""), ("lodash", ""), ("lodash", integrity), ("odd", "")])
+        stanza = 'lodash@^4:\n  version "4.17.21"\n  integrity {}\n'
+        (entry,) = yarn_lock(stanza.format(integrity))[0]
+        self.assertEqual(yarn_lock_integrity(entry[3]), integrity)
+        for text in ('lodash@^4:\n  version "4.17.21"\n', stanza.format(integrity) + "  integrity sha512-other\n"):
+            with self.subTest(text=text):
+                (entry,) = yarn_lock(text)[0]
+                self.assertEqual(yarn_lock_integrity(entry[3]), "")
 
 
 class GoGrammarTest(unittest.TestCase):

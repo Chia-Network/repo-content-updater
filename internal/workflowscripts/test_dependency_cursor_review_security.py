@@ -18,7 +18,14 @@ _REPO_ROOT = _SCRIPTS.parents[1]
 _WORKFLOW = _REPO_ROOT / "templates" / "dependency-cursor-review.yml"
 
 # The files combine needs beside it in a trusted checkout.
-_BUNDLE_STEMS = ("dependency_cursor_review_combine_outputs.py", "malware_verdict_formatter.py")
+# The combine step and its imports.
+_BUNDLE_STEMS = (
+    "dependency_cursor_review_combine_outputs.py",
+    "malware_verdict_formatter.py",
+    "dependency_cursor_review_binding.py",
+    "dependency_cursor_review_certificate.py",
+    "dependency_cursor_review_upstream.py",
+)
 _BENIGN_AGENT = '{"result":"MALWARE_REVIEW_VERDICT: benign\\n\\nNo IOCs."}'
 _COMPAT_AGENT = '{"result":"compat ok"}'
 _INCONCLUSIVE_REPORT = {

@@ -71,10 +71,14 @@ class WarnPolicyTest(unittest.TestCase):
     def test_a_commit_to_commit_action_bump_is_scanned_and_is_unresolved_sha_only_when_the_scan_cannot_resolve_it(
         self,
     ) -> None:
-        for old, new in ((_SHA, _SHA[::-1]), (_SHA, _SHA.upper()), (_SHA.upper(), _SHA[::-1])):
-            with self.subTest(old=old, new=new):
-                self.assertEqual(ecosystems.warn_reason("github-actions", old, new), "")
-                self.assertEqual(ecosystems.unresolved_reason("github-actions", old, new), ecosystems.UNRESOLVED_SHA)
+        for reason in ("from_ref_unresolved", "to_ref_unresolved"):
+            unresolved = {"status": "not_scanned", "not_scanned_reason": reason}
+            for old, new in ((_SHA, _SHA[::-1]), (_SHA, _SHA.upper()), (_SHA.upper(), _SHA[::-1])):
+                with self.subTest(old=old, new=new, reason=reason):
+                    self.assertEqual(ecosystems.warn_reason("github-actions", old, new), "")
+                    found = ecosystems.unresolved_reason("github-actions", old, new, unresolved)
+                    self.assertEqual(found, ecosystems.UNRESOLVED_SHA)
+        unresolved = {"status": "not_scanned", "not_scanned_reason": "to_ref_unresolved"}
         for ecosystem, old, new in (
             ("github-actions", _SHA, "v4.2.0"),
             ("github-actions", "v4.1.0", _SHA),
@@ -83,7 +87,21 @@ class WarnPolicyTest(unittest.TestCase):
             ("docker", _SHA, _SHA[::-1]),
         ):
             with self.subTest(ecosystem=ecosystem, old=old, new=new):
-                self.assertEqual(ecosystems.unresolved_reason(ecosystem, old, new), "")
+                self.assertEqual(ecosystems.unresolved_reason(ecosystem, old, new, unresolved), "")
+
+    def test_a_commit_to_commit_record_that_is_not_an_unresolved_ref_stands(self) -> None:
+        """A failed clone, an incomplete or failed scan, or a scan with findings is not an unresolved commit."""
+        for record in (
+            {"status": "not_scanned", "not_scanned_reason": "unresolved"},
+            {"status": "not_scanned", "not_scanned_reason": "incomplete_coverage"},
+            {"status": "not_scanned", "not_scanned_reason": "scanner_error"},
+            {"status": "fail", "not_scanned_reason": "to_ref_unresolved"},
+            {"status": "warn", "not_scanned_reason": "from_ref_unresolved"},
+            {"status": "clean", "scan_conclusive": True, "not_scanned_reason": ""},
+            {},
+        ):
+            with self.subTest(record=record):
+                self.assertEqual(ecosystems.unresolved_reason("github-actions", _SHA, _SHA[::-1], record), "")
 
     def test_full_action_tags_commit_bumps_and_other_ecosystems_have_no_warn_reason(self) -> None:
         for ecosystem, old, new in (
@@ -127,16 +145,18 @@ class BindTest(unittest.TestCase):
             with self.subTest(ecosystem=ecosystem):
                 self.assertEqual(self._bind(ecosystem, version), binding.Binding(binding.UNBOUND, reason))
 
-    def test_locked_reads_the_top_entries_for_the_version_in_each_parsed_lock_beside_the_change(self) -> None:
+    def test_locked_reads_the_integrity_of_the_top_entries_for_the_version_in_each_lock_beside_the_change(self) -> None:
         record = {"version": "1.0.1", "resolved": "https://registry.npmjs.org/a/-/a-1.0.1.tgz", "integrity": "sha512-x"}
         nested = {**record, "integrity": "sha512-nested"}
         lock = {"packages": {"node_modules/a": record, "node_modules/b/node_modules/a": nested}}
         yarn = 'a@^1.0.0:\n  version "1.0.1"\n  resolved "https://registry.yarnpkg.com/a/-/a-1.0.1.tgz"\n'
         files = {"web/package-lock.json": json.dumps(lock), "web/yarn.lock": yarn, "package-lock.json": "{}"}
         found = ecosystems.locked("npm", "web", "a", "1.0.1", lambda path: files.get(path, ""))
-        self.assertEqual(len(found), 2)
-        self.assertIn('"sha512-x"', found[0])
-        self.assertIn("  version", found[1])
+        self.assertEqual(found, ("sha512-x", ""))
+        files["web/yarn.lock"] = yarn + "  integrity sha512-y\n"
+        self.assertEqual(
+            ecosystems.locked("npm", "web", "a", "1.0.1", lambda path: files.get(path, "")), ("sha512-x", "sha512-y")
+        )
         self.assertEqual(ecosystems.locked("npm", "web", "a", "1.0.0", lambda path: files.get(path, "")), ())
         self.assertEqual(ecosystems.locked("docker", "web", "a", "1.0.1", lambda path: files.get(path, "")), ())
 
@@ -237,7 +257,26 @@ class UpstreamRepoTest(unittest.TestCase):
     def test_fetch_takes_only_https(self) -> None:
         for url in ("http://registry.npmjs.org/a/1.0.0", "file:///etc/passwd", "ftp://example.com/x", "https:///x"):
             with self.subTest(url=url):
-                self.assertEqual(upstream._fetch(url), b"")
+                self.assertIsNone(upstream._fetch(url))
+
+    def test_fetch_json_tells_an_unreadable_answer_from_a_404(self) -> None:
+        url = "https://registry.npmjs.org/a/1.0.0"
+        for body, want in (
+            (b'{"a": 1}', {"a": 1}),
+            (b"", {}),
+            (None, None),
+            (b"not json", None),
+            (b"[1]", None),
+            (b"null", None),
+            (b"\xff", None),
+        ):
+            with self.subTest(body=body), patch.object(upstream, "_fetch", lambda _url, body=body: body):
+                self.assertEqual(upstream.fetch_json(url), want)
+
+    def test_an_unavailable_registry_names_no_repository(self) -> None:
+        for ecosystem, name in (("npm", "a"), ("pip", "a"), ("go", "example.com/mod")):
+            with self.subTest(ecosystem=ecosystem), patch.object(upstream, "_fetch", lambda _url: None):
+                self.assertEqual(ecosystems.upstream_repo(ecosystem, name, "1.0.0"), "")
 
 
 if __name__ == "__main__":

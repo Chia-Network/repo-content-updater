@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest.mock import patch
 
 import dependency_update_coverage as coverage
 import malware_verdict_formatter as formatter
@@ -21,7 +22,7 @@ def _lock(version: str, integrity: str | None) -> str:
 
 
 class NpmBindingTest(_Diff):
-    def _run(self, integrity: str | None, attestations: bytes) -> tuple[dict, str]:
+    def _run(self, integrity: str | None, attestations: bytes | None) -> tuple[dict, str]:
         def scan(update: coverage.Target, *_args: object) -> dict:
             self.scanned.append(update)
             return {**_clean(update.package, update.repo), "resolved_to": _NPM_COMMIT}
@@ -54,6 +55,39 @@ class NpmBindingTest(_Diff):
                     published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
                     self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
                     self.assertIn(f"artifact_unbound({reason})", published["malware_text"])
+
+    def test_an_unreadable_attestation_answer_is_registry_unavailable(self) -> None:
+        report, summary = self._run(_NPM_INTEGRITY, None)
+        self.assertEqual(report["binding"], {"kind": "unbound", "reason": "registry_unavailable"})
+        self.assertIn("covered, artifact not bound (`registry_unavailable`)", summary)
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
+        self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+        self.assertIn("artifact_unbound(registry_unavailable)", published["malware_text"])
+
+
+class PooledBindingTest(_Diff):
+    def test_each_covered_scan_gets_its_own_binding_once_every_scan_is_done(self) -> None:
+        bound: list[str] = []
+
+        def bind(_change: object, target: coverage.Target, record: dict) -> dict:
+            self.assertEqual(len(self.scanned), 3, "a binding ran before every scan was done")
+            bound.append(target.package)
+            return {"kind": "unbound", "reason": f"for-{target.package}"}
+
+        names = {"a": "1.0.0", "b": "2.0.0", "c": "3.0.0"}
+        doc = json.dumps({"repository": "github:o/r"}).encode()
+        fetch = {f"https://registry.npmjs.org/{name}/{version}": doc for name, version in names.items()}
+        with patch.object(coverage, "_bind", bind):
+            report, _summary = self.run_main(
+                {"package.json": _package({name: "0.0.1" for name in names})},
+                {"package.json": _package(names)},
+                fetch=fetch,
+            )
+        self.assertEqual(sorted(bound), ["a", "b", "c"])
+        self.assertEqual(
+            [(item["package_name"], item["binding"]["reason"]) for item in report["dependencies"]],
+            [("a", "for-a"), ("b", "for-b"), ("c", "for-c")],
+        )
 
 
 class GroupBindingTest(unittest.TestCase):

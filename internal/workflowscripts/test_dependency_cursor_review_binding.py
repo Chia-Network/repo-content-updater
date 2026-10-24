@@ -63,28 +63,25 @@ def _npm_attestations(*pairs: tuple[str, str]) -> dict:
     }
 
 
-def _lock_record(integrity: str) -> str:
-    record = {"version": "3.0.0", "resolved": "https://registry.npmjs.org/sigstore/-/sigstore-3.0.0.tgz"}
-    return json.dumps(["node_modules/sigstore", {**record, "integrity": integrity}])
-
-
 def _fixture(name: str) -> dict:
     return json.loads((_DATA / name).read_text(encoding="utf-8"))
 
 
 class _Registry(unittest.TestCase):
     def bind(self, check, subject: binding.Subject, answers: dict[str, object]) -> binding.Binding:
+        """A URL with no answer is a 404; None is no readable answer; bytes are the body as served."""
         self.urls: list[str] = []
 
-        def fetch(url: str) -> bytes:
+        def fetch(url: str) -> bytes | None:
             self.urls.append(url)
-            return json.dumps(answers[url]).encode() if url in answers else b""
+            answer = answers.get(url, b"")
+            return answer if answer is None or isinstance(answer, bytes) else json.dumps(answer).encode()
 
         with patch.object(upstream, "_fetch", fetch):
             return check(subject)
 
 
-_NPM = binding.Subject("sigstore", "3.0.0", "sigstore/sigstore-js", _NPM_COMMIT, (_lock_record(_NPM_INTEGRITY),))
+_NPM = binding.Subject("sigstore", "3.0.0", "sigstore/sigstore-js", _NPM_COMMIT, (_NPM_INTEGRITY,))
 _NPM_DIGEST = base64.b64decode(_NPM_INTEGRITY.removeprefix("sha512-")).hex()
 _UNBOUND = binding.UNBOUND
 
@@ -122,34 +119,44 @@ class NpmTest(_Registry):
         publish = {
             "attestations": [{"predicateType": "https://github.com/npm/attestation/tree/main/specs/publish/v0.1"}]
         }
-        for attestations in (None, {}, {"attestations": []}, publish):
+        for attestations in ({}, {"attestations": []}, publish):
             with self.subTest(attestations=attestations):
                 found = self.bind(binding.npm, _NPM, self._answers(attestations))
                 self.assertEqual(found, binding.Binding(_UNBOUND, binding.NO_PROVENANCE))
+        not_found = {_NPM_DOC: {"dist": {"integrity": _NPM_INTEGRITY}}}
+        self.assertEqual(self.bind(binding.npm, _NPM, not_found), binding.Binding(_UNBOUND, binding.NO_PROVENANCE))
+        self.assertEqual(self.urls, [_NPM_DOC, _NPM_ATTESTATIONS])
 
     def test_the_lock_must_record_one_sha512_integrity(self) -> None:
         for locked in (
             (),
-            (json.dumps(["dependencies", "^3.0.0"]),),
-            (_lock_record("sha1-AAAA"),),
-            (_lock_record(_NPM_INTEGRITY), _lock_record("sha512-" + "B" * 86 + "==")),
-            (_lock_record("sha512-not base64"),),
+            ("",),
+            ("sha1-AAAA",),
+            (_NPM_INTEGRITY, "sha512-" + "B" * 86 + "=="),
+            ("sha512-not base64",),
         ):
             with self.subTest(locked=locked):
                 found = self.bind(binding.npm, _NPM._replace(locked=locked), self._answers(None))
-                self.assertIn(found.reason, {binding.NO_LOCK_HASH, binding.HASH_MISMATCH})
-                self.assertEqual(found.kind, _UNBOUND)
+                self.assertEqual(found, binding.Binding(_UNBOUND, binding.NO_LOCK_HASH))
+                self.assertEqual(self.urls, [])
 
     def test_the_registry_integrity_must_be_the_lock_hash(self) -> None:
-        for doc in ({"dist": {"integrity": "sha512-" + "A" * 86 + "=="}}, {}, None):
-            with self.subTest(doc=doc):
-                found = self.bind(binding.npm, _NPM, {_NPM_DOC: doc})
+        for answers in ({_NPM_DOC: {"dist": {"integrity": "sha512-" + "A" * 86 + "=="}}}, {_NPM_DOC: {}}, {}):
+            with self.subTest(answers=answers):
+                found = self.bind(binding.npm, _NPM, answers)
                 self.assertEqual(found, binding.Binding(_UNBOUND, binding.HASH_MISMATCH))
                 self.assertEqual(self.urls, [_NPM_DOC])
 
-    def test_a_yarn_stanza_and_a_duplicate_lock_record_read_as_one_integrity(self) -> None:
-        stanza = f'sigstore@^3.0.0:\n  version "3.0.0"\n  integrity {_NPM_INTEGRITY}\n'
-        subject = _NPM._replace(locked=(stanza, _lock_record(_NPM_INTEGRITY)))
+    def test_an_unreadable_registry_answer_is_registry_unavailable_not_a_mismatch(self) -> None:
+        good = self._answers(_fixture("npm-sigstore-3.0.0.json"))
+        for url in (_NPM_DOC, _NPM_ATTESTATIONS):
+            for body in (None, b"not json", b"[]", b"null"):
+                with self.subTest(url=url, body=body):
+                    found = self.bind(binding.npm, _NPM, {**good, url: body})
+                    self.assertEqual(found, binding.Binding(_UNBOUND, binding.REGISTRY_UNAVAILABLE))
+
+    def test_duplicate_lock_entries_with_one_integrity_read_as_one(self) -> None:
+        subject = _NPM._replace(locked=(_NPM_INTEGRITY, "", _NPM_INTEGRITY))
         found = self.bind(binding.npm, subject, self._answers(_fixture("npm-sigstore-3.0.0.json")))
         self.assertEqual(found, binding.Binding(binding.PROVENANCE))
 
@@ -229,10 +236,26 @@ class PypiTest(_Registry):
                 self.assertEqual(found, binding.Binding(_UNBOUND, binding.PROVENANCE_MISMATCH))
 
     def test_a_release_with_no_files_or_unreadable_files_is_no_provenance(self) -> None:
-        for doc in (None, {"urls": []}, {"urls": [{"filename": _SDIST}]}, {"urls": "x"}):
-            with self.subTest(doc=doc):
-                found = self.bind(binding.pypi, _PYPI, {_PYPI_DOC: doc})
+        for answers in (
+            {},
+            {_PYPI_DOC: {"urls": []}},
+            {_PYPI_DOC: {"urls": [{"filename": _SDIST}]}},
+            {_PYPI_DOC: {"urls": "x"}},
+        ):
+            with self.subTest(answers=answers):
+                found = self.bind(binding.pypi, _PYPI, answers)
                 self.assertEqual(found, binding.Binding(_UNBOUND, binding.NO_PROVENANCE))
+
+    def test_an_unreadable_registry_answer_is_registry_unavailable_not_no_provenance(self) -> None:
+        good = {
+            _PYPI_DOC: self._files((_SDIST, _SDIST_SHA256)),
+            _integrity_url(_SDIST): _fixture(f"pypi-{_SDIST}.json"),
+        }
+        for url in (_PYPI_DOC, _integrity_url(_SDIST)):
+            for body in (None, b"not json", b"[]"):
+                with self.subTest(url=url, body=body):
+                    found = self.bind(binding.pypi, _PYPI, {**good, url: body})
+                    self.assertEqual(found, binding.Binding(_UNBOUND, binding.REGISTRY_UNAVAILABLE))
 
 
 if __name__ == "__main__":

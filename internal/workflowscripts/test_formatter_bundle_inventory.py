@@ -34,6 +34,7 @@ class FormatterBundleInventoryTest(unittest.TestCase):
             ("dependency_cursor_review_ecosystems.py", "dependency-cursor-review-ecosystems.py"),
             ("dependency_cursor_review_upstream.py", "dependency-cursor-review-upstream.py"),
             ("dependency_cursor_review_binding.py", "dependency-cursor-review-binding.py"),
+            ("dependency_cursor_review_certificate.py", "dependency-cursor-review-certificate.py"),
             ("dependency_manifest_go.py", "dependency-cursor-review-manifest-go.py"),
             ("dependency_manifest_npm.py", "dependency-cursor-review-manifest-npm.py"),
             ("dependency_manifest_python.py", "dependency-cursor-review-manifest-python.py"),

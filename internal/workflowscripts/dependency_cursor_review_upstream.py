@@ -41,31 +41,39 @@ def github_repo(url: object) -> str:
     return _repo(match.group(1), match.group(2)) if match else ""
 
 
-def _fetch(url: str) -> bytes:
-    """The body of a 200 response to an https GET, or b"" otherwise. Redirects are not followed."""
+def _fetch(url: str) -> bytes | None:
+    """The body of a 200 response to an https GET, b"" for a 404, or None when there is no readable answer.
+
+    Redirects are not followed.
+    """
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != "https" or not parts.hostname:
-        return b""
+        return None
     target = parts.path + (f"?{parts.query}" if parts.query else "")
     connection = http.client.HTTPSConnection(parts.hostname, timeout=20)
     try:
         connection.request("GET", target, headers={"Accept": "application/json", "User-Agent": "dependency-review"})
         response = connection.getresponse()
-        body = response.read(_LIMIT + 1) if response.status == 200 else b""
+        status, body = response.status, response.read(_LIMIT + 1)
     except (OSError, http.client.HTTPException):
-        return b""
+        return None
     finally:
         connection.close()
-    return body if len(body) <= _LIMIT else b""
+    if status == 404:
+        return b""
+    return body if status == 200 and len(body) <= _LIMIT else None
 
 
-def fetch_json(url: str) -> dict:
-    """The JSON object an https GET answers with, or {} for any other answer."""
+def fetch_json(url: str) -> dict | None:
+    """The JSON object an https GET answers with, {} for a 404, or None when there is no readable object."""
+    body = _fetch(url)
+    if not body:
+        return None if body is None else {}
     try:
-        doc = json.loads(_fetch(url).decode("utf-8"))
+        doc = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        return {}
-    return doc if isinstance(doc, dict) else {}
+        return None
+    return doc if isinstance(doc, dict) else None
 
 
 def action(name: str, _version: str) -> str:
@@ -78,7 +86,7 @@ def npm(name: str, version: str) -> str:
     """The version document's `repository`: a URL, `{url}`, or `owner/repo` / `github:owner/repo` shorthand."""
     if not _NPM_NAME_RE.fullmatch(name):
         return ""
-    doc = fetch_json(f"https://registry.npmjs.org/{name}/{urllib.parse.quote(version, safe='')}")
+    doc = fetch_json(f"https://registry.npmjs.org/{name}/{urllib.parse.quote(version, safe='')}") or {}
     repository = doc.get("repository")
     url = repository.get("url") if isinstance(repository, dict) else repository
     if not isinstance(url, str):
@@ -92,7 +100,7 @@ def pypi(name: str, version: str) -> str:
     if not _PYPI_NAME_RE.fullmatch(name):
         return ""
     quoted = urllib.parse.quote(version, safe="")
-    info = fetch_json(f"https://pypi.org/pypi/{name}/{quoted}/json").get("info")
+    info = (fetch_json(f"https://pypi.org/pypi/{name}/{quoted}/json") or {}).get("info")
     if not isinstance(info, dict):
         return ""
     urls = info.get("project_urls") if isinstance(info.get("project_urls"), dict) else {}
@@ -111,7 +119,7 @@ def go(module: str, _version: str) -> str:
     parts = module.split("/")
     if parts[0] == "github.com":
         return _repo(parts[1], parts[2]) if len(parts) >= 3 else ""
-    page = _fetch(f"https://{module}?go-get=1").decode("utf-8", errors="replace")
+    page = (_fetch(f"https://{module}?go-get=1") or b"").decode("utf-8", errors="replace")
     metas = [(kind.lower(), content.split()) for kind, content in _GO_META_RE.findall(page)]
     for want, index in (("go-import", 2), ("go-source", 1)):
         for kind, fields in metas:

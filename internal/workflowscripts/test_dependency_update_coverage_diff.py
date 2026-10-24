@@ -154,6 +154,19 @@ class PolicyTest(_Diff):
             self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
             self.assertIn(formatter._POLICY_WARNINGS["unresolved_sha"], published["malware_text"])
 
+    def test_a_commit_to_commit_bump_whose_clone_fails_is_a_gap_not_unresolved_sha(self) -> None:
+        def clone_failed(update: coverage.Target, *_args: object) -> dict:
+            self.scanned.append(update)
+            return coverage.uncovered(update, "unresolved")
+
+        report, summary = self._action(_SHA, _SHA[::-1], scan=clone_failed)
+        self.assertEqual(report["policy_warnings"], [])
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertIn("not covered (unresolved)", summary)
+        for warn_only in (True, False):
+            published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
+            self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
+
     def test_a_bump_between_a_commit_and_a_tag_the_scan_cannot_resolve_is_a_gap(self) -> None:
         for old, new in ((_SHA, "v4.2.0"), ("v4.1.0", _SHA)):
             with self.subTest(old=old, new=new):

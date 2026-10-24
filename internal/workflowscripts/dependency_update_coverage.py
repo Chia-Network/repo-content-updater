@@ -32,10 +32,8 @@ import dependency_manifest_diff as _diff
 from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN
 
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
-# Registry lookups run at once; each waits on the network, not on the others.
+# Registry lookups and bindings run at once; each waits on the network, not on the others.
 _LOOKUPS = 8
-# Scan reasons for refs the cloned repository does not resolve; a clone that failed is "unresolved".
-_UNRESOLVED_REFS = frozenset({"unresolved", "from_ref_unresolved", "to_ref_unresolved"})
 
 
 class Target(NamedTuple):
@@ -490,18 +488,21 @@ def _plan(token: str = "") -> _diff.Plan | None:
     return None if changed is None else _diff.plan(changed, _git_text, base)
 
 
-def _split(plan: _diff.Plan) -> tuple[list[_diff.Change], Disclosure]:
-    """The primary changes to scan, and the Disclosure of the rest."""
+def _warning(change: _diff.Change, reason: str) -> dict:
+    return {**change._asdict(), "reason": reason}
+
+
+def _split(plan: _diff.Plan) -> tuple[list[_diff.Change], tuple[dict, ...]]:
+    """The primary changes to scan, and the policy warnings of the rest."""
     scanned: list[_diff.Change] = []
     warnings: list[dict] = []
     for change in plan.primary:
         reason = _ecosystems.warn_reason(change.ecosystem, change.old, change.new)
         if reason:
-            warnings.append({**change._asdict(), "reason": reason})
+            warnings.append(_warning(change, reason))
         else:
             scanned.append(change)
-    unchecked = tuple(change._asdict() for change in plan.unchecked)
-    return scanned, Disclosure(tuple(warnings), unchecked, plan.unparsed_locks)
+    return scanned, tuple(warnings)
 
 
 def remove_entry(path: Path) -> None:
@@ -541,20 +542,20 @@ def _exact(change: _diff.Change) -> tuple[Target, str]:
     return target, "" if new and (old or not change.old) else "unresolved"
 
 
-def _targets(changes: list[_diff.Change]) -> list[tuple[Target, str]]:
-    """Each change as (Target with its repository, why it is not scanned or "").
+def _targets(changes: list[_diff.Change]) -> list[tuple[_diff.Change, Target, str]]:
+    """Each change as (change, Target with its repository, why it is not scanned or "").
 
     Each distinct (ecosystem, name, version) is looked up once, and the lookups run concurrently.
     """
-    exact = [_exact(change) for change in changes]
-    keys = [(change.ecosystem, change.name, target.new) for change, (target, _why) in zip(changes, exact)]
-    wanted = list(dict.fromkeys(key for key, (_target, why) in zip(keys, exact) if not why))
+    exact = [(change, *_exact(change)) for change in changes]
+    keys = [(change.ecosystem, change.name, target.new) for change, target, _why in exact]
+    wanted = list(dict.fromkeys(key for key, (_change, _target, why) in zip(keys, exact) if not why))
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
         repos = dict(zip(wanted, pool.map(lambda key: _ecosystems.upstream_repo(*key), wanted)))
-    resolved: list[tuple[Target, str]] = []
-    for key, (target, why) in zip(keys, exact):
+    resolved: list[tuple[_diff.Change, Target, str]] = []
+    for key, (change, target, why) in zip(keys, exact):
         repo = "" if why else repos[key]
-        resolved.append((target._replace(repo=repo), why or ("" if repo else "no_upstream_link")))
+        resolved.append((change, target._replace(repo=repo), why or ("" if repo else "no_upstream_link")))
     return resolved
 
 
@@ -669,43 +670,54 @@ def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
         return
 
 
+def _scan_all(
+    changes: list[_diff.Change], work: Path, scan_script: Path
+) -> tuple[list[dict], list[tuple[dict, Path]], tuple[dict, ...]]:
+    """(records, (record, scan directory) per scan, policy warnings the scans found) for the changes to scan.
+
+    Scans run one at a time; the bindings of the covered ones run concurrently once every scan is done.
+    """
+    records: list[dict] = []
+    scans: list[tuple[dict, Path]] = []
+    warnings: list[dict] = []
+    covered: list[tuple[_diff.Change, Target, dict]] = []
+    for index, (change, target, why) in enumerate(_targets(changes)):
+        if why:
+            records.append(uncovered(target, why))
+            continue
+        dest = work / str(index)
+        dest.mkdir()
+        record = _scan_one(target, dest, scan_script, change.ecosystem)
+        reason = _ecosystems.unresolved_reason(change.ecosystem, change.old, change.new, record)
+        if reason:
+            warnings.append(_warning(change, reason))
+            continue
+        if _covered(record):
+            covered.append((change, target, record))
+        records.append(record)
+        scans.append((record, dest))
+    with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
+        for (_change, _target, record), found in zip(covered, pool.map(lambda item: _bind(*item), covered)):
+            record["binding"] = found
+    return records, scans, tuple(warnings)
+
+
 def main() -> None:
     fetch_token = os.environ.pop(FETCH_AUTH_VARIABLE, "")
     scan_script = Path(__file__).resolve().parent / "upstream_malware_scan.sh"
     out = Path(os.environ["DCR_OUT"])
     plan = _plan(fetch_token)
-    if plan is None:
-        records, scanned, disclosed = [uncovered(Target(path="pull request diff"), "unresolved")], [], _NONE_DISCLOSED
-    else:
-        scanned, disclosed = _split(plan)
-        records = [uncovered(Target(path=path), reason) for path, reason in plan.gaps]
+    gaps = plan.gaps if plan else (("pull request diff", "unresolved"),)
+    plan = plan or _diff.Plan()
+    changes, warnings = _split(plan)
     work = Path(".dcr-dependency-scans")
     remove_entry(work)
     work.mkdir()
-    scans: list[tuple[dict, Path]] = []
     try:
-        late: list[dict] = []
-        for index, (change, (target, why)) in enumerate(zip(scanned, _targets(scanned))):
-            if why:
-                records.append(uncovered(target, why))
-                continue
-            dest = work / str(index)
-            dest.mkdir()
-            record = _scan_one(target, dest, scan_script, change.ecosystem)
-            fallback = _ecosystems.unresolved_reason(change.ecosystem, change.old, change.new)
-            if (
-                fallback
-                and record.get("status") == "not_scanned"
-                and record.get("not_scanned_reason") in _UNRESOLVED_REFS
-            ):
-                late.append({**change._asdict(), "reason": fallback})
-                continue
-            if _covered(record):
-                record["binding"] = _bind(change, target, record)
-            records.append(record)
-            scans.append((record, dest))
-        disclosed = disclosed._replace(policy_warnings=disclosed.policy_warnings + tuple(late))
-        report = aggregate(records, disclosed)
+        scanned, scans, found = _scan_all(changes, work, scan_script)
+        records = [uncovered(Target(path=path), reason) for path, reason in gaps] + scanned
+        unchecked = tuple(change._asdict() for change in plan.unchecked)
+        report = aggregate(records, Disclosure(warnings + found, unchecked, plan.unparsed_locks))
         summary = render_summary(report, records)
         _write_report(out, report, summary)
         _keep_checkout(records, scans)

@@ -6,8 +6,9 @@ row carries the policy. A change in a `warn` ecosystem, or a change one of its
 `ref_rules` matches, is never scanned and never benign: decide() reports it
 inconclusive with a named warning and does not block on it. A change one of
 its `unresolved_rules` matches is scanned, and reported that way only when the
-scan cannot resolve its refs. A scanned change is benign only when its row's
-`bind` ties the scanned commit to the installed artifact.
+scan reports that its refs do not resolve in the cloned repository. A scanned
+change is benign only when its row's `bind` ties the scanned commit to the
+installed artifact.
 
 Roles: a manifest declares dependencies; a lock records the installed copies
 of the dependencies the manifest beside it declares; checksums hash the
@@ -31,7 +32,7 @@ import dependency_cursor_review_upstream as upstream
 from dependency_cursor_review_versions import commit_ref, moving_ref
 from dependency_manifest_go import go_mod, go_sum
 from dependency_manifest_lines import Parsed, dockerfile_from, terraform_config, terraform_lock, workflow_uses
-from dependency_manifest_npm import package_json, package_lock, yarn_lock
+from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
 from dependency_manifest_python import requirements
 
 # Why a change is not scanned. Docker images and Terraform providers have no
@@ -43,6 +44,8 @@ UNRESOLVED_SHA = "unresolved_sha"
 WARN_REASONS = frozenset({UNSCANNABLE_ECOSYSTEM, MOVING_REF, UNRESOLVED_SHA})
 
 MANIFEST, LOCK, CHECKSUMS = "manifest", "lock", "checksums"
+# The scan's not_scanned_reason for a ref the cloned repository does not resolve (upstream_malware_scan.sh).
+_REFS_UNRESOLVED = frozenset({"from_ref_unresolved", "to_ref_unresolved"})
 
 
 def _no_repo(_name: str, _version: str) -> str:
@@ -73,6 +76,7 @@ class FileKind(NamedTuple):
     names: frozenset[str] = frozenset()  # exact file names
     match: Callable[[PurePosixPath], bool] | None = None  # any other path shape
     records: bool = False  # entries are whole records, not lines
+    integrity: Callable[[str], str] | None = None  # a lock entry's recorded artifact hash, "" when it has none
 
 
 NPM = Ecosystem("npm", repo=upstream.npm, bind=binding.npm)
@@ -116,8 +120,15 @@ def _terraform(path: PurePosixPath) -> bool:
 
 _FILES = (
     FileKind(NPM, MANIFEST, package_json, frozenset({"package.json"})),
-    FileKind(NPM, LOCK, package_lock, frozenset({"package-lock.json", "npm-shrinkwrap.json"}), records=True),
-    FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), records=True),
+    FileKind(
+        NPM,
+        LOCK,
+        package_lock,
+        frozenset({"package-lock.json", "npm-shrinkwrap.json"}),
+        records=True,
+        integrity=package_lock_integrity,
+    ),
+    FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), records=True, integrity=yarn_lock_integrity),
     FileKind(NPM, LOCK, None, frozenset({"pnpm-lock.yaml"})),
     FileKind(GO, MANIFEST, go_mod, frozenset({"go.mod"})),
     FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), records=True),
@@ -160,13 +171,13 @@ def _first(rules: tuple[_RefRule, ...], old: str, new: str) -> str:
 
 
 def locked(ecosystem: str, directory: str, name: str, version: str, read: Callable[[str], str]) -> tuple[str, ...]:
-    """The text of each top entry for `name` at `version` in the parsed locks beside `directory`."""
+    """The integrity of each top entry for `name` at `version` in the locks beside `directory`, "" for none."""
     row = _BY_NAME.get(ecosystem)
     found: list[str] = []
     for path, kind in beside(row, LOCK, directory) if row else ():
-        parsed = kind.parse(read(path))
+        parsed = kind.parse(read(path)) if kind.integrity else None
         entries = parsed[0] if parsed else []
-        found += [text for entry, at, top, text in entries if top and (entry, at) == (name, version)]
+        found += [kind.integrity(text) for entry, at, top, text in entries if top and (entry, at) == (name, version)]
     return tuple(found)
 
 
@@ -178,10 +189,14 @@ def warn_reason(ecosystem: str, old: str, new: str) -> str:
     return row.warn or _first(row.ref_rules, old, new)
 
 
-def unresolved_reason(ecosystem: str, old: str, new: str) -> str:
-    """The warn reason for a change whose refs the scan cannot resolve, or "" when that is a coverage gap."""
+def unresolved_reason(ecosystem: str, old: str, new: str, record: dict) -> str:
+    """The warn reason for a change whose scan `record` says its refs do not resolve, or "" when the record stands.
+
+    Any other record, a failed clone included, stands as the scan reported it.
+    """
     row = _BY_NAME.get(ecosystem)
-    return _first(row.unresolved_rules, old, new) if row else ""
+    unresolved = record.get("status") == "not_scanned" and record.get("not_scanned_reason") in _REFS_UNRESOLVED
+    return _first(row.unresolved_rules, old, new) if row and unresolved else ""
 
 
 def upstream_repo(ecosystem: str, name: str, version: str) -> str:

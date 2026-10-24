@@ -16,7 +16,8 @@ the scanned commit:
 Provenance is read, not verified: the registry checks the Sigstore signature
 when the attestation is published, and this module reads the repository and
 commit from the Fulcio certificate's extensions and the digest from the
-signed statement.
+signed statement. A registry that gives no readable answer is
+registry_unavailable, never a hash or provenance result.
 """
 
 from __future__ import annotations
@@ -24,10 +25,10 @@ from __future__ import annotations
 import base64
 import binascii
 import json
-import re
 import urllib.parse
 from typing import NamedTuple
 
+import dependency_cursor_review_certificate as certificate
 import dependency_cursor_review_upstream as upstream
 
 INTRINSIC, PROVENANCE, UNBOUND = "intrinsic", "provenance", "unbound"
@@ -37,14 +38,13 @@ NO_LOCK_HASH = "no_lock_hash"  # no lockfile records one sha512 integrity for th
 HASH_MISMATCH = "hash_mismatch"  # the registry's integrity for the version is not the lockfile's
 NO_PROVENANCE = "no_provenance"  # the registry serves no provenance attestation for the artifact
 PROVENANCE_MISMATCH = "provenance_mismatch"  # an attestation names another repository, commit or digest
+REGISTRY_UNAVAILABLE = "registry_unavailable"  # the registry gave no readable answer
 UNSUPPORTED = "unsupported"  # the ecosystem has no binding
-REASONS = frozenset({NO_LOCK_HASH, HASH_MISMATCH, NO_PROVENANCE, PROVENANCE_MISMATCH, UNSUPPORTED})
+REASONS = frozenset(
+    {NO_LOCK_HASH, HASH_MISMATCH, NO_PROVENANCE, PROVENANCE_MISMATCH, REGISTRY_UNAVAILABLE, UNSUPPORTED}
+)
 
 _SLSA_V1 = "https://slsa.dev/provenance/v1"
-# Fulcio certificate extensions 1.3.6.1.4.1.57264.1.12 (source repository URI) and .13 (source repository digest).
-_FULCIO = bytes.fromhex("2b0601040183bf3001")
-_SOURCE_REPO, _SOURCE_COMMIT = _FULCIO + b"\x0c", _FULCIO + b"\x0d"
-_YARN_INTEGRITY_RE = re.compile(r"^  integrity (\S+)$", re.MULTILINE)
 
 
 class Binding(NamedTuple):
@@ -59,7 +59,7 @@ class Subject(NamedTuple):
     version: str
     repo: str  # owner/repo that was scanned
     commit: str  # the scanned commit (the peeled to tag)
-    locked: tuple[str, ...] = ()  # the text of each top lock entry for name at version
+    locked: tuple[str, ...] = ()  # the integrity each top lock entry for name at version records, "" for none
 
 
 _INTRINSIC = Binding(INTRINSIC)
@@ -70,6 +70,9 @@ def _unbound(reason: str) -> Binding:
     return Binding(UNBOUND, reason)
 
 
+_UNAVAILABLE = _unbound(REGISTRY_UNAVAILABLE)
+
+
 def intrinsic(_subject: Subject) -> Binding:
     return _INTRINSIC
 
@@ -78,59 +81,23 @@ def unsupported(_subject: Subject) -> Binding:
     return _unbound(UNSUPPORTED)
 
 
-def _tlvs(data: bytes) -> list[tuple[int, bytes]]:
-    """The DER (tag, value) items in `data`. ValueError when they do not fill it exactly."""
-    items, index = [], 0
-    while index < len(data):
-        if index + 2 > len(data):
-            raise ValueError("truncated DER")
-        tag, length, index = data[index], data[index + 1], index + 2
-        if length & 0x80:
-            width = length & 0x7F
-            length, index = int.from_bytes(data[index : index + width], "big"), index + width
-        if index + length > len(data):
-            raise ValueError("truncated DER")
-        items.append((tag, data[index : index + length]))
-        index += length
-    return items
-
-
-def _extensions(der: bytes, found: dict[bytes, str]) -> dict[bytes, str]:
-    """The source repository extensions of a Fulcio certificate as OID bytes -> UTF8String value.
-
-    Older Fulcio extensions hold raw strings, not DER, so only these two are decoded.
-    """
-    for tag, value in _tlvs(der):
-        if not tag & 0x20:
-            continue
-        children = _tlvs(value)
-        (oid_tag, oid), (last_tag, last) = (children[0], children[-1]) if children else ((0, b""), (0, b""))
-        if tag == 0x30 and oid_tag == 0x06 and oid in {_SOURCE_REPO, _SOURCE_COMMIT} and last_tag == 0x04:
-            inner = _tlvs(last)
-            if len(inner) == 1 and inner[0][0] == 0x0C:
-                found[oid] = inner[0][1].decode("utf-8")
-        else:
-            _extensions(value, found)
-    return found
-
-
 def _decoded(text: object) -> bytes:
     return base64.b64decode(text, validate=True) if isinstance(text, str) else b""
 
 
-def _attested(subject: Subject, certificate: object, statement: object, algorithm: str, digest: str) -> bool:
+def _attested(subject: Subject, cert: object, statement: object, algorithm: str, digest: str) -> bool:
     """One attestation names the scanned repository, the scanned commit and the artifact digest."""
     try:
-        found = _extensions(_decoded(certificate), {})
+        source = certificate.source(_decoded(cert))
         doc = json.loads(_decoded(statement))
     except (ValueError, UnicodeDecodeError, binascii.Error, IndexError, RecursionError):
         return False
     items = doc.get("subject") if isinstance(doc, dict) else None
     digests = [item.get("digest") for item in items if isinstance(item, dict)] if isinstance(items, list) else []
     return (
-        found.get(_SOURCE_REPO, "").lower() == f"https://github.com/{subject.repo}".lower()
+        source.repo_uri.lower() == f"https://github.com/{subject.repo}".lower()
         and bool(subject.commit)
-        and found.get(_SOURCE_COMMIT) == subject.commit
+        and source.commit == subject.commit
         and any(isinstance(item, dict) and item.get(algorithm) == digest for item in digests)
     )
 
@@ -154,33 +121,26 @@ def _dig(doc: object, *keys: str | int) -> object:
     return doc
 
 
-def _lock_integrity(text: str) -> str:
-    """The integrity of one lock entry: a package-lock record, or a yarn.lock stanza."""
-    try:
-        record = json.loads(text)
-    except ValueError:
-        match = _YARN_INTEGRITY_RE.search(text)
-        return match.group(1) if match else ""
-    integrity = _dig(record, 1, "integrity")
-    return integrity if isinstance(integrity, str) else ""
-
-
 def npm(subject: Subject) -> Binding:
     """The lock's sha512 integrity is the registry's, and the SLSA attestations are for it and the scan."""
-    integrities = {_lock_integrity(text) for text in subject.locked} - {""}
+    integrities = set(subject.locked) - {""}
     integrity = integrities.pop() if len(integrities) == 1 else ""
     if not integrity.startswith("sha512-"):
         return _unbound(NO_LOCK_HASH)
-    version = urllib.parse.quote(subject.version, safe="")
-    doc = upstream.fetch_json(f"https://registry.npmjs.org/{subject.name}/{version}")
-    if _dig(doc, "dist", "integrity") != integrity:
-        return _unbound(HASH_MISMATCH)
     try:
         digest = base64.b64decode(integrity.removeprefix("sha512-"), validate=True).hex()
     except binascii.Error:
         return _unbound(NO_LOCK_HASH)
+    version = urllib.parse.quote(subject.version, safe="")
+    doc = upstream.fetch_json(f"https://registry.npmjs.org/{subject.name}/{version}")
+    if doc is None:
+        return _UNAVAILABLE
+    if _dig(doc, "dist", "integrity") != integrity:
+        return _unbound(HASH_MISMATCH)
     escaped = urllib.parse.quote(subject.name, safe="@")
     found = upstream.fetch_json(f"https://registry.npmjs.org/-/npm/v1/attestations/{escaped}@{version}")
+    if found is None:
+        return _UNAVAILABLE
     bundles = [
         _dig(item, "bundle")
         for item in _dig(found, "attestations") or []
@@ -203,7 +163,10 @@ def pypi(subject: Subject) -> Binding:
     pip may install any file of the release, so each one is checked.
     """
     project, version = subject.name, urllib.parse.quote(subject.version, safe="")
-    files = _dig(upstream.fetch_json(f"https://pypi.org/pypi/{project}/{version}/json"), "urls")
+    doc = upstream.fetch_json(f"https://pypi.org/pypi/{project}/{version}/json")
+    if doc is None:
+        return _UNAVAILABLE
+    files = _dig(doc, "urls")
     if not isinstance(files, list) or not files:
         return _unbound(NO_PROVENANCE)
     for item in files:
@@ -212,6 +175,8 @@ def pypi(subject: Subject) -> Binding:
             return _unbound(NO_PROVENANCE)
         quoted = urllib.parse.quote(filename, safe="")
         found = upstream.fetch_json(f"https://pypi.org/integrity/{project}/{version}/{quoted}/provenance")
+        if found is None:
+            return _UNAVAILABLE
         pairs = [
             (_dig(attestation, "verification_material", "certificate"), _dig(attestation, "envelope", "statement"))
             for bundle in _dig(found, "attestation_bundles") or []

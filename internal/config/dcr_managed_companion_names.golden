@@ -8,6 +8,7 @@ dependency-cursor-review-versions
 dependency-cursor-review-ecosystems
 dependency-cursor-review-upstream
 dependency-cursor-review-binding
+dependency-cursor-review-certificate
 dependency-manifest-go
 dependency-manifest-npm
 dependency-manifest-python
