@@ -198,14 +198,15 @@ def action(name: str, _version: str) -> Repo:
 
 
 def npm_path(name: str) -> str:
-    """A package name as one registry URL path segment: a scope's `/` is `%2F`."""
-    return urllib.parse.quote(name, safe="@")
+    """A validated package name as one registry URL path segment: a scope's `/` is `%2F`, "" when it is no name."""
+    return urllib.parse.quote(name, safe="@") if _NPM_NAME_RE.fullmatch(name) else ""
 
 
 def _npm_repository(name: str, version: str) -> str:
-    if not _NPM_NAME_RE.fullmatch(name):
+    path = npm_path(name)
+    if not path:
         return ""
-    doc = fetch_json(f"https://registry.npmjs.org/{npm_path(name)}/{urllib.parse.quote(version, safe='')}") or {}
+    doc = fetch_json(f"https://registry.npmjs.org/{path}/{urllib.parse.quote(version, safe='')}") or {}
     repository = doc.get("repository")
     url = repository.get("url") if isinstance(repository, dict) else repository
     if not isinstance(url, str):

@@ -156,7 +156,10 @@ def npm(subject: Subject) -> Binding:
         digest = base64.b64decode(integrity.removeprefix("sha512-"), validate=True).hex()
     except binascii.Error:
         return _unbound(NO_LOCK_HASH)
-    name, version = upstream.npm_path(subject.name), urllib.parse.quote(subject.version, safe="")
+    name = upstream.npm_path(subject.name)
+    if not name:
+        return _UNAVAILABLE
+    version = urllib.parse.quote(subject.version, safe="")
     registered = _dig(upstream.fetch_json(f"https://registry.npmjs.org/{name}/{version}"), "dist", "integrity")
     if not isinstance(registered, str) or not registered:
         return _UNAVAILABLE

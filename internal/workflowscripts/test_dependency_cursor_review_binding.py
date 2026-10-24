@@ -189,6 +189,13 @@ class NpmTest(_Registry):
             ],
         )
 
+    def test_a_name_that_is_not_an_npm_package_name_is_unavailable_and_reads_nothing(self) -> None:
+        for name in ("", "@scope", "scope/name", "../name", "a b"):
+            with self.subTest(name=name):
+                found = self.bind(binding.npm, _NPM._replace(name=name), self._answers(None))
+                self.assertEqual(found, binding.Binding(_UNBOUND, binding.REGISTRY_UNAVAILABLE))
+                self.assertEqual(self.urls, [])
+
 
 class ExactCommitTest(_Registry):
     def test_only_the_scanned_commit_itself_is_provenance(self) -> None:
