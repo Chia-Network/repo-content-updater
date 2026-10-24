@@ -15,6 +15,7 @@ dependency-manifest-pnpm
 dependency-manifest-python
 dependency-manifest-lines
 dependency-manifest-pep508
+dependency-cursor-review-python-indexes
 dependency-cursor-review-prompts
 dependency-cursor-review-combine-outputs
 dependency-cursor-review-dependabot-context

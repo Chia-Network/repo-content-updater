@@ -42,6 +42,7 @@ class FormatterBundleInventoryTest(unittest.TestCase):
             ("dependency_manifest_python.py", "dependency-cursor-review-manifest-python.py"),
             ("dependency_manifest_lines.py", "dependency-cursor-review-manifest-lines.py"),
             ("dependency_pep508.py", "dependency-cursor-review-manifest-pep508.py"),
+            ("dependency_python_indexes.py", "dependency-cursor-review-python-indexes.py"),
             ("dependency_cursor_review_prompts.py", "dependency-cursor-review-prompts.py"),
             ("dependency_cursor_review_combine_outputs.py", "dependency-cursor-review-combine-outputs.py"),
             ("dependency-cursor-review-dependabot-context.js", "dependency-cursor-review-dependabot-context.js"),

@@ -15,7 +15,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import posixpath
 import re
 import shutil
 import subprocess
@@ -33,7 +32,7 @@ import dependency_cursor_review_ecosystems as _ecosystems
 import dependency_cursor_review_upstream as _upstream
 import dependency_cursor_review_versions as _versions
 import dependency_manifest_diff as _diff
-import dependency_manifest_python as _python
+import dependency_python_indexes as _python_indexes
 from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN
 
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
@@ -391,95 +390,6 @@ def any_read(report: dict) -> bool:
 
 
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
-_REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
-_REGISTRY_FIELD_RE = re.compile(r"""^    (type|url|replaces-base):\s*(["']?)([^"'\s#]+)\2\s*(#.*)?$""")
-_SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
-_DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
-
-
-class Indexes(NamedTuple):
-    """The Python package indexes pip may install from besides PyPI, named by the Dependabot config or a
-    requirements file."""
-
-    trusted: frozenset[str] = frozenset()  # each one in upstream.TRUSTED_PYTHON_INDEXES
-    other: bool = False  # whether it names any other one, or one this cannot read
-    replaces_pypi: bool = False  # whether a trusted index replaces PyPI rather than adding to it
-
-
-def _python_indexes(text: str) -> Indexes:
-    """The python-index registries of one Dependabot config. Only a URL in TRUSTED_PYTHON_INDEXES is trusted."""
-    fields: dict[str, str] | None = None
-    blocks: list[dict[str, str]] = []
-    for line in text.splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if not line.startswith(" "):
-            fields = {} if line.split("#", 1)[0].strip() == "registries:" else None
-            blocks += [fields] if fields is not None else []
-        elif fields is not None and _REGISTRY_RE.match(line):
-            fields = {}
-            blocks.append(fields)
-        elif fields is not None and (match := _REGISTRY_FIELD_RE.match(line)):
-            fields[match.group(1)] = match.group(3)
-    urls = [block.get("url", "") for block in blocks if block.get("type") == "python-index"]
-    replaces = any(
-        block.get("type") == "python-index" and block.get("replaces-base", "").lower() == "true" for block in blocks
-    )
-    # Every python-index this reads has a URL, or the config is not read and nothing is trusted.
-    return _indexes(urls, len(urls) != text.count("python-index"), replaces)
-
-
-def _indexes(urls: list[str], unread: bool, replaces_pypi: bool = False, *more: Indexes) -> Indexes:
-    """Indexes of `urls` and `more`. Any index that is not in TRUSTED_PYTHON_INDEXES, or `unread`, trusts none."""
-    urls = [url if url.endswith("/") else f"{url}/" for url in urls]
-    trusted = frozenset(url for url in urls if url in _upstream.TRUSTED_PYTHON_INDEXES)
-    other = unread or len(trusted) != len(set(urls)) or any(item.other for item in more)
-    replaces = not other and (replaces_pypi or any(item.replaces_pypi for item in more))
-    return Indexes(frozenset() if other else trusted.union(*(item.trusted for item in more)), other, replaces)
-
-
-def _configured_indexes() -> Indexes:
-    return _indexes([], False, False, *(_python_indexes(_git_text("HEAD", path)) for path in _DEPENDABOT_CONFIGS))
-
-
-_MAX_REQUIREMENTS_FILES = 64
-
-
-def _repo_include(base: str, item: str) -> str | None:
-    """`item` joined to `base` as a repository path, or None when it is not a plain relative path inside the tree."""
-    if not item or item.startswith(("/", "~")) or "\\" in item or _SCHEME_RE.match(item):
-        return None
-    joined = posixpath.normpath(posixpath.join(base, item))
-    return joined if joined not in {"", ".", ".."} and not joined.startswith("../") else None
-
-
-def _requirements_indexes(directory: str, configured: Indexes) -> Indexes:
-    """`configured` with the indexes of the requirements files in `directory` at HEAD and each file they include.
-
-    A file listing that fails, an include that is not a plain repository path, or another package source trusts none.
-    """
-    files = _git_files(directory)
-    if files is None:
-        return Indexes(other=True)
-    pending = [path for path in files if (row := _ecosystems.file_kind(path)) and row.parse is _python.requirements_txt]
-    seen: set[str] = set()
-    urls: list[str] = []
-    replaces = False
-    extra = False
-    while pending:
-        path = pending.pop()
-        if path in seen:
-            continue
-        seen.add(path)
-        options = _python.requirements_index_options(_git_text("HEAD", path))
-        included = [_repo_include(posixpath.dirname(path), item) for item in options.includes]
-        if options.unread or None in included or len(seen) > _MAX_REQUIREMENTS_FILES:
-            return Indexes(other=True)
-        urls += options.urls
-        replaces = replaces or options.replaces_pypi
-        extra = extra or options.extra_index_url
-        pending += [item for item in included if item is not None]
-    return _indexes(urls, False, replaces and not extra, configured)
 
 
 def _git_files(directory: str) -> list[str] | None:
@@ -656,70 +566,60 @@ def _clone(repo: str, dest: Path) -> bool:
     return proc.returncode == 0 and dest.is_dir()
 
 
-def _exact(change: _diff.Change) -> tuple[Target, str]:
-    """The Target of one primary change, and "unresolved" unless both versions are exact in its ecosystem's grammar.
+class Exact(NamedTuple):
+    """One change's Target, why it is not scanned, and the configured index that serves it."""
+
+    change: _diff.Change
+    target: Target
+    why: str = ""  # "" when it is scanned or trusted
+    index: str = ""  # the host of the trusted index that serves it, or ""
+
+
+def _exact(change: _diff.Change, indexes: dict[str, _python_indexes.Indexes], hashed: tuple[str, ...]) -> Exact:
+    """The Target of one primary change, why it is not scanned, and any trusted index that serves it.
 
     An empty from version stays inconclusive. A range, wildcard, tag name, operator or moving major could resolve to a
-    tree other than the one installed, so it is never scanned.
+    tree other than the one installed, so it is never scanned. A pip change is "configured_index" when its directory
+    names a Python package index that is not trusted: the lookups read PyPI, which may not be where pip installs it.
+    Packages from the organization's configured package indexes are trusted and not scanned (AGENTS.md).
     """
     old = _versions.exact_body(change.old, mode=change.ecosystem)
     new = _versions.exact_body(change.new, mode=change.ecosystem)
     target = Target(package=change.name, old=old or change.old, new=new or change.new)
-    return target, "" if new and (old or not change.old) else "unresolved"
+    if not (new and (old or not change.old)):
+        return Exact(change, target, "unresolved")
+    found = indexes.get(change.dir, _python_indexes.Indexes())
+    if change.ecosystem != "pip" or not found.trusted:
+        return Exact(change, target, "configured_index" if change.ecosystem == "pip" and found.other else "")
+    locked = _ecosystems.locked(
+        change.ecosystem, change.dir, change.name, new, lambda path: _git_text("HEAD", path), hashed
+    )
+    host = _upstream.trusted_python_index(change.name, new, locked, found.trusted, found.replaces_pypi)
+    return Exact(change, target, index=host)
 
 
-def _trusted(
-    changes: list[_diff.Change], indexes: dict[str, Indexes], hashed: tuple[str, ...]
-) -> tuple[list[_diff.Change], tuple[dict, ...]]:
-    """The changes still to scan, and the pip changes a configured trusted index serves (with its host).
-
-    Packages from the organization's configured package indexes are trusted and not scanned (AGENTS.md). With any
-    other index configured for its directory, none is.
-    """
-
-    def host(change: _diff.Change) -> str:
-        version = _versions.exact_body(change.new, mode=change.ecosystem)
-        found = indexes.get(change.dir, Indexes())
-        if change.ecosystem != "pip" or not version or found.other or not found.trusted:
-            return ""
-        locked = _ecosystems.locked(
-            change.ecosystem, change.dir, change.name, version, lambda path: _git_text("HEAD", path), hashed
-        )
-        return _upstream.trusted_python_index(change.name, version, locked, found.trusted, found.replaces_pypi)
-
+def _exact_all(
+    changes: list[_diff.Change], indexes: dict[str, _python_indexes.Indexes], hashed: tuple[str, ...]
+) -> list[Exact]:
+    """`_exact` for each change; the index lookups run concurrently."""
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
-        hosts = list(pool.map(host, changes))
-    rest = [change for change, found in zip(changes, hosts) if not found]
-    return rest, tuple({**change._asdict(), "index": found} for change, found in zip(changes, hosts) if found)
+        return list(pool.map(lambda change: _exact(change, indexes, hashed), changes))
 
 
-def _targets(changes: list[_diff.Change], indexes: dict[str, Indexes]) -> list[tuple[_diff.Change, Target, str]]:
+def _targets(exact: list[Exact]) -> list[tuple[_diff.Change, Target, str]]:
     """Each change as (change, Target with its repository, why it is not scanned or "").
 
-    Each distinct (ecosystem, name, version) is looked up once, and the lookups run concurrently. A pip change is
-    "configured_index" when the Dependabot config or a requirements file beside it names a Python package index that
-    is not trusted: the lookups
-    read PyPI, which may not be where pip installs it from.
+    Each distinct (ecosystem, name, version) is looked up once, and the lookups run concurrently.
     """
-    exact = [(change, *_exact(change)) for change in changes]
-    exact = [
-        (
-            change,
-            target,
-            why
-            or ("configured_index" if change.ecosystem == "pip" and indexes.get(change.dir, Indexes()).other else ""),
-        )
-        for change, target, why in exact
-    ]
-    keys = [(change.ecosystem, change.name, target.new) for change, target, _why in exact]
-    wanted = list(dict.fromkeys(key for key, (_change, _target, why) in zip(keys, exact) if not why))
+    keys = [(item.change.ecosystem, item.change.name, item.target.new) for item in exact]
+    wanted = list(dict.fromkeys(key for key, item in zip(keys, exact) if not item.why))
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
         repos = dict(zip(wanted, pool.map(lambda key: _ecosystems.upstream_repo(*key), wanted)))
     resolved: list[tuple[_diff.Change, Target, str]] = []
-    for key, (change, target, why) in zip(keys, exact):
-        repo = _upstream.Repo() if why else repos[key]
-        found = target._replace(repo=repo)
-        resolved.append((change, found, why or ("" if repo.slug else "no_upstream_link")))
+    for key, item in zip(keys, exact):
+        repo = _upstream.Repo() if item.why else repos[key]
+        found = item.target._replace(repo=repo)
+        resolved.append((item.change, found, item.why or ("" if repo.slug else "no_upstream_link")))
     return resolved
 
 
@@ -835,7 +735,7 @@ def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
 
 
 def _scan_all(
-    changes: list[_diff.Change], work: Path, scan_script: Path, hashed: tuple[str, ...], indexes: dict[str, Indexes]
+    exact: list[Exact], work: Path, scan_script: Path, hashed: tuple[str, ...]
 ) -> tuple[list[dict], list[tuple[dict, Path]], tuple[dict, ...]]:
     """(records, (record, scan directory) per scan, policy warnings the scans found) for the changes to scan.
 
@@ -845,7 +745,7 @@ def _scan_all(
     scans: list[tuple[dict, Path]] = []
     warnings: list[dict] = []
     covered: list[tuple[_diff.Change, Target, dict]] = []
-    for index, (change, target, why) in enumerate(_targets(changes, indexes)):
+    for index, (change, target, why) in enumerate(_targets(exact)):
         if why:
             records.append(uncovered(target, why))
             continue
@@ -875,15 +775,19 @@ def main() -> None:
     gaps = plan.gaps if plan else (("pull request diff", "unresolved"),)
     plan = plan or _diff.Plan()
     changes, warnings = _split(plan)
-    configured = _configured_indexes()
+    configured = _python_indexes.configured(_git_text)
     pip_dirs = sorted({change.dir for change in changes if change.ecosystem == "pip"})
-    indexes = {directory: _requirements_indexes(directory, configured) for directory in pip_dirs}
-    changes, trusted = _trusted(changes, indexes, plan.hashed)
+    indexes = {
+        directory: _python_indexes.for_directory(directory, configured, _git_text, _git_files) for directory in pip_dirs
+    }
+    exact = _exact_all(changes, indexes, plan.hashed)
+    trusted = tuple({**item.change._asdict(), "index": item.index} for item in exact if item.index)
+    exact = [item for item in exact if not item.index]
     work = Path(".dcr-dependency-scans")
     remove_entry(work)
     work.mkdir()
     try:
-        scanned, scans, found = _scan_all(changes, work, scan_script, plan.hashed, indexes)
+        scanned, scans, found = _scan_all(exact, work, scan_script, plan.hashed)
         records = [uncovered(Target(path=path), reason) for path, reason in gaps] + scanned
         unchecked = tuple(change._asdict() for change in plan.unchecked)
         report = aggregate(records, Disclosure(warnings + found, unchecked, plan.unparsed_locks, trusted))

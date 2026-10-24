@@ -710,97 +710,6 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         )
         self.assertEqual((published["verdict"], published["check"]), (without["verdict"], without["check"]))
 
-    def test_a_requirements_index_option_decides_its_directory(self) -> None:
-        chia = "https://pypi.chia.net/simple/"
-        tree = {
-            "plain": ["plain/requirements.txt"],
-            "other": ["other/requirements.txt", "other/README.md"],
-            "chia": ["chia/requirements.txt"],
-            "chained": ["chained/requirements.txt"],
-            "outside": ["outside/requirements.txt"],
-            "sibling": ["sibling/requirements.txt"],
-            "unlisted": None,
-        }
-        texts = {
-            "plain/requirements.txt": "attrs==23.2.0\n",
-            "other/requirements.txt": "--extra-index-url=https://example.com/simple\nattrs==23.2.0\n",
-            "chia/requirements.txt": f"-i {chia.rstrip('/')}\nattrs==23.2.0\n",
-            "chained/requirements.txt": "-r base/requirements-base.txt\n",
-            "chained/base/requirements-base.txt": "-ihttps://example.com/simple/\n",
-            "outside/requirements.txt": "-r ../../shared/requirements.txt\n",
-            "sibling/requirements.txt": "-c ../other/requirements.txt\n",
-        }
-        expected = {
-            "plain": coverage.Indexes(),
-            "other": coverage.Indexes(other=True),
-            "chia": coverage.Indexes(frozenset({chia}), replaces_pypi=True),
-            "chained": coverage.Indexes(other=True),
-            "outside": coverage.Indexes(other=True),
-            "sibling": coverage.Indexes(other=True),
-            "unlisted": coverage.Indexes(other=True),
-        }
-        with (
-            patch.object(coverage, "_git_files", tree.get),
-            patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path, "")),
-        ):
-            for directory, indexes in expected.items():
-                with self.subTest(directory):
-                    self.assertEqual(coverage._requirements_indexes(directory, coverage.Indexes()), indexes)
-            download = coverage.Indexes(frozenset({"https://download.chia.net/simple/"}))
-            self.assertEqual(
-                coverage._requirements_indexes("chia", download),
-                coverage.Indexes(frozenset({chia, "https://download.chia.net/simple/"}), replaces_pypi=True),
-            )
-            self.assertEqual(coverage._requirements_indexes("plain", coverage.Indexes(other=True)).other, True)
-
-    def test_an_include_that_is_not_a_repository_path_is_unread(self) -> None:
-        texts = {
-            "url": "-r https://example.com/r.txt\n",
-            "constraint": "-c https://example.com/c.txt\n",
-            "network": "-r //example.com/r.txt\n",
-            "absolute": "-r /tmp/r.txt\n",
-            "home": "-r ~/r.txt\n",
-            "backslash": "-r '..\\r.txt'\n",
-            "escape": "-r ../../r.txt\n",
-            "empty": '-r ""\n',
-        }
-        with (
-            patch.object(coverage, "_git_files", lambda directory: [f"{directory}/requirements.txt"]),
-            patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path.split("/")[0], "")),
-        ):
-            for directory in texts:
-                with self.subTest(directory):
-                    self.assertTrue(coverage._requirements_indexes(directory, coverage.Indexes()).other)
-
-    def test_a_requirements_extra_index_means_the_index_does_not_replace_pypi(self) -> None:
-        chia = "https://pypi.chia.net/simple/"
-        cases = {
-            "index": (f"-i {chia}\nattrs==23.2.0\n", coverage.Indexes(frozenset({chia}), replaces_pypi=True)),
-            "extra": (f"--extra-index-url {chia}\nattrs==23.2.0\n", coverage.Indexes(frozenset({chia}))),
-            "both": (f"-i {chia}\n--extra-index-url {chia}\nattrs==23.2.0\n", coverage.Indexes(frozenset({chia}))),
-        }
-        for label, (text, expected) in cases.items():
-            with (
-                self.subTest(label),
-                patch.object(coverage, "_git_files", lambda directory: [f"{directory}/requirements.txt"]),
-                patch.object(coverage, "_git_text", lambda _rev, path, text=text: text),
-            ):
-                self.assertEqual(coverage._requirements_indexes("app", coverage.Indexes()), expected)
-
-    def test_a_dependabot_index_replaces_pypi_only_when_it_says_so(self) -> None:
-        chia = "https://pypi.chia.net/simple/"
-
-        def config(replaces: str) -> str:
-            return (
-                "registries:\n  chia:\n    type: python-index\n"
-                f"    url: {chia}\n    replaces-base: {replaces}\n"
-            )
-
-        self.assertEqual(
-            coverage._python_indexes(config("true")), coverage.Indexes(frozenset({chia}), replaces_pypi=True)
-        )
-        self.assertEqual(coverage._python_indexes(config("false")), coverage.Indexes(frozenset({chia})))
-
     def test_git_files_lists_one_directory_at_head(self) -> None:
         with TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
@@ -833,37 +742,6 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertEqual(looked_up, ["six"])
         self.assertIs(report["scan_conclusive"], False)
         self.assertIn("`attrs 23.1.0 -> 23.2.0` (no repository): not covered (configured_index)", summary)
-
-    def test_only_listed_indexes_are_trusted_and_anything_else_trusts_none(self) -> None:
-        chia = "https://pypi.chia.net/simple/"
-        download = "https://download.chia.net/simple/"
-
-        def config(*entries: tuple[str, str]) -> str:
-            blocks = "".join(
-                f"  r{i}:\n    type: {kind}\n    url: {url}  # note\n" for i, (kind, url) in enumerate(entries)
-            )
-            return f"version: 2\nregistries:\n{blocks}updates:\n  - package-ecosystem: pip\n    registries: '*'\n"
-
-        cases = {
-            "both": (config(("python-index", chia), ("python-index", download.rstrip("/"))), {chia, download}, False),
-            "none": ("version: 2\n", set(), False),
-            "other kind": (config(("npm-registry", "https://npm.example.com")), set(), False),
-            "lookalike": (config(("python-index", "https://pypi.chia.net.evil/simple/")), set(), True),
-            "plain http": (config(("python-index", "http://pypi.chia.net/simple/")), set(), True),
-            "beside unknown": (
-                config(("python-index", chia), ("python-index", "https://example.com/simple/")),
-                set(),
-                True,
-            ),
-            "unread form": (
-                'registries: {x: {type: python-index, url: "https://pypi.chia.net/simple/"}}\n',
-                set(),
-                True,
-            ),
-        }
-        for label, (text, trusted, other) in cases.items():
-            with self.subTest(label):
-                self.assertEqual(coverage._python_indexes(text), coverage.Indexes(frozenset(trusted), other))
 
     def test_unreadable_diff_is_one_unresolved_gap(self) -> None:
         report, summary, _output = _run_main(None)

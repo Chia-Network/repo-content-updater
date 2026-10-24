@@ -83,6 +83,7 @@ files:
       - dependency-manifest-python
       - dependency-manifest-lines
       - dependency-manifest-pep508
+      - dependency-cursor-review-python-indexes
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
       - dependency-cursor-review-dependabot-context
@@ -174,6 +175,10 @@ files:
   - name: dependency-manifest-pep508
     template_name: dependency-cursor-review-manifest-pep508.py
     repo_path: .github/scripts/dependency_pep508.py
+
+  - name: dependency-cursor-review-python-indexes
+    template_name: dependency-cursor-review-python-indexes.py
+    repo_path: .github/scripts/dependency_python_indexes.py
 
   - name: dependency-cursor-review-prompts
     template_name: dependency-cursor-review-prompts.py
