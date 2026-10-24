@@ -23,6 +23,7 @@ _ListFiles = Callable[[str], list[str] | None]
 
 _REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
 _REGISTRY_FIELD_RE = re.compile(r"""^    (type|url|replaces-base):\s*(["']?)([^"'\s#]+)\2\s*(#.*)?$""")
+_TYPE_FIELD_RE = re.compile(r"^    type\s*:")
 _SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
 _MAX_REQUIREMENTS_FILES = 64
@@ -67,23 +68,32 @@ def _dependabot_indexes(text: str) -> Indexes:
     """The python-index registries of one Dependabot config. Only a URL in TRUSTED_PYTHON_INDEXES is trusted."""
     fields: dict[str, str] | None = None
     blocks: list[dict[str, str]] = []
+    unread = False
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         if not line.startswith(" "):
-            fields = {} if line.split("#", 1)[0].strip() == "registries:" else None
-            blocks += [fields] if fields is not None else []
+            key, _separator, value = line.partition(":")
+            if key.strip() != "registries":
+                fields = None
+            elif value.split("#", 1)[0].strip():
+                fields = None
+                unread = True
+            else:
+                fields = {}
+                blocks.append(fields)
         elif fields is not None and _REGISTRY_RE.match(line):
             fields = {}
             blocks.append(fields)
         elif fields is not None and (match := _REGISTRY_FIELD_RE.match(line)):
             fields[match.group(1)] = match.group(3)
+        elif fields is not None and _TYPE_FIELD_RE.match(line):
+            unread = True
     urls = [block.get("url", "") for block in blocks if block.get("type") == "python-index"]
     replaces = any(
         block.get("type") == "python-index" and block.get("replaces-base", "").lower() == "true" for block in blocks
     )
-    # Every python-index this reads has a URL, or the config is not read and nothing is trusted.
-    return _indexes(urls, len(urls) != text.count("python-index"), replaces)
+    return _indexes(urls, unread, replaces)
 
 
 def configured(read: _Read) -> Indexes:

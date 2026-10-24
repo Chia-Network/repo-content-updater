@@ -141,6 +141,20 @@ class PythonIndexesTest(unittest.TestCase):
             indexes.Indexes(frozenset({_CHIA})),
         )
 
+    def test_a_registry_name_or_comment_does_not_hide_a_trusted_registry(self) -> None:
+        text = (
+            "# python-index\n"
+            "registries:\n"
+            "  my-python-index:  # python-index\n"
+            "    type: python-index\n"
+            f"    url: {_CHIA}\n"
+        )
+        self.assertEqual(indexes._dependabot_indexes(text), indexes.Indexes(frozenset({_CHIA})))
+
+    def test_an_unreadable_type_field_leaves_the_config_unread(self) -> None:
+        text = "registries:\n  r:\n    type:\n    url: https://pypi.chia.net/simple/\n"
+        self.assertTrue(indexes._dependabot_indexes(text).other)
+
     def test_only_listed_indexes_are_trusted_and_anything_else_trusts_none(
         self,
     ) -> None:
