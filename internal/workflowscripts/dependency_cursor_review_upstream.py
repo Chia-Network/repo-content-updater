@@ -20,6 +20,8 @@ import hashlib
 import http.client
 import json
 import re
+import socket
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Mapping
@@ -96,16 +98,66 @@ def _set_timeout(connection: http.client.HTTPSConnection, budget: _DownloadBudge
     return True
 
 
+class _Deadline:
+    """Shut a connection's socket down when its budget deadline passes.
+
+    A socket timeout bounds one receive, but not a header or chunk-size line that arrives in many small pieces, nor
+    the whole connection setup. The timer sets `fired` before it shuts the socket down, so a read that ends at the
+    deadline is a failure rather than the end of a body.
+    """
+
+    def __init__(self, connection: http.client.HTTPSConnection, budget: _DownloadBudget) -> None:
+        self._connection = connection
+        self.fired = False
+        self._timer = threading.Timer(max(0.0, budget.remaining_seconds()), self._expire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _expire(self) -> None:
+        self.fired = True
+        sock = getattr(self._connection, "sock", None)
+        shutdown = getattr(sock, "shutdown", None)
+        if shutdown is not None:
+            try:
+                shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        close = getattr(sock, "close", None)
+        if close is not None:
+            try:
+                close()
+            except OSError:
+                pass
+
+    def cancel(self) -> None:
+        self._timer.cancel()
+
+
+def _close(connection: http.client.HTTPSConnection) -> None:
+    """Cancel a connection's deadline timer, if any, and close it."""
+    deadline = getattr(connection, "_deadline", None)
+    if deadline is not None:
+        deadline.cancel()
+    connection.close()
+
+
+def _connect(parts: urllib.parse.SplitResult, timeout: float) -> http.client.HTTPSConnection:
+    """An https connection to `parts`, with the socket operation timeout."""
+    return http.client.HTTPSConnection(parts.hostname, parts.port, timeout=timeout)
+
+
 def _read_chunk(
     connection: http.client.HTTPSConnection,
     response: http.client.HTTPResponse,
     size: int,
     budget: _DownloadBudget,
 ) -> bytes | None:
-    """Up to `size` bytes from `response`, or None when the budget has no time left."""
-    if not _set_timeout(connection, budget):
+    """Up to `size` bytes from `response`, or None at or past the deadline."""
+    deadline = getattr(connection, "_deadline", None)
+    if (deadline is not None and deadline.fired) or not _set_timeout(connection, budget):
         return None
-    return response.read1(size)
+    chunk = response.read1(size)
+    return None if deadline is not None and deadline.fired else chunk
 
 
 def _get_response(
@@ -122,15 +174,19 @@ def _get_response(
     if remaining <= 0:
         return None
     target = parts.path + (f"?{parts.query}" if parts.query else "")
-    connection = http.client.HTTPSConnection(parts.hostname, timeout=min(_TIMEOUT, remaining))
+    connection = _connect(parts, min(_TIMEOUT, remaining))
+    if budget.remaining_seconds() <= 0:
+        connection.close()
+        return None
+    connection._deadline = _Deadline(connection, budget)
     try:
         connection.request("GET", target, headers={"Accept": accept, "User-Agent": "dependency-review"})
         if not _set_timeout(connection, budget):
-            connection.close()
+            _close(connection)
             return None
         return connection, connection.getresponse()
     except (OSError, http.client.HTTPException):
-        connection.close()
+        _close(connection)
         return None
 
 
@@ -159,7 +215,7 @@ def _get(
     except (OSError, http.client.HTTPException):
         return None
     finally:
-        connection.close()
+        _close(connection)
 
 
 def _has_dot_segment(path: str) -> bool:
@@ -297,7 +353,7 @@ def _sha256_download(
         except (OSError, http.client.HTTPException):
             return None
         finally:
-            connection.close()
+            _close(connection)
     return None
 
 

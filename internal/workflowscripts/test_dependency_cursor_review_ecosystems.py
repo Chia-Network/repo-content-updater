@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
+import socket
+import threading
+import time
 import unittest
 import urllib.parse
+from collections.abc import Callable
+from typing import ClassVar
 from unittest.mock import patch
 
 import dependency_cursor_review_binding as binding
@@ -801,3 +807,97 @@ class FetchBudgetTest(unittest.TestCase):
             self.assertIsNone(upstream._fetch(url, follow={_HOST: ""}, budget=budget))
         self.assertEqual(requested, [url, moved])
         self.assertLessEqual(now[0], 2.0)
+
+
+class _Timer:
+    instances: ClassVar[list[_Timer]] = []
+
+    def __init__(self, interval: float, function: Callable[[], None]) -> None:
+        self.interval = interval
+        self.function = function
+        self.started = False
+        self.cancelled = False
+        _Timer.instances.append(self)
+
+    def start(self) -> None:
+        self.started = True
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+def _serve(respond: Callable[[socket.socket], None]) -> int:
+    """Start a loopback server that answers one request with `respond` and return its port."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+
+    def accept() -> None:
+        try:
+            connection, _ = server.accept()
+        except OSError:
+            return
+        finally:
+            server.close()
+        try:
+            connection.recv(4096)
+            respond(connection)
+        except OSError:
+            pass
+        finally:
+            connection.close()
+
+    threading.Thread(target=accept, daemon=True).start()
+    return port
+
+
+def _get_from(port: int, budget: upstream._DownloadBudget) -> tuple[int, str, bytes] | None:
+    def connect(parts: urllib.parse.SplitResult, timeout: float) -> http.client.HTTPConnection:
+        return http.client.HTTPConnection(parts.hostname, parts.port, timeout=timeout)
+
+    with patch.object(upstream, "_connect", connect):
+        return upstream._get(f"https://127.0.0.1:{port}/x", 100, budget=budget)
+
+
+def _drip_headers(connection: socket.socket) -> None:
+    connection.sendall(b"HTTP/1.1 200 OK\r\n")
+    for _ in range(60):
+        connection.sendall(b"X")
+        time.sleep(0.05)
+    connection.sendall(b": x\r\n\r\n")
+
+
+def _drip_chunk_size(connection: socket.socket) -> None:
+    connection.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+    for _ in range(60):
+        connection.sendall(b"f")
+        time.sleep(0.05)
+    connection.sendall(b"\r\n")
+
+
+def _complete_response(connection: socket.socket) -> None:
+    connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc")
+
+
+class ConnectionDeadlineTest(unittest.TestCase):
+    def test_headers_that_drip_stop_at_the_deadline(self) -> None:
+        port = _serve(_drip_headers)
+        started = time.monotonic()
+        self.assertIsNone(_get_from(port, upstream._DownloadBudget(seconds=0.5)))
+        self.assertLess(time.monotonic() - started, 2.0)
+
+    def test_chunk_size_lines_that_drip_stop_at_the_deadline(self) -> None:
+        port = _serve(_drip_chunk_size)
+        started = time.monotonic()
+        self.assertIsNone(_get_from(port, upstream._DownloadBudget(seconds=0.5)))
+        self.assertLess(time.monotonic() - started, 2.0)
+
+    def test_a_normal_response_is_read_and_its_timer_cancelled(self) -> None:
+        _Timer.instances.clear()
+        port = _serve(_complete_response)
+        with patch.object(upstream.threading, "Timer", _Timer):
+            self.assertEqual(_get_from(port, upstream._DownloadBudget(seconds=5)), (200, "", b"abc"))
+        self.assertEqual(len(_Timer.instances), 1)
+        self.assertTrue(_Timer.instances[0].started)
+        self.assertTrue(_Timer.instances[0].cancelled)
