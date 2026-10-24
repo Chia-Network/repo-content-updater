@@ -238,7 +238,7 @@ func (c *Content) checkSelectedFiles(repoName string, selection config.ManagedFi
 			return err
 		}
 		for _, removed := range repoPaths[1:] {
-			// An alternate path that never existed has nothing to stage.
+			// A removed path that never existed has nothing to stage.
 			_, _ = w.Add(removed)
 		}
 		status, err := w.Status()
@@ -276,7 +276,7 @@ func (c *Content) checkSelectedFiles(repoName string, selection config.ManagedFi
 }
 
 // stageFunc stages one written managed file. repoPaths starts with the file's
-// repo_path, followed by alternate paths that were removed.
+// repo_path, followed by the alternate and retired paths that were removed.
 type stageFunc func(file string, repoPaths []string) error
 
 // applySelection writes a repo's managed files into its checkout without
@@ -316,7 +316,7 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 		if err != nil {
 			return err
 		}
-		for _, repoRelPath := range managedPaths(fileinfo) {
+		for _, repoRelPath := range append([]string{fileinfo.RepoPath}, removedPaths(fileinfo)...) {
 			if _, err := confinedPath(repoDir(repoName), repoRelPath); err != nil {
 				return err
 			}
@@ -325,7 +325,8 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 	}
 
 	for _, write := range planned {
-		if err := removeConfined(repoDir(repoName), write.fileinfo.AlternatePaths); err != nil {
+		removed := removedPaths(write.fileinfo)
+		if err := removeConfined(repoDir(repoName), removed); err != nil {
 			return err
 		}
 		repoPath, err := managedWritePath(repoDir(repoName), write.fileinfo.RepoPath)
@@ -335,7 +336,7 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 		if err := writeManagedContent(repoPath, write.content); err != nil {
 			return err
 		}
-		if err := stage(write.name, managedPaths(write.fileinfo)); err != nil {
+		if err := stage(write.name, append([]string{write.fileinfo.RepoPath}, removed...)); err != nil {
 			return err
 		}
 	}

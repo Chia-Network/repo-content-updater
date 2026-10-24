@@ -395,6 +395,68 @@ files:
 	}
 }
 
+func TestRetiredDependencyCursorReviewPathsAreNoLongerManaged(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	file := cfg.GetFileInfo("dependency-cursor-review")
+	if !assert.NotNil(t, file) {
+		return
+	}
+	// The trusted loader stack and the trusted checkout action, removed with their config entries.
+	assert.Equal(t, []string{
+		".github/actions/trusted-git-path-checkout/action.yml",
+		".github/scripts/dependency-cursor-review-trusted-scripts.paths",
+		".github/scripts/formatter_runtime_bundle.py",
+		".github/scripts/isolated_module_exec.py",
+		".github/scripts/scripts_dir_disk_exec.py",
+		".github/scripts/scripts_dir_path_scrub.py",
+		".github/scripts/trusted_formatter_loader.py",
+		".github/scripts/trusted_formatter_loader_cold_start.py",
+	}, file.RetiredPaths)
+	for _, retired := range file.RetiredPaths {
+		_, ok := cfg.ResolveManagedFileName(retired)
+		assert.False(t, ok, retired)
+	}
+}
+
+func TestLoadConfigRejectsInvalidRetiredPaths(t *testing.T) {
+	tests := []struct {
+		name    string
+		retired string
+		wantErr string
+	}{
+		{name: "parent traversal", retired: "../outside", wantErr: "retired_paths entry \"../outside\" must not contain '..'"},
+		{name: "absolute", retired: "/etc/passwd", wantErr: "retired_paths entry \"/etc/passwd\" must be relative"},
+		{name: "empty", retired: `""`, wantErr: "retired_paths contains an empty entry"},
+		{name: "its own path", retired: ".github/first.yml", wantErr: "is still a managed path"},
+		{name: "its own alternate path", retired: ".github/first.yaml", wantErr: "is still a managed path"},
+		{name: "another file's path", retired: "./.GitHub/second.yml", wantErr: "is still a managed path"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			err := os.WriteFile(path, []byte(`
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github/first.yml
+    alternate_paths:
+      - .github/first.yaml
+    retired_paths:
+      - `+tt.retired+`
+  - name: second
+    template_name: second.yml
+    repo_path: .github/second.yml
+`), 0o644)
+			assert.Nil(t, err)
+
+			_, err = config.LoadConfig(path)
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 func TestLoadConfigRejectsDuplicateAdoptionMarker(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	err := os.WriteFile(path, []byte(`

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/chia-network/repo-content-updater/internal/config"
@@ -78,6 +79,12 @@ func adoptionMarkerLines(fileinfo *config.File) []string {
 // managedPaths lists fileinfo's repo_path followed by its alternate_paths.
 func managedPaths(fileinfo *config.File) []string {
 	return append([]string{fileinfo.RepoPath}, fileinfo.AlternatePaths...)
+}
+
+// removedPaths lists the paths writing fileinfo deletes: its alternate_paths,
+// then its retired_paths.
+func removedPaths(fileinfo *config.File) []string {
+	return append(slices.Clone(fileinfo.AlternatePaths), fileinfo.RetiredPaths...)
 }
 
 // adoptableDefaults returns the files of every default bundle that may be
