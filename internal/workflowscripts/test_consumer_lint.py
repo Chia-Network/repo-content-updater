@@ -217,9 +217,11 @@ class ConsumerLintTest(unittest.TestCase):
                 if path.suffix == ".py":
                     ast.parse(data.decode("utf-8"))
 
+            # Run from the consumer root so import sections match a consumer checkout.
             ruff = ["ruff", "--config", str(_RUFF_CONFIG)]
             formatted = subprocess.run(
                 [*ruff, "format", "--check", str(scripts)],
+                cwd=root,
                 check=False,
                 capture_output=True,
                 text=True,
@@ -231,6 +233,7 @@ class ConsumerLintTest(unittest.TestCase):
             )
             checked = subprocess.run(
                 [*ruff, "check", str(scripts)],
+                cwd=root,
                 check=False,
                 capture_output=True,
                 text=True,

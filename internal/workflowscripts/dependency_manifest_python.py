@@ -21,7 +21,6 @@ import json
 import re
 
 import tomllib
-
 from dependency_manifest_lines import Entry, Parsed
 
 _REQ_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*((?:===|==|~=|!=|>=|<=|>|<)\s*[^\s#;,]+)")
