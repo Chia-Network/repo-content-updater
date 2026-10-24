@@ -310,9 +310,12 @@ class UncheckedUpgradeTest(_Diff):
             {"pnpm-lock.yaml": "lockfileVersion: '5.4'\n"},
             {"pnpm-lock.yaml": "lockfileVersion: '5.4'\n#\n"},
         )
-        self.assertEqual(report["unparsed_locks"], [["pnpm-lock.yaml", "lockfileVersion 5.4 is not supported"]])
+        self.assertEqual(
+            report["unparsed_locks"], [["pnpm-lock.yaml", "unsupported_lockfile_version", "5.4"]]
+        )
         self.assertIn("- These lockfiles were not parsed, so the packages they changed were not checked:", summary)
-        self.assertIn("  - `pnpm-lock.yaml` (lockfileVersion 5.4 is not supported)", summary)
+        self.assertIn("  - `pnpm-lock.yaml` (unsupported_lockfile_version 5.4)", summary)
+        self.assertIn(formatter.reason_note("unsupported_lockfile_version", "5.4"), summary)
         published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
         self.assertNotIn("**Verdict: benign**", published["malware_text"])

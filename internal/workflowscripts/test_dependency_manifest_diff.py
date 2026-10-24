@@ -313,7 +313,8 @@ class NpmTest(unittest.TestCase):
         plan = _plan(base, head)
         self.assertEqual(plan.primary, (Change("npm", ".", "zod", "3.22.0", "3.22.4"),))
         self.assertEqual(
-            (plan.gaps, plan.unparsed_locks), ((), (("pnpm-lock.yaml", "lockfileVersion 5.4 is not supported"),))
+            (plan.gaps, plan.unparsed_locks),
+            ((), (diff.UnparsedLock("pnpm-lock.yaml", "unsupported_lockfile_version", "5.4"),)),
         )
 
     def test_a_root_workspace_lock_covers_a_primary_change_below_it(self) -> None:
@@ -323,7 +324,8 @@ class NpmTest(unittest.TestCase):
         plan = _plan(base, head)
         self.assertEqual(plan.primary, (Change("npm", "packages/web", "zod", "3.22.0", "3.22.4"),))
         self.assertEqual(
-            (plan.gaps, plan.unparsed_locks), ((), (("pnpm-lock.yaml", "lockfileVersion 5.4 is not supported"),))
+            (plan.gaps, plan.unparsed_locks),
+            ((), (diff.UnparsedLock("pnpm-lock.yaml", "unsupported_lockfile_version", "5.4"),)),
         )
         beside = {"packages/web/pnpm-lock.yaml": lock, "packages/api/package.json": base["packages/web/package.json"]}
         moved = {
@@ -331,7 +333,7 @@ class NpmTest(unittest.TestCase):
             "packages/api/package.json": head["packages/web/package.json"],
         }
         self.assertEqual(
-            _plan(beside, moved).gaps, (("packages/web/pnpm-lock.yaml", "lockfileVersion 5.4 is not supported"),)
+            _plan(beside, moved).gaps, (("packages/web/pnpm-lock.yaml", "unsupported_lockfile_version"),)
         )
 
     def test_an_unparsed_lock_with_no_primary_change_beside_it_is_a_gap(self) -> None:

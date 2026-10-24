@@ -18,9 +18,9 @@ version move ends up in one of:
   or changed type, does not parse, or changed in a way its versions do not
   account for: residue outside the entries, an entry whose text changed at an
   unchanged version, or a line entry whose text outside the version changed.
-- unparsed_locks: (path, reason) for a lockfile with no grammar, or one its
-  grammar does not read, beside or above a primary change. The reason names
-  a lockfile version the grammar does not read.
+- unparsed_locks: a record for a lockfile with no grammar, or one its
+  grammar does not read, beside or above a primary change. The reason is a
+  code, and the lockfile version the grammar does not read is a separate field.
   With no such primary change, it is a gap.
 
 hashed lists each changed file read whose row records artifact hashes, such as
@@ -53,11 +53,19 @@ class Change(NamedTuple):
     new: str
 
 
+class UnparsedLock(NamedTuple):
+    """A lockfile the diff did not parse: its path, a reason code, and the format version when one names it."""
+
+    path: str
+    reason: str
+    version: str = ""
+
+
 class Plan(NamedTuple):
     primary: tuple[Change, ...] = ()
     unchecked: tuple[Change, ...] = ()
     gaps: tuple[tuple[str, str], ...] = ()
-    unparsed_locks: tuple[tuple[str, str], ...] = ()  # (path, reason)
+    unparsed_locks: tuple[UnparsedLock, ...] = ()
     hashed: tuple[str, ...] = ()  # each changed path read whose row records artifact hashes (ecosystems.locked)
 
 
@@ -70,6 +78,8 @@ Moves = list[tuple[Change, bool]]
 # every version it adds or drops must be one a change beside it adds or drops.
 # OPAQUE: a lock with no grammar, or one its grammar does not read. GAP: the file is a gap on its own.
 _VERSIONS, _NAMES, _CHECKSUMS, _OPAQUE, _GAP = "versions", "names", "checksums", "opaque", "gap"
+# A lockfile whose grammar does not read the format version it declares.
+UNSUPPORTED_LOCKFILE_VERSION = "unsupported_lockfile_version"
 
 
 class _File(NamedTuple):
@@ -79,6 +89,7 @@ class _File(NamedTuple):
     reason: str = "unresolved"  # why a GAP file is a gap
     moves: tuple[tuple[Change, bool], ...] = ()  # (change, whether it is primary)
     hashed: bool = False  # whether its row records artifact hashes (Plan.hashed)
+    version: str = ""  # the lockfile format version when `reason` names one
 
 
 def _fixed(fixed: Callable[[Entry], str], entries: dict[str, set[Entry]]) -> set[str]:
@@ -148,7 +159,7 @@ def _read(old_path: str, path: str, status: str, read: Read, base: str) -> list[
         # A lock that names a lockfile version its grammar does not read is opaque; every other parse failure is a gap.
         version = row.unsupported(read("HEAD", path)) if row.unsupported and after is None else ""
         if version:
-            return [_File(path, group, _OPAQUE, f"lockfileVersion {version} is not supported")]
+            return [_File(path, group, _OPAQUE, UNSUPPORTED_LOCKFILE_VERSION, version=version)]
         return [_File(path, group, _GAP)]
     moves = _moves(row, directory, before[0], after[0]) if before[1] == after[1] else None
     declared = _declared(row.ecosystem, directory, read, base) if row.role == LOCK else None
@@ -206,7 +217,7 @@ def _resolve(file: _File, changes: list[tuple[Change, bool]]) -> Plan:
         )
     # A workspace lock (pnpm-lock.yaml, yarn.lock) at a root covers the manifests below it.
     if file.kind == _OPAQUE and any(primary and _under(change, file.group) for change, primary in changes):
-        return Plan(unparsed_locks=((file.path, file.reason),))
+        return Plan(unparsed_locks=(UnparsedLock(file.path, file.reason, file.version),))
     return Plan(gaps=((file.path, file.reason),))
 
 
