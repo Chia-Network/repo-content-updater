@@ -14,6 +14,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import dependency_cursor_review_upstream as upstream
 import dependency_update_coverage as coverage
 import malware_verdict_formatter as formatter
 from test_dependency_cursor_review_binding import _GO, _GO_INFO, _GO_ZIP, _UTFBOM, _UTFBOM_H1, _origin
@@ -64,7 +65,7 @@ class _Diff(unittest.TestCase):
 
         def clean_scan(update: coverage.Target, *_args: object) -> dict:
             self.scanned.append(update)
-            record = _clean(update.package, update.repo)
+            record = _clean(update.package, update.repo.slug)
             return {**record, "from_version": update.old, "to_version": update.new}
 
         answers = fetch or {}
@@ -122,7 +123,7 @@ class PolicyTest(_Diff):
 
     def test_commit_pinned_action_bumps_scan_the_commit_range_and_are_intrinsically_bound(self) -> None:
         """Commit -> commit, commit -> tag and tag -> commit are scanned; the case of a SHA is not part of it."""
-        target = coverage.Target(package="actions/checkout", repo="actions/checkout")
+        target = coverage.Target(package="actions/checkout", repo=upstream.Repo("actions/checkout", "identity"))
         for old, new, scanned in (
             (_SHA, _SHA[::-1].upper(), target._replace(old=_SHA, new=_SHA[::-1])),
             ("v4.1.0", _SHA, target._replace(old="4.1.0", new=_SHA)),
@@ -139,7 +140,9 @@ class PolicyTest(_Diff):
 
     def _unresolved(self, update: coverage.Target, *_args: object) -> dict:
         self.scanned.append(update)
-        return coverage.uncovered(update._replace(repo="actions/checkout"), "to_ref_unresolved")
+        return coverage.uncovered(
+            update._replace(repo=update.repo._replace(slug="actions/checkout")), "to_ref_unresolved"
+        )
 
     def test_a_commit_to_commit_bump_the_scan_cannot_resolve_is_unresolved_sha(self) -> None:
         report, summary = self._action(_SHA, _SHA[::-1], scan=self._unresolved)
@@ -185,7 +188,14 @@ class PolicyTest(_Diff):
         report, summary = self._action("v4.1.0", "v4.2.0")
         self.assertEqual(
             self.scanned,
-            [coverage.Target(package="actions/checkout", old="4.1.0", new="4.2.0", repo="actions/checkout")],
+            [
+                coverage.Target(
+                    package="actions/checkout",
+                    old="4.1.0",
+                    new="4.2.0",
+                    repo=upstream.Repo("actions/checkout", "identity"),
+                )
+            ],
         )
         self.assertEqual((report["policy_warnings"], report["scan_conclusive"]), ([], True))
         self.assertEqual(report["binding"], {"kind": "intrinsic", "reason": ""})
@@ -209,7 +219,7 @@ class PolicyTest(_Diff):
                 "go.mod": "require github.com/a/b v1.0.1\n",
             },
         )
-        self.assertEqual([update.repo for update in self.scanned], ["a/b"])
+        self.assertEqual([update.repo.slug for update in self.scanned], ["a/b"])
         self.assertEqual(
             {(item["ecosystem"], item["reason"]) for item in report["policy_warnings"]},
             {("docker", "unscannable_ecosystem"), ("terraform", "unscannable_ecosystem")},
@@ -258,7 +268,7 @@ class UncheckedUpgradeTest(_Diff):
             {"package.json": _package({"lodash": "4.17.21"}), **head},
             fetch={"https://registry.npmjs.org/lodash/4.17.21": b'{"repository": "github:lodash/lodash"}'},
         )
-        self.assertEqual([(u.package, u.repo) for u in self.scanned], [("lodash", "lodash/lodash")])
+        self.assertEqual([(u.package, u.repo.slug) for u in self.scanned], [("lodash", "lodash/lodash")])
         self.assertIs(report["scan_conclusive"], True)
         return report, summary
 
@@ -348,7 +358,7 @@ class GoBump(_Diff):
             {"go.mod": self._MOD.format("v1.1.1"), "go.sum": head_sum},
             fetch={_GO_ZIP: _UTFBOM, _GO_INFO: json.dumps(_origin(origin)).encode()},
         )
-        self.assertEqual([(u.package, u.repo) for u in self.scanned], [(_GO.name, _GO.repo)])
+        self.assertEqual([(u.package, u.repo.slug) for u in self.scanned], [(_GO.name, _GO.repo)])
         return report, summary
 
 
@@ -417,7 +427,7 @@ class PublishedStatusTest(_Diff):
 
         def strict_warn(update: coverage.Target, *_args: object) -> dict:
             return {
-                **_clean("requests", update.repo),
+                **_clean("requests", update.repo.slug),
                 "status": "warn",
                 "findings": findings,
             }

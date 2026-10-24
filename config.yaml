@@ -2,6 +2,8 @@
 # template_name the name of the template in the templates folder
 # repo_path: The path in the repo to write the file to
 # alternate_paths: Any paths listed here will be treated as the same file and renamed to the main repo_path
+# retired_paths: Paths an earlier version of the file's bundle managed and no longer does. Writing the file deletes
+#   them. Add a path here when it leaves the config; a renamed file goes in alternate_paths instead.
 
 # Default files are applied to every non-archived, non-fork repo. They are
 # adopt-only: only a file carrying its unique adoption marker line is updated.
@@ -91,6 +93,17 @@ files:
       - .github/workflows/dependabot-cursor-review.yaml
       - .github/workflows/dependabot-cursor-review.yml
       - .github/workflows/dependency-cursor-review.yaml
+    # Files earlier versions of this workflow installed and no longer use.
+    # Writing the workflow deletes any that a repo still has.
+    retired_paths:
+      - .github/actions/trusted-git-path-checkout/action.yml
+      - .github/scripts/dependency-cursor-review-trusted-scripts.paths
+      - .github/scripts/formatter_runtime_bundle.py
+      - .github/scripts/isolated_module_exec.py
+      - .github/scripts/scripts_dir_disk_exec.py
+      - .github/scripts/scripts_dir_path_scrub.py
+      - .github/scripts/trusted_formatter_loader.py
+      - .github/scripts/trusted_formatter_loader_cold_start.py
 
   - name: github-scripts-init
     template_name: github-scripts-init.py

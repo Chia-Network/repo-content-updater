@@ -91,6 +91,11 @@ def _unbound(reason: str) -> Binding:
 _UNAVAILABLE = _unbound(REGISTRY_UNAVAILABLE)
 
 
+def repo_source(source: str, found: Binding) -> str:
+    """Where the scanned repository's name came from, once bound: a provenance binding attests the repository."""
+    return upstream.ATTESTED if source == upstream.PUBLISHER and found.kind == PROVENANCE else source
+
+
 def intrinsic(_subject: Subject) -> Binding:
     return _INTRINSIC
 

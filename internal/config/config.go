@@ -74,6 +74,9 @@ type File struct {
 	// RequiresPaths lists repo-relative paths that must exist in the cloned repo
 	// for this file to be applied as a default. It is ignored for explicit selections.
 	RequiresPaths []string `yaml:"requires_paths"`
+	// RetiredPaths lists repo-relative paths an earlier version of this file's
+	// bundle managed and no longer does. Applying the file deletes them.
+	RetiredPaths []string `yaml:"retired_paths"`
 }
 
 // LoadConfig loads config from the given path
@@ -92,7 +95,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	config.buildManagedFileLookup()
 
-	if err := config.validateRequiresPaths(); err != nil {
+	if err := config.validatePaths(); err != nil {
 		return nil, err
 	}
 
@@ -156,21 +159,42 @@ func (c *Config) resolveDefaultFiles() error {
 	return nil
 }
 
-func (c *Config) validateRequiresPaths() error {
+// validatePaths checks requires_paths and retired_paths: each entry is a
+// relative path inside the repo, and a retired path is no file's managed path.
+func (c *Config) validatePaths() error {
 	for i := range c.Files {
 		file := &c.Files[i]
-		for _, required := range file.RequiresPaths {
-			if strings.TrimSpace(required) == "" {
-				return fmt.Errorf("file %q requires_paths contains an empty entry", file.Name)
+		if err := validateRelativePaths(file.Name, "requires_paths", file.RequiresPaths); err != nil {
+			return err
+		}
+		if err := validateRelativePaths(file.Name, "retired_paths", file.RetiredPaths); err != nil {
+			return err
+		}
+		for _, retired := range file.RetiredPaths {
+			key := managedPathKey(retired)
+			if strings.HasSuffix(strings.TrimSpace(retired), "/") || key == "" {
+				return fmt.Errorf("file %q retired_paths entry %q must name a file", file.Name, retired)
 			}
-			normalized := strings.ReplaceAll(required, "\\", "/")
-			if path.IsAbs(normalized) || filepath.VolumeName(required) != "" {
-				return fmt.Errorf("file %q requires_paths entry %q must be relative", file.Name, required)
+			if owners := c.managedPathOwners[key]; len(owners) > 0 {
+				return fmt.Errorf("file %q retired_paths entry %q is still a managed path", file.Name, retired)
 			}
-			for _, part := range strings.Split(normalized, "/") {
-				if part == ".." {
-					return fmt.Errorf("file %q requires_paths entry %q must not contain '..'", file.Name, required)
-				}
+		}
+	}
+	return nil
+}
+
+func validateRelativePaths(fileName, field string, entries []string) error {
+	for _, entry := range entries {
+		if strings.TrimSpace(entry) == "" {
+			return fmt.Errorf("file %q %s contains an empty entry", fileName, field)
+		}
+		normalized := strings.ReplaceAll(entry, "\\", "/")
+		if path.IsAbs(normalized) || filepath.VolumeName(entry) != "" {
+			return fmt.Errorf("file %q %s entry %q must be relative", fileName, field, entry)
+		}
+		for _, part := range strings.Split(normalized, "/") {
+			if part == ".." {
+				return fmt.Errorf("file %q %s entry %q must not contain '..'", fileName, field, entry)
 			}
 		}
 	}
@@ -221,6 +245,19 @@ func normalizeManagedFileKey(key string) string {
 	return strings.ToLower(key)
 }
 
+// managedPathKey is the one comparable spelling of a repo-relative path:
+// slash-separated, cleaned and lowercased, or "" when it names no file.
+func managedPathKey(repoPath string) string {
+	key := strings.ReplaceAll(strings.TrimSpace(repoPath), "\\", "/")
+	if key == "" {
+		return ""
+	}
+	if key = normalizeManagedFileKey(path.Clean(key)); key == "." {
+		return ""
+	}
+	return key
+}
+
 func (c *Config) registerManagedFileLookup(key, canonicalName string) {
 	key = normalizeManagedFileKey(key)
 	if key == "" {
@@ -262,7 +299,7 @@ func (c *Config) buildManagedFileLookup() {
 func (c *Config) repoPathKeys(file *File) []string {
 	keys := make([]string, 0, 1+len(file.AlternatePaths))
 	add := func(filePath string) {
-		key := normalizeManagedFileKey(filePath)
+		key := managedPathKey(filePath)
 		if key != "" {
 			keys = append(keys, key)
 		}
@@ -295,8 +332,10 @@ func (c *Config) ResolveManagedFileName(entry string) (string, bool) {
 	if entry == "" || strings.HasPrefix(entry, "group:") {
 		return entry, entry != ""
 	}
-	if canonical, ok := c.managedFileLookup[normalizeManagedFileKey(entry)]; ok {
-		return canonical, true
+	for _, key := range []string{managedPathKey(entry), normalizeManagedFileKey(entry)} {
+		if canonical, ok := c.managedFileLookup[key]; ok && key != "" {
+			return canonical, true
+		}
 	}
 	if c.GetFileInfo(entry) != nil {
 		return entry, true

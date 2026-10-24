@@ -39,7 +39,7 @@ _CONCLUSIVE_BYTES = (
     b'{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false,'
     b'"findings":{"ioc":[],"unicode":[],"confusable":[],"heuristic":[]},'
     b'"policy_warnings":[],"unchecked_upgrades":[],"unparsed_locks":[],'
-    b'"binding":{"kind":"intrinsic","reason":""}}\n'
+    b'"binding":{"kind":"intrinsic","reason":""},"repo_source":"identity"}\n'
 )
 
 
@@ -85,6 +85,18 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         self.assertIn("from_tag:", scan_outputs)
         self.assertIn("to_tag:", scan_outputs)
 
+    def test_every_python3_invocation_in_the_workflow_is_isolated(self) -> None:
+        """No python3 call reads code from argv, the working directory or PYTHONPATH."""
+        lines = [
+            line for line in _WORKFLOW.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#")
+        ]
+        calls = [match for line in lines for match in re.finditer(r"\bpython3?(?=\s|$)(.*)", line)]
+        self.assertGreaterEqual(len(calls), 5)
+        for call in calls:
+            with self.subTest(call=call.group(0)):
+                self.assertRegex(call.group(0), r"^python3 -I ")
+                self.assertNotRegex(call.group(1), r"(^|\s)-c(\s|$)")
+
     def test_agent_job_is_isolated_from_the_verdict(self) -> None:
         workflow = _WORKFLOW.read_text(encoding="utf-8")
         agent = workflow.split("\n  dependency-review-agent:\n", 1)[1].split("\n  dependency-review:\n", 1)[0]
@@ -116,6 +128,22 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
             verdict,
         )
         self.assertIn("needs.dependency-review-scan.outputs.report_sha256", verdict)
+
+    def test_agent_inputs_are_prepared_before_anything_reads_them(self) -> None:
+        workflow = _WORKFLOW.read_text(encoding="utf-8")
+        agent = workflow.split("\n  dependency-review-agent:\n", 1)[1].split("\n  dependency-review:\n", 1)[0]
+        steps = re.findall(r"^      - name: (.+)$", agent, re.MULTILINE)
+        self.assertEqual(steps[:2], ["Checkout repository", "Clear review paths from the checkout"])
+        clear = agent.split("- name: Clear review paths from the checkout\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("rm -rf -- .dcr-strip .upstream-dependency dcr-scan-input", clear)
+        prepare = steps.index("Prepare agent inputs")
+        self.assertEqual(steps[prepare - 1], "Download scan prompts")
+        self.assertLess(prepare, steps.index("Fetch upstream commits and version tags"))
+        self.assertLess(prepare, steps.index("Run Cursor agent"))
+        step = agent.split("- name: Prepare agent inputs\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertNotIn("if:", step, "the scan input is checked even when there is no release to review")
+        self.assertIn("bash .dcr-strip/.github/scripts/upstream_release_checkout.sh", step)
+        self.assertEqual(agent.count("upstream_release_checkout.sh"), 2)
 
     def test_prompts_name_fetched_commits_and_tags(self) -> None:
         from_sha = "a" * 40

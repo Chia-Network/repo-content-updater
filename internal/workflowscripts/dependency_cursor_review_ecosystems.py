@@ -8,7 +8,8 @@ inconclusive with a named warning and does not block on it. A change one of
 its `unresolved_rules` matches is scanned, and reported that way only when the
 scan reports that its refs do not resolve in the cloned repository. A scanned
 change is benign only when its row's `bind` ties the scanned commit to the
-installed artifact.
+installed artifact, and its repository is verified
+(dependency_cursor_review_upstream.VERIFIED).
 
 Roles: a manifest declares dependencies; a lock records the installed copies
 of the dependencies the manifest beside it declares; checksums hash the
@@ -23,6 +24,7 @@ a provider block) it is the whole record, which changes with the version.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import PurePosixPath
 from typing import NamedTuple
@@ -54,8 +56,38 @@ MANIFEST, LOCK, CHECKSUMS = "manifest", "lock", "checksums"
 _REFS_UNRESOLVED = frozenset({"from_ref_unresolved", "to_ref_unresolved"})
 
 
-def _no_repo(_name: str, _version: str) -> str:
+# The allowlist: (ecosystem, package name) -> the GitHub owner/repo it is built from, for a package whose
+# repository is named only by publisher metadata. An entry replaces that lookup and makes the repository verified,
+# so a scan of it can be benign once it is also bound to the installed artifact. Add one only after checking by
+# hand that the package is published from that repository, e.g. ("go", "golang.org/x/net"): "golang/net".
+KNOWN_REPOS: dict[tuple[str, str], str] = {}
+# Prefix entries: (ecosystem, name prefix) -> GitHub owner. The first path segment after the prefix is the repository,
+# so golang.org/x/net and golang.org/x/tools/gopls map to golang/net and golang/tools.
+KNOWN_REPO_PREFIXES: dict[tuple[str, str], str] = {("go", "golang.org/x/"): "golang"}
+_REPO_SEGMENT = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def known_repo(ecosystem: str, name: str) -> str:
+    """The allowlisted owner/repo for a package, or "" when no exact or prefix entry names it."""
+    exact = KNOWN_REPOS.get((ecosystem, name))
+    if exact:
+        return exact
+    for (eco, prefix), owner in KNOWN_REPO_PREFIXES.items():
+        if eco != ecosystem or not name.startswith(prefix):
+            continue
+        segment = name[len(prefix) :].split("/", 1)[0]
+        if _is_repo_name(segment):
+            return f"{owner}/{segment}"
     return ""
+
+
+def _is_repo_name(segment: str) -> bool:
+    """A single GitHub repository name: allowed characters only, and not made of dots alone ("." or "..")."""
+    return _REPO_SEGMENT.fullmatch(segment) is not None and segment.strip(".") != ""
+
+
+def _no_repo(_name: str, _version: str) -> upstream.Repo:
+    return upstream.Repo()
 
 
 # (warn reason, applies to (old, new)).
@@ -70,7 +102,7 @@ class Ecosystem(NamedTuple):
     name: str
     warn: str = ""  # the warn reason for every change, "" when changes are scanned
     ref_rules: tuple[_RefRule, ...] = ()  # the first rule that applies names the warn reason
-    repo: Callable[[str, str], str] = _no_repo  # GitHub repository of (name, exact version)
+    repo: Callable[[str, str], upstream.Repo] = _no_repo  # GitHub repository of (name, exact version)
     unresolved_rules: tuple[_RefRule, ...] = ()  # the warn reason when the scan cannot resolve the refs
     bind: Callable[[binding.Subject], binding.Binding] = binding.unsupported
 
@@ -219,10 +251,16 @@ def unresolved_reason(ecosystem: str, old: str, new: str, record: dict) -> str:
     return _first(row.unresolved_rules, old, new) if row and unresolved else ""
 
 
-def upstream_repo(ecosystem: str, name: str, version: str) -> str:
-    """The GitHub repository a change is scanned from, or "" when the ecosystem has none or the lookup failed."""
+def upstream_repo(ecosystem: str, name: str, version: str) -> upstream.Repo:
+    """The GitHub repository a change is scanned from, or Repo() when the ecosystem has none or the lookup failed.
+
+    An allowlisted package skips the lookup.
+    """
+    known = known_repo(ecosystem, name)
+    if known:
+        return upstream.Repo(known, upstream.ALLOWLISTED)
     row = _BY_NAME.get(ecosystem)
-    return row.repo(name, version) if row else ""
+    return row.repo(name, version) if row else upstream.Repo()
 
 
 def bind(ecosystem: str, subject: binding.Subject) -> binding.Binding:
