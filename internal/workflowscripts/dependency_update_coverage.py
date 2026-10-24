@@ -628,15 +628,13 @@ def _exact(
     if found.configured.other:
         return Exact(change, target, "configured_index")
     occurrences = _index_occurrences(change, new, hashed)
-    if occurrences:
-        facts = tuple(found.for_path(path) for path, _recorded in occurrences)
-    elif any(fact.other for _path, fact in found.files):
-        return Exact(change, target, "configured_index")
-    else:
-        facts = ()
+    if not occurrences:
+        why = "configured_index" if any(fact.other for _path, fact in found.files) else ""
+        return Exact(change, target, why)
+    facts = tuple(found.for_path(path) for path, _recorded in occurrences)
     if any(fact.other for fact in facts):
         return Exact(change, target, "configured_index")
-    trusted = frozenset().union(*(fact.trusted for fact in facts)) if facts else configured.trusted
+    trusted = frozenset().union(*(fact.trusted for fact in facts))
     locked = tuple(_upstream.Locked(recorded, fact.index) for (_path, recorded), fact in zip(occurrences, facts))
     host = _upstream.trusted_python_index(change.name, new, locked, trusted)
     return Exact(change, target, index=host)
