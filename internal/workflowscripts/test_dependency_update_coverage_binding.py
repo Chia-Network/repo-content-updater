@@ -130,6 +130,12 @@ class RepoSourceTest(GoBump):
         published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
 
+    def test_a_list_or_object_repository_source_is_unverified(self) -> None:
+        for source in (["identity"], {"identity": True}, None, 1, "publisher"):
+            with self.subTest(source=source):
+                self.assertIs(coverage._verified({"repo_source": source}), False)
+        self.assertIs(coverage._verified({"repo_source": "identity"}), True)
+
     def test_only_provenance_attests_a_publisher_named_repository(self) -> None:
         for kind, want in (("provenance", "attested"), ("checksum", "publisher"), ("unbound", "publisher")):
             with self.subTest(kind=kind):
