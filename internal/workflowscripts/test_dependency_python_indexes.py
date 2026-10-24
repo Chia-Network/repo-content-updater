@@ -92,6 +92,25 @@ class PythonIndexesTest(unittest.TestCase):
             with self.subTest(directory):
                 self.assertTrue(_facts(directory, indexes.Indexes(), texts, listing).other)
 
+    def test_an_include_with_a_parent_segment_after_a_name_is_unread(self) -> None:
+        texts = {"app/requirements.txt": "-r link/../other/requirements-base.txt\n"}
+        tree = {
+            "app": [("app/requirements.txt", "100644"), ("app/link", "120000")],
+            "app/other": [("app/other/requirements-base.txt", "100644")],
+        }
+        self.assertTrue(_facts("app", indexes.Indexes(), texts, tree.get).other)
+
+    def test_an_include_may_lead_with_parent_segments(self) -> None:
+        texts = {
+            "app/requirements.txt": "-r ../other/requirements-base.txt\n",
+            "other/requirements-base.txt": f"-i {_CHIA}\n",
+        }
+        tree = _listing("app/requirements.txt", "other/requirements-base.txt")
+        self.assertEqual(
+            _facts("app", indexes.Indexes(), texts, tree),
+            indexes.Indexes(frozenset({_CHIA}), index=_CHIA),
+        )
+
     def test_a_requirements_extra_index_means_the_index_does_not_replace_pypi(
         self,
     ) -> None:

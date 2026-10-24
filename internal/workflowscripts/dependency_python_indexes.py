@@ -122,9 +122,19 @@ def configured(read: _Read) -> Indexes:
 
 
 def _repo_include(base: str, item: str) -> str | None:
-    """`item` joined to `base` as a repository path, or None when it is not a plain relative path inside the tree."""
+    """`item` joined to `base` as a repository path, or None when it is not a plain relative path inside the tree.
+
+    A `..` after any other segment is rejected: normpath would collapse it across a directory that may be a symlink.
+    """
     if not item or item.startswith(("/", "~")) or "\\" in item or _SCHEME_RE.match(item):
         return None
+    leading_parents = True
+    for segment in item.split("/"):
+        if segment == "..":
+            if not leading_parents:
+                return None
+        else:
+            leading_parents = False
     joined = posixpath.normpath(posixpath.join(base, item))
     return joined if joined not in {"", ".", ".."} and not joined.startswith("../") else None
 
