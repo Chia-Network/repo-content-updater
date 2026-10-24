@@ -57,8 +57,6 @@ jobs:
       resolved_to: ${{`{{ steps.malware_scan.outputs.resolved_to }}`}}
       from_tag: ${{`{{ steps.malware_scan.outputs.from_tag }}`}}
       to_tag: ${{`{{ steps.malware_scan.outputs.to_tag }}`}}
-      status: ${{`{{ steps.malware_scan.outputs.status }}`}}
-      changed_files_count: ${{`{{ steps.malware_scan.outputs.changed_files_count }}`}}
       report_sha256: ${{`{{ steps.malware_scan.outputs.report_sha256 }}`}}
       summary: ${{`{{ steps.malware_scan.outputs.summary }}`}}
       scan_conclusive: ${{`{{ steps.malware_scan.outputs.scan_conclusive }}`}}
@@ -103,17 +101,15 @@ jobs:
           persist-credentials: false
 
       - name: Extract Dependabot comment context
-        id: dependabot_context
         uses: actions/github-script@v9
         env:
-          PR_TITLE: ${{`{{ steps.target_pr.outputs.title }}`}}
           PR_BODY: ${{`{{ steps.target_pr.outputs.body }}`}}
           PR_NUMBER: ${{`{{ steps.target_pr.outputs.number }}`}}
           DCR_OUT: ${{`{{ runner.temp }}`}}/dcr-out
         with:
           script: |
             const run = require(`${process.env.RUNNER_TEMP}/trusted-dcr-scripts/dependency-cursor-review-dependabot-context.js`);
-            await run({ github, context, core });
+            await run();
 
       - name: Run upstream malware scan
         id: malware_scan
@@ -122,7 +118,6 @@ jobs:
           PR_BASE_SHA: ${{`{{ steps.target_pr.outputs.base_sha }}`}}
           DCR_OUT: ${{`{{ runner.temp }}`}}/dcr-out
           DCR_FETCH_TOKEN: ${{`{{ github.token }}`}}
-          VERSION_RANGE_FROM_BODY: ${{`{{ steps.dependabot_context.outputs.version_range_from_body }}`}}
           MALWARE_WARN_ONLY: >-
             {{ .DEPENDABOT_CURSOR_MALWARE_WARN_ONLY }}
           MALWARE_IOC_PATTERNS: >-
@@ -573,8 +568,6 @@ jobs:
         env:
           PR_NUMBER: ${{`{{ needs.dependency-review-scan.outputs.number }}`}}
           REVIEW_MARKER: ${{`{{ needs.dependency-review-scan.outputs.review_marker }}`}}
-          MALWARE_SCAN_STATUS: ${{`{{ needs.dependency-review-scan.outputs.status }}`}}
-          MALWARE_SCAN_CHANGED_COUNT: ${{`{{ needs.dependency-review-scan.outputs.changed_files_count }}`}}
           MALWARE_SCAN_SUMMARY: ${{`{{ needs.dependency-review-scan.outputs.summary }}`}}
         with:
           script: |

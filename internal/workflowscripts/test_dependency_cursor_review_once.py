@@ -50,7 +50,8 @@ class DependencyCursorReviewOnceTest(unittest.TestCase):
         self.assertIn("steps.bind_review.outputs.already_reviewed", workflow)
         self.assertIn("steps.target_pr.outputs.patch_id", workflow)
         self.assertIn("steps.target_pr.outputs.reviewed_shas", workflow)
-        self.assertIn("VERSION_RANGE_FROM_BODY", workflow)
+        self.assertNotIn("VERSION_RANGE_FROM_BODY", workflow)
+        self.assertNotIn("MALWARE_SCAN_STATUS", workflow)
         self.assertIn("steps.target_pr.outputs.title", workflow)
         self.assertIn(
             "node --test internal/workflowscripts/*.test.js",

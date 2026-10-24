@@ -1,16 +1,17 @@
-"""go.mod and go.sum grammar for a Dependabot diff."""
+"""go.mod grammar.
+
+go_mod returns (entries, residue). An entry is (module, version, top, text);
+a require marked `// indirect` is not top, and text is the line with its
+version masked. Replace, exclude and retract lines, and every other
+directive, stay in residue. go.sum holds checksums, not versions, and is not read.
+"""
 
 from __future__ import annotations
 
 import re
 
-from dependency_cursor_review_versions import _exact_body, _version_body
-
-_GO_MOD_RE = re.compile(
-    r"^\s*(?:require\s+)?([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)\s+(v\S+)",
-    re.M,
-)
-_GO_SUM_RE = re.compile(r"^(\S+)\s+(v\S+)\s+", re.M)
+_GO_MOD_RE = re.compile(r"^\s*(?:require\s+)?([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)\s+(v\S+)")
+_INDIRECT_RE = re.compile(r"\s*indirect\s*(?:;|$)")
 _GO_BLOCK_STARTS = frozenset({"require(", "replace(", "exclude(", "retract("})
 
 
@@ -36,92 +37,15 @@ def _go_mod_lines(text: str) -> list[tuple[str, str]]:
     return classified
 
 
-def _go_mod_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
-    entries: dict[str, list[tuple[str, str]]] = {}
+def go_mod(text: str) -> tuple[list[tuple[str, str, bool, str]], str]:
+    entries: list[tuple[str, str, bool, str]] = []
     residue: list[str] = []
     for kind, line in _go_mod_lines(text):
-        code = line.split("//", 1)[0]
+        code, _, comment = line.partition("//")
         match = _GO_MOD_RE.match(code) if kind == "entry" else None
         if match:
-            entries.setdefault(match.group(1), []).append((match.group(2), code.strip()))
+            masked = line[: match.start(2)] + "\0" + line[match.end(2) :]
+            entries.append((match.group(1), match.group(2), not _INDIRECT_RE.match(comment), masked.strip()))
             continue
         residue.append(line)
     return entries, "".join(residue)
-
-
-def _go_sum_version(token: str) -> str:
-    """Module version, without the `/go.mod` checksum suffix."""
-    return token.split("/go.mod", 1)[0]
-
-
-def _go_sum_parts(text: str) -> tuple[dict[str, list[tuple[str, str]]], str]:
-    """One block per module version. Versions of a module stay a set."""
-    grouped: dict[str, dict[str, list[str]]] = {}
-    residue: list[str] = []
-    for line in text.splitlines(keepends=True):
-        body = line.strip()
-        match = _GO_SUM_RE.match(body)
-        if not body or not match:
-            residue.append(line)
-            continue
-        module, version = match.group(1), _go_sum_version(match.group(2))
-        grouped.setdefault(module, {}).setdefault(version, []).append(body)
-    entries = {
-        module: [(version, "\n".join(sorted(rows))) for version, rows in sorted(by_version.items())]
-        for module, by_version in grouped.items()
-    }
-    return entries, "".join(residue)
-
-
-def _version_map(blocks: list[tuple[str, str]]) -> dict[str, str] | None:
-    found: dict[str, str] = {}
-    for version, payload in blocks:
-        if version in found:
-            return None
-        found[version] = payload
-    return found
-
-
-def _version_named(versions: dict[str, str], listed: str) -> str | None:
-    body = _exact_body(listed)
-    if not body:
-        return None
-    found = [version for version in versions if _version_body(version) == body]
-    if len(found) != 1:
-        return None
-    return found[0]
-
-
-def _sum_update_covers(old: dict[str, str], new: dict[str, str], frm: str, to: str) -> bool:
-    """True when `to` is in the new set and `from` was in the old set.
-
-    Removing `from` matches. Keeping those lines and adding `to` matches.
-    A checksum rewrite of any version that stays does not.
-    """
-    to_key = _version_named(new, to)
-    from_key = _version_named(old, frm)
-    if to_key is None or from_key is None or _version_body(from_key) == _version_body(to_key):
-        return False
-    removed = set(old) - set(new)
-    added = set(new) - set(old)
-    if removed - {from_key} or added - {to_key}:
-        return False
-    stayed = set(old) & set(new)
-    if any(old[key] != new[key] for key in stayed):
-        return False
-    return bool(removed or added)
-
-
-def _go_sum_explained(
-    name: str,
-    old_blocks: list[tuple[str, str]],
-    new_blocks: list[tuple[str, str]],
-    listed: dict[str, set[tuple[str, str]]],
-) -> bool:
-    old = _version_map(old_blocks)
-    new = _version_map(new_blocks)
-    if old is None or new is None:
-        return False
-    if old == new:
-        return True
-    return any(_sum_update_covers(old, new, frm, to) for frm, to in listed.get(name, ()))

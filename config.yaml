@@ -71,9 +71,12 @@ files:
       - dependency-update-coverage
       - dependency-manifest-diff
       - dependency-cursor-review-versions
+      - dependency-cursor-review-ecosystems
+      - dependency-cursor-review-upstream
       - dependency-manifest-go
       - dependency-manifest-npm
       - dependency-manifest-python
+      - dependency-manifest-lines
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
       - dependency-cursor-review-dependabot-context
@@ -115,6 +118,14 @@ files:
     alternate_paths:
       - .github/scripts/dependency_manifest_versions.py
 
+  - name: dependency-cursor-review-ecosystems
+    template_name: dependency-cursor-review-ecosystems.py
+    repo_path: .github/scripts/dependency_cursor_review_ecosystems.py
+
+  - name: dependency-cursor-review-upstream
+    template_name: dependency-cursor-review-upstream.py
+    repo_path: .github/scripts/dependency_cursor_review_upstream.py
+
   - name: dependency-manifest-go
     template_name: dependency-cursor-review-manifest-go.py
     repo_path: .github/scripts/dependency_manifest_go.py
@@ -126,6 +137,10 @@ files:
   - name: dependency-manifest-python
     template_name: dependency-cursor-review-manifest-python.py
     repo_path: .github/scripts/dependency_manifest_python.py
+
+  - name: dependency-manifest-lines
+    template_name: dependency-cursor-review-manifest-lines.py
+    repo_path: .github/scripts/dependency_manifest_lines.py
 
   - name: dependency-cursor-review-prompts
     template_name: dependency-cursor-review-prompts.py

@@ -47,6 +47,7 @@ class CombineCompleteTest(unittest.TestCase):
             env["MALWARE_SCAN_REPORT_SHA256"] = hashlib.sha256(payload).hexdigest()
             proc = subprocess.run(
                 [sys.executable, "-I", str(_COMBINE)],
+                check=False,
                 cwd=root,
                 env=env,
                 capture_output=True,
@@ -130,7 +131,7 @@ class CombineCompleteTest(unittest.TestCase):
             "tag_spellings_disagree",
             "from_ref_unresolved",
             "to_ref_unresolved",
-            "untrusted_version_text",
+            "no_upstream_link",
             "tag_resolution_failed",
             "not_scanned",
             "not_conclusive",
@@ -465,7 +466,7 @@ class CombineCompleteTest(unittest.TestCase):
             "tag_spellings_disagree",
             "from_ref_unresolved",
             "to_ref_unresolved",
-            "untrusted_version_text",
+            "no_upstream_link",
             "tag_resolution_failed",
         )
         for reason in reasons:

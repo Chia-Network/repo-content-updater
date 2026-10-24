@@ -1,8 +1,8 @@
-"""The one version model: exact-version grammar, npm ranges, release-tag spellings and version jumps.
+"""The one version model: an exact-version grammar per ecosystem, moving action refs, release tags and version jumps.
 
-The manifest parsers, the coverage scan and the upstream scan shell all read
-versions here. Each mode names where a token comes from and so which prefix
-it may drop and which version shape is exact. A range, wildcard, tag name or
+The manifest diff, the coverage scan and the upstream scan shell all read
+versions here. Each mode is an ecosystem and names which prefix its tokens
+may drop and which version shape is exact. A range, wildcard, tag name or
 moving major such as an action's `v4` is never an exact version in any mode.
 
 The shell calls the command line. Python itself exits 1 or 2 when the
@@ -20,7 +20,6 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Literal
 
 # A PEP 440 pre/post/dev release (`1.2.3rc1`, `1.2.3.post1`, `1.2.3.dev0`)
 # or a separator-prefixed pre/build suffix may spell out an exact version.
@@ -38,130 +37,43 @@ _PIN_PREFIX_RE = re.compile(r"^(?:===|==|[vV])")
 _V_PREFIX_RE = re.compile(r"^[vV]")
 # Dot-separated numeric parts are the version. An x/X or * part is a wildcard.
 _EXACT_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*" + _SUFFIX)
-# The three numeric parts of an npm semver, shared by a package.json spec and a registry version.
-_SEMVER_RELEASE = r"[0-9]+\.[0-9]+\.[0-9]+"
-# `1` or `1.2` is an npm X-range, never an exact pin, so a spec has exactly three numeric parts.
-_SPEC_VERSION_RE = re.compile(_SEMVER_RELEASE + _SUFFIX)
-# A Dependabot version such as 2024.2 or 1.2.3.4 is exact; a bare `1` or `v4` is a moving major.
-_RAW_VERSION_RE = re.compile(r"(?P<release>[0-9]+(?:\.[0-9]+)+)" + _SUFFIX)
-# An npm registry version as it appears in a tarball URL or a residue spec. The
-# registry writes only npm's own pre-release/build suffix, never a PEP 440 one.
-NPM_SEMVER = _SEMVER_RELEASE + r"(?:[-+][0-9A-Za-z.-]+)?"
-# An npm semver: up to three numeric release parts, an optional prerelease and build metadata.
-_RANGE_VERSION_RE = re.compile(
-    r"(?P<release>[0-9]+(?:\.[0-9]+){0,2})(?:-(?P<pre>[0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?"
-)
+# `1` or `1.2` is an npm X-range and a moving action tag, never an exact
+# version, so npm and action versions have exactly three numeric parts.
+_SEMVER_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+" + _SUFFIX)
+# A release such as 1.2.3, 2024.2 or 1.2.3.4 is exact; a bare `1` or `v4` is a moving major.
+_RELEASE_RE = re.compile(r"(?P<release>[0-9]+(?:\.[0-9]+)+)" + _SUFFIX)
+# A full commit SHA pins an action ref without being a release tag.
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 
-# pin: a manifest or lock token; drops `==`, `===`, `v` or `V`.
-# spec: a package.json spec; drops only `v`/`V` and needs three numeric parts.
-# dependabot: a raw Dependabot from/to version; drops only `v`/`V` and needs two or more numeric parts.
-VersionMode = Literal["pin", "spec", "dependabot"]
+# Keyed by the ecosystem a token comes from: pip drops `==`, `===`, `v` or `V`;
+# the others drop only `v`/`V`. npm and github-actions need three numeric parts.
 _MODES: dict[str, tuple[re.Pattern[str], re.Pattern[str]]] = {
-    "pin": (_PIN_PREFIX_RE, _EXACT_VERSION_RE),
-    "spec": (_V_PREFIX_RE, _SPEC_VERSION_RE),
-    "dependabot": (_V_PREFIX_RE, _RAW_VERSION_RE),
+    "pip": (_PIN_PREFIX_RE, _EXACT_VERSION_RE),
+    "npm": (_V_PREFIX_RE, _SEMVER_RE),
+    "go": (_V_PREFIX_RE, _RELEASE_RE),
+    "github-actions": (_V_PREFIX_RE, _SEMVER_RE),
 }
 
 
-def _version_body(value: str, prefix: re.Pattern[str] = _PIN_PREFIX_RE) -> str:
-    """The version with one exact-pin prefix (`==`, `===`, `v` or `V` by default) removed."""
+def _version_body(value: str, prefix: re.Pattern[str]) -> str:
+    """The version with one prefix that `prefix` matches removed."""
     value = value.strip()
     match = prefix.match(value)
     return value[match.end() :].strip() if match else value
 
 
-def _exact_match(value: str, *, mode: VersionMode) -> re.Match[str] | None:
+def _exact_body(value: str, *, mode: str) -> str:
+    """The exact version a token pins in ecosystem `mode`, or "" for a range, wildcard, empty token or unknown mode."""
+    if mode not in _MODES:
+        return ""
     prefix, pattern = _MODES[mode]
-    return pattern.fullmatch(_version_body(value, prefix))
-
-
-def _exact_body(value: str, *, mode: VersionMode = "pin") -> str:
-    """The exact version a token pins under `mode`, or "" for a range, wildcard or empty token."""
-    match = _exact_match(value, mode=mode)
+    match = pattern.fullmatch(_version_body(value, prefix))
     return match.group(0) if match else ""
 
 
-def _range_key(value: str) -> tuple[tuple[tuple[int, int, int], int, tuple], int] | None:
-    """Compare key and release-part count for an npm semver, or None when it is not one."""
-    match = _RANGE_VERSION_RE.fullmatch(_version_body(value, _V_PREFIX_RE))
-    if not match:
-        return None
-    parts = tuple(int(part) for part in match.group("release").split("."))
-    release = (*parts, 0, 0, 0)[:3]
-    pre = match.group("pre")
-    if pre is None:
-        key = (release, 1, ())
-    else:
-        identifiers = tuple((0, int(part)) if part.isdigit() else (1, part) for part in pre.split("."))
-        key = (release, 0, identifiers)
-    return key, len(parts)
-
-
-def _in_range(spec: str, version: str) -> bool:
-    """True when `version` is inside the npm `^` or `~` range `spec`, including 0.x caret rules."""
-    operator = spec[:1]
-    if operator not in {"^", "~"}:
-        return False
-    base = _range_key(spec[1:])
-    target = _range_key(version)
-    if base is None or target is None:
-        return False
-    (release, _, prerelease), count = base
-    target_key = target[0]
-    if target_key[1] == 0 and not (prerelease and target_key[0] == release):
-        return False
-    if operator == "^":
-        if release[0]:
-            upper = (release[0] + 1, 0, 0)
-        elif count == 1:
-            upper = (1, 0, 0)
-        elif release[1]:
-            upper = (0, release[1] + 1, 0)
-        elif count == 2:
-            upper = (0, 1, 0)
-        else:
-            upper = (0, 0, release[2] + 1)
-    elif count == 1:
-        upper = (release[0] + 1, 0, 0)
-    else:
-        upper = (release[0], release[1] + 1, 0)
-    return base[0] <= target_key < (upper, 1, ())
-
-
-def _reached_listed_version(
-    name: str,
-    old: str,
-    new: str,
-    listed: dict[str, set[tuple[str, str]]],
-    *,
-    locked: frozenset[str] = frozenset(),
-    mode: VersionMode = "pin",
-) -> bool:
-    """True when this package moved from one listed exact version to the other.
-
-    Listed tokens must be exact and `mode` reads the manifest tokens (see
-    _exact_body). A package.json spec may keep the same leading `^` or `~` on
-    both sides only when `locked`, the versions a lockfile in HEAD resolves the
-    new spec to, holds the listed `to` version. The listed `from` version only
-    needs to fall inside the old range. Only a top-level `node_modules/<name>`
-    npm copy or a Yarn stanza whose descriptor is that exact spec lands in
-    `locked`, so a nested, workspace or other-range resolution never confirms a bump.
-    """
-    if not old or not new or old == new:
-        return False
-    if old[:1] in {"^", "~"} and new[:1] == old[:1]:
-        return any(
-            _exact_body(frm)
-            and _exact_body(to)
-            and _exact_body(to) in locked
-            and _in_range(old, frm)
-            and _in_range(new, to)
-            for frm, to in listed.get(name, ())
-        )
-    old_body, new_body = _exact_body(old, mode=mode), _exact_body(new, mode=mode)
-    if not old_body or not new_body:
-        return False
-    return any(_exact_body(frm) == old_body and _exact_body(to) == new_body for frm, to in listed.get(name, ()))
+def moving_ref(ref: str) -> bool:
+    """True for a GitHub Actions ref that is neither a full release tag nor a commit SHA: `v4`, `v4.1`, a branch."""
+    return not _COMMIT_RE.fullmatch(ref) and not _exact_body(ref, mode="github-actions")
 
 
 class TagStatus(enum.IntEnum):
@@ -229,8 +141,8 @@ def release_tag(repo: str, version: str) -> ReleaseTag:
 
 
 def _major_minor(version: str) -> tuple[int, int] | None:
-    """Major and minor of an exact Dependabot version (see _exact_body), or None when it is not one."""
-    match = _exact_match(version, mode="dependabot")
+    """Major and minor of an exact release with two or more numeric parts, or None when it is not one."""
+    match = _RELEASE_RE.fullmatch(_version_body(version, _V_PREFIX_RE))
     if not match:
         return None
     major, minor = match.group("release").split(".")[:2]

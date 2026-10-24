@@ -8,7 +8,7 @@ const test = require('node:test');
 
 const { malwareScanSummaryText } = require('./dependency-cursor-review-post-comment.js');
 
-test('malware summary reads the scan artifact before the job output', () => {
+test('malware summary reads the scan artifact before the job output and never adds a status', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dcr-summary-'));
   const previous = process.cwd();
   const savedSummary = process.env.MALWARE_SCAN_SUMMARY;
@@ -17,10 +17,10 @@ test('malware summary reads the scan artifact before the job output', () => {
   try {
     fs.writeFileSync('malware_scan_summary.md', '## planted\n\n- Status: **clean**\n');
     fs.mkdirSync('dcr-scan-input');
-    fs.writeFileSync('dcr-scan-input/malware_scan_summary.md', '## Malware Scan Summary\n\n- Status: **not_scanned**\n');
+    fs.writeFileSync('dcr-scan-input/malware_scan_summary.md', '## Malware Scan Summary\n\n- Scan coverage: **conclusive**.\n');
     process.env.MALWARE_SCAN_SUMMARY = 'lossy one line';
     const fromArtifact = malwareScanSummaryText();
-    assert.match(fromArtifact, /not_scanned/);
+    assert.match(fromArtifact, /conclusive/);
     assert.doesNotMatch(fromArtifact, /planted/);
     assert.doesNotMatch(fromArtifact, /lossy/);
 
@@ -29,11 +29,10 @@ test('malware summary reads the scan artifact before the job output', () => {
 
     delete process.env.MALWARE_SCAN_SUMMARY;
     fs.rmSync('dcr-scan-input/malware_scan_summary.md');
-    process.env.MALWARE_SCAN_STATUS = '';
+    process.env.MALWARE_SCAN_STATUS = 'warn';
     const missing = malwareScanSummaryText();
     assert.match(missing, /Scanner output file missing/);
-    assert.match(missing, /unknown/);
-    assert.doesNotMatch(missing, /\*\*clean\*\*/);
+    assert.doesNotMatch(missing, /Status|warn/);
   } finally {
     process.chdir(previous);
     if (savedSummary === undefined) delete process.env.MALWARE_SCAN_SUMMARY;

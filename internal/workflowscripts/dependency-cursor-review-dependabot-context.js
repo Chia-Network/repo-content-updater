@@ -45,217 +45,10 @@ function extractDetailsSection(text, summaryLabel) {
   return '';
 }
 
-// The body outside every top-level <details> block. Release notes and commit
-// lists live there and must not add packages or versions; text after a block still counts.
-function withoutDetails(text) {
-  let kept = '';
-  let from = 0;
-  for (const [start, end] of detailsSpans(text)) {
-    kept += text.slice(from, start);
-    from = end;
-  }
-  return kept + text.slice(from);
-}
-
-// Only an exact pin (`==` or `===`) loses its operator. Range operators stay so a
-// range is never taken for a scannable version; a leading v or V stays because tags are looked up as written.
-function normalizeVersion(version) {
-  return String(version || '')
-    .trim()
-    .replace(/^(?:===|==)\s*/, '');
-}
-
-function sameValue(key, left, right) {
-  if (key === 'upstreamRepo') return left === right;
-  return left.replace(/^v/i, '') === right.replace(/^v/i, '');
-}
-
-function githubRepoFromText(text) {
-  const source = String(text || '');
-  const url = source.match(/https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/i);
-  if (url) return url[1].replace(/\.git$/i, '');
-  const moduleName = source.match(/^github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:\/|$)/i);
-  return moduleName ? moduleName[1] : '';
-}
-
-// A table Package cell: `name`, `[name](url)`, or Renovate's `[name](url) ([source](repo))`.
-function packageCell(cell) {
-  const label = (text) => text.replace(/`/g, '').trim();
-  const links = [...cell.matchAll(/\[([^\]]*)\]\(([^)]*)\)/g)];
-  if (links.length === 0) return { name: label(cell), repo: githubRepoFromText(label(cell)) };
-  const source = links.find((link) => link[1].trim().toLowerCase() === 'source');
-  return {
-    name: label(links[0][1]),
-    repo: githubRepoFromText(source?.[2]) || githubRepoFromText(links[0][2]) || githubRepoFromText(links[0][1]),
-  };
-}
-
-function agree(record, key, incoming) {
-  if (record.disputed[key]) return '';
-  if (!incoming) return record[key];
-  if (!record[key]) return incoming;
-  if (sameValue(key, record[key], incoming)) return record[key];
-  record.disputed[key] = true;
-  return '';
-}
-
-function rememberUpdate(byName, name, fromVersion, toVersion, repo) {
-  const packageName = String(name || '').trim();
-  if (!packageName || packageName.toLowerCase() === 'package') return;
-  const from = normalizeVersion(fromVersion);
-  const to = normalizeVersion(toVersion);
-  const repoName = String(repo || '')
-    .trim()
-    .replace(/\.git$/i, '');
-  const existing = byName.get(packageName);
-  if (!existing) {
-    byName.set(packageName, {
-      packageName,
-      fromVersion: from,
-      toVersion: to,
-      upstreamRepo: repoName,
-      disputed: {},
-    });
-    return;
-  }
-  existing.fromVersion = agree(existing, 'fromVersion', from);
-  existing.toVersion = agree(existing, 'toVersion', to);
-  existing.upstreamRepo = agree(existing, 'upstreamRepo', repoName);
-}
-
-// The opening paragraph that names the packages. It ends at the first blank
-// line, bullet list (Release notes, Changelog, Commits), table, or heading.
-function groupPreamble(visible) {
-  if (visible.trimStart().startsWith('|')) return '';
-  return visible.trimStart().split(/\n\s*\n|\n\s*[-*] |\n\||\n### |\nUpdates `/)[0];
-}
-
-function tableCells(line) {
-  return line
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map((cell) => cell.trim());
-}
-
-const BACKTICKS_RE = /^`([^`]+)`$/;
-const CHANGE_RE = /`([^`]+)`\s*(?:->|→)\s*`([^`]+)`/;
-
-// Rows of the update table: Dependabot's `Package | From | To` or Renovate's
-// `Package | ... | Change`. Release-note tables live inside <details>, which is already gone.
-function updateTableRows(visible) {
-  const lines = visible.split('\n');
-  const start = lines.findIndex((line) => /^\|\s*Package\s*\|/i.test(line.trim()));
-  if (start === -1) return [];
-  const columns = tableCells(lines[start]).map((cell) => cell.toLowerCase());
-  const rows = [];
-  for (const line of lines.slice(start + 2)) {
-    if (!line.trim().startsWith('|')) break;
-    const cell = Object.fromEntries(tableCells(line).map((value, index) => [columns[index], value]));
-    const change = CHANGE_RE.exec(cell.change || '');
-    const from = change ? change[1] : (BACKTICKS_RE.exec(cell.from || '') || [])[1];
-    const to = change ? change[2] : (BACKTICKS_RE.exec(cell.to || '') || [])[1];
-    if (from && to) rows.push({ ...packageCell(cell.package || ''), from, to });
-  }
-  return rows;
-}
-
-// The repository of the `Bumps [x](github)` link. Any other GitHub URL may name an unrelated project.
-function upstreamRepoFromBody(text) {
-  const dependencyRepoMatch = text.match(
-    /^\s*(?:Bumps|Update(?:s|d)?)\s+(?:the\s+requirements\s+on\s+)?\[[^\]]+\]\(\s*https?:\/\/(?:redirect\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:[\/#?][^)\s]*)?\s*\)/im,
-  );
-  return dependencyRepoMatch ? dependencyRepoMatch[1].replace(/\.git$/i, '') : '';
-}
-
-// One map. The package sentence, table rows, Updates lines, and the title all write it.
-// A second non-empty repository or version that differs clears that field.
-// Only the body outside <details> is read.
-function collectPackageUpdates(title, body, bodyRepo) {
-  const byName = new Map();
-  const visible = withoutDetails(body);
-  const preamble = groupPreamble(visible);
-  // Only the sentence naming the bumped package(s). Other links in the preamble
-  // (release notes, changelog, commits) are not packages.
-  const statement = /^\s*(?:Bumps|Update(?:s|d)?)\b.*?(?:\.(?=\s|$)|$)/im.exec(preamble);
-  const linkRe = /\[([^\]]+)\]\(\s*(https?:\/\/[^)\s]+)[^)]*\)/gi;
-  if (statement) {
-    let link;
-    while ((link = linkRe.exec(statement[0])) !== null) {
-      rememberUpdate(byName, link[1], '', '', githubRepoFromText(link[2]));
-    }
-  }
-  const bumpsRe = /\[([^\]]+)\]\(\s*(https?:\/\/[^)\s]+)[^)]*\)\s+from\s+(\S+)\s+to\s+(\S+)/gi;
-  let bumps;
-  while ((bumps = bumpsRe.exec(preamble)) !== null) {
-    rememberUpdate(
-      byName,
-      bumps[1],
-      bumps[3].replace(/[.,;:]+$/, ''),
-      bumps[4].replace(/[.,;:]+$/, ''),
-      githubRepoFromText(bumps[2]),
-    );
-  }
-  const tableRows = updateTableRows(visible);
-  for (const row of tableRows) {
-    rememberUpdate(byName, row.name, row.from, row.to, row.repo || bodyRepo);
-  }
-  const lineRe = /^Updates\s+`([^`]+)`\s+from\s+(\S+)\s+to\s+(\S+)/gm;
-  let line;
-  while ((line = lineRe.exec(visible)) !== null) {
-    rememberUpdate(
-      byName,
-      line[1].trim(),
-      line[2].replace(/[.,;:]+$/, ''),
-      line[3].replace(/[.,;:]+$/, ''),
-      githubRepoFromText(line[1]),
-    );
-  }
-
-  // A table names every package; the title would add a second, differently spelled one.
-  const titleMatch =
-    tableRows.length === 0 &&
-    (title.match(/[Uu]pdate\s+(.+?)\s+requirement\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-      title.match(/[Bb]ump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/) ||
-      title.match(/[Uu]pdate\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)/));
-  const renovateTitleMatch =
-    tableRows.length === 0 &&
-    !titleMatch &&
-    (title.match(/(?:update|pin)\s+dependency\s+(.+?)\s+to\s+([^\s]+)/i) ||
-      title.match(/(?:update|pin)\s+(.+?)\s+(?:action|digest|docker\s+tag)\s+to\s+([^\s]+)/i) ||
-      title.match(/(?:update|pin)\s+(.+?)\s+to\s+([^\s]+)/i));
-  if (titleMatch) {
-    rememberUpdate(byName, titleMatch[1], titleMatch[2], titleMatch[3], '');
-  } else if (renovateTitleMatch) {
-    rememberUpdate(byName, renovateTitleMatch[1], '', renovateTitleMatch[2], '');
-  }
-
-  if (byName.size === 1) {
-    const only = [...byName.values()][0];
-    if (!only.fromVersion || !only.toVersion) {
-      const arrow = visible.match(/`([^`\s]+)`\s*(?:->|→)\s*`([^`\s]+)`/);
-      if (arrow) {
-        rememberUpdate(
-          byName,
-          only.packageName,
-          only.fromVersion ? '' : arrow[1],
-          only.toVersion ? '' : arrow[2],
-          '',
-        );
-      }
-    }
-  }
-  return [...byName.values()].map(({ disputed, ...item }) => item);
-}
-
-function parseDependencyUpdate(title, body) {
-  const upstreamRepo = upstreamRepoFromBody(body);
-
+// Release notes and commits from the PR body, passed to the prompt as data.
+// Package names and versions come from the manifest diff, never from this text.
+function bodyNotes(body) {
   let releaseNotes = extractDetailsSection(body, 'Release notes');
-  if (!releaseNotes && upstreamRepo) {
-    releaseNotes = extractDetailsSection(body, upstreamRepo);
-  }
   if (!releaseNotes) {
     const rnHeading = body.match(/###\s*Release\s+Notes?\s*\n([\s\S]*?)(?=\n---|\n###\s|$)/i);
     if (rnHeading) releaseNotes = rnHeading[1].trim();
@@ -266,18 +59,7 @@ function parseDependencyUpdate(title, body) {
     const shaMatches = body.match(/\b[0-9a-f]{7,40}\b/gi);
     if (shaMatches && shaMatches.length > 0) commits = shaMatches.join('\n');
   }
-
-  const updates = collectPackageUpdates(title, body, upstreamRepo);
-  const sole = updates.length === 1 ? updates[0] : null;
-  return {
-    upstreamRepo: sole ? sole.upstreamRepo : '',
-    packageName: sole ? sole.packageName : '',
-    fromVersion: sole ? sole.fromVersion : '',
-    toVersion: sole ? sole.toVersion : '',
-    releaseNotes,
-    commits,
-    updates,
-  };
+  return { releaseNotes, commits };
 }
 
 // Above a normal GitHub pull-request diff. Larger inputs fail open.
@@ -351,14 +133,6 @@ function bindReviewOutputs({ PATCH_ID, REVIEWED_SHAS, RESOLVED_TO }) {
   };
 }
 
-function versionTextCameFromBody(title, body) {
-  const fromTitle = parseDependencyUpdate(title, '');
-  const parsed = parseDependencyUpdate(title, body);
-  // A grouped PR has no top-level versions to compare, so check every body version.
-  if (parsed.updates.length > 1) return true;
-  return parsed.fromVersion !== fromTitle.fromVersion || parsed.toVersion !== fromTitle.toVersion;
-}
-
 function commentFirstLine(body) {
   if (typeof body !== 'string') return '';
   const end = body.indexOf('\n');
@@ -372,50 +146,26 @@ function isActionsBotMarkerComment(comment) {
   return /^<!-- cursor-dependabot-review patch-id:[0-9a-f]{40}(?: resolved:[0-9a-f]{40})? -->$/.test(line);
 }
 
-async function runDependabotContext({ core }) {
+async function runDependabotContext() {
   const outDir = process.env.DCR_OUT;
   if (!outDir) throw new Error('DCR_OUT is not set.');
   const write = (name, text) => fs.writeFileSync(path.join(outDir, name), text);
-  const body = process.env.PR_BODY || '';
-  const title = process.env.PR_TITLE || '';
-  const prNumber = Number(process.env.PR_NUMBER || '0');
-  const parsed = parseDependencyUpdate(title, body);
-  write('dependency_updates.json', JSON.stringify(parsed.updates, null, 2));
-
-  if (!parsed.updates.some((item) => item.upstreamRepo)) {
-    core.warning('PR body is missing an upstream GitHub repository link; the scan will record no_upstream_link.');
-  }
-
-  const normalizedReleaseNotes = parsed.releaseNotes || 'PR body did not include a Release notes details section.';
-  const normalizedCommits = parsed.commits || 'PR body did not include a Commits details section.';
-
-  const out = {
-    prNumber,
-    upstreamRepo: parsed.upstreamRepo,
-    packageName: parsed.packageName,
-    fromVersion: parsed.fromVersion,
-    toVersion: parsed.toVersion,
-    releaseNotes: normalizedReleaseNotes,
-    commits: normalizedCommits,
-  };
+  const parsed = bodyNotes(process.env.PR_BODY || '');
+  const releaseNotes = parsed.releaseNotes || 'PR body did not include a Release notes details section.';
+  const commits = parsed.commits || 'PR body did not include a Commits details section.';
+  const out = { prNumber: Number(process.env.PR_NUMBER || '0'), releaseNotes, commits };
   write('dependabot_comment_context.json', JSON.stringify(out, null, 2));
-  write('dependabot_release_notes.md', normalizedReleaseNotes);
-  write('dependabot_commits.md', normalizedCommits);
-  core.setOutput('upstream_repo', parsed.upstreamRepo);
-  core.setOutput('package_name', parsed.packageName);
-  core.setOutput('from_version', parsed.fromVersion);
-  core.setOutput('to_version', parsed.toVersion);
-  core.setOutput('version_range_from_body', versionTextCameFromBody(title, body) ? '1' : '0');
+  write('dependabot_release_notes.md', releaseNotes);
+  write('dependabot_commits.md', commits);
 }
 
 module.exports = runDependabotContext;
-module.exports.parseDependencyUpdate = parseDependencyUpdate;
+module.exports.bodyNotes = bodyNotes;
 module.exports.MAX_DIFF_CHARS = MAX_DIFF_CHARS;
 module.exports.patchIdFromDiff = patchIdFromDiff;
 module.exports.reviewMarkerFromPatchId = reviewMarkerFromPatchId;
 module.exports.reviewedShasForPatch = reviewedShasForPatch;
 module.exports.skipApplies = skipApplies;
 module.exports.bindReviewOutputs = bindReviewOutputs;
-module.exports.versionTextCameFromBody = versionTextCameFromBody;
 module.exports.isActionsBotMarkerComment = isActionsBotMarkerComment;
 module.exports.LEGACY_REVIEW_MARKER = LEGACY_REVIEW_MARKER;
