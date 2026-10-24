@@ -19,6 +19,9 @@ version move ends up in one of:
 - unparsed_locks: a lockfile with no grammar beside a primary change. With no
   primary change beside it, it is a gap.
 
+hashed lists each changed file read whose row records artifact hashes, such as
+a requirements file, for the binding to read the hashes beside a change from.
+
 A name with several entries compares as a set of versions. old and new are the
 versions removed and added, joined with ", ", so a name that moved more than
 one copy is never an exact version.
@@ -51,6 +54,7 @@ class Plan(NamedTuple):
     unchecked: tuple[Change, ...] = ()
     gaps: tuple[tuple[str, str], ...] = ()
     unparsed_locks: tuple[str, ...] = ()
+    hashed: tuple[str, ...] = ()  # each changed path read whose row records artifact hashes (ecosystems.locked)
 
 
 # Each (change, whether it is the top copy) one file moved.
@@ -70,6 +74,11 @@ class _File(NamedTuple):
     kind: str
     reason: str = "unresolved"  # why a GAP file is a gap
     moves: tuple[tuple[Change, bool], ...] = ()  # (change, whether it is primary)
+    hashed: bool = False  # whether its row records artifact hashes (Plan.hashed)
+
+
+def _fixed(fixed: Callable[[Entry], str], entries: dict[str, set[Entry]]) -> set[str]:
+    return {fixed(entry) for each in entries.values() for entry in each}
 
 
 def _moves(row: ecosystems.FileKind, directory: str, before: list[Entry], after: list[Entry]) -> Moves | None:
@@ -77,15 +86,16 @@ def _moves(row: ecosystems.FileKind, directory: str, before: list[Entry], after:
 
     None when an entry changed in a way its versions do not account for.
     """
-    sides: dict[tuple[str, bool], tuple[dict[str, set[str]], dict[str, set[str]]]] = {}
+    sides: dict[tuple[str, bool], tuple[dict[str, set[Entry]], dict[str, set[Entry]]]] = {}
     for side, entries in enumerate((before, after)):
-        for name, version, top, text in entries:
-            sides.setdefault((name, top), ({}, {}))[side].setdefault(version, set()).add(text)
+        for entry in entries:
+            name, version, top, _text = entry
+            sides.setdefault((name, top), ({}, {}))[side].setdefault(version, set()).add(entry)
     moved: Moves = []
     for (name, top), (old, new) in sorted(sides.items()):
         if any(old[version] != new[version] for version in old.keys() & new.keys()):
             return None
-        if not row.records and old and new and set().union(*old.values()) != set().union(*new.values()):
+        if old and new and _fixed(row.fixed, old) != _fixed(row.fixed, new):
             return None
         if old.keys() != new.keys():
             removed, added = ", ".join(sorted(old.keys() - new.keys())), ", ".join(sorted(new.keys() - old.keys()))
@@ -142,7 +152,7 @@ def _read(old_path: str, path: str, status: str, read: Read, base: str) -> list[
     else:
         kind = _VERSIONS
     primary = tuple((change, top and (declared is None or change.name in declared)) for change, top in moves)
-    return [_File(path, group, kind, moves=primary)]
+    return [_File(path, group, kind, moves=primary, hashed=row.hashes is not None)]
 
 
 def _versions(joined: str) -> set[str]:
@@ -189,4 +199,5 @@ def plan(changed: list[tuple[str, str, str]], read: Read, base: str) -> Plan:
     files = [file for old_path, path, status in changed for file in _read(old_path, path, status, read, base)]
     changes = [move for file in files if file.kind == _VERSIONS for move in file.moves]
     parts = [_resolve(file, changes) for file in files]
-    return Plan(*(tuple(dict.fromkeys(item for items in column for item in items)) for column in zip(*parts)))
+    merged = Plan(*(tuple(dict.fromkeys(item for items in column for item in items)) for column in zip(*parts)))
+    return merged._replace(hashed=tuple(file.path for file in files if file.hashed))

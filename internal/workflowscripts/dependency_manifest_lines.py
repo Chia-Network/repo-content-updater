@@ -11,9 +11,19 @@ entry whose text is the whole block. Residue is every line that is not an entry.
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
+
+
+class Pin(NamedTuple):
+    """A requirements file entry's text: its line with the version masked, and its `--hash` values."""
+
+    fixed: str
+    hashes: str
+
 
 # (name, version, top, text)
-Entry = tuple[str, str, bool, str]
+EntryText = str | Pin
+Entry = tuple[str, str, bool, EntryText]
 Parsed = tuple[list[Entry], str]
 
 # `uses: owner/repo[/path]@ref`, optionally a list item, optionally quoted, optionally with a trailing comment.

@@ -13,6 +13,7 @@ dependency-manifest-go
 dependency-manifest-npm
 dependency-manifest-python
 dependency-manifest-lines
+dependency-manifest-pep508
 dependency-cursor-review-prompts
 dependency-cursor-review-combine-outputs
 dependency-cursor-review-dependabot-context

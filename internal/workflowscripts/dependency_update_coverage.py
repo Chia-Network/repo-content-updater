@@ -571,15 +571,15 @@ def _targets(changes: list[_diff.Change]) -> list[tuple[_diff.Change, Target, st
     return resolved
 
 
-def _bind(change: _diff.Change, target: Target, record: dict) -> _binding.Binding:
-    """The binding of a covered scan to the artifact the change installs."""
+def _bind(change: _diff.Change, target: Target, record: dict, hashed: tuple[str, ...]) -> _binding.Binding:
+    """The binding of a covered scan to the artifact the change installs, read from the locks and `hashed` files."""
     subject = _binding.Subject(
         name=target.package,
         version=target.new,
         repo=target.repo.slug,
         commit=str(record.get("resolved_to") or ""),
         locked=_ecosystems.locked(
-            change.ecosystem, change.dir, target.package, target.new, lambda path: _git_text("HEAD", path)
+            change.ecosystem, change.dir, target.package, target.new, lambda path: _git_text("HEAD", path), hashed
         ),
     )
     return _ecosystems.bind(change.ecosystem, subject)
@@ -683,7 +683,7 @@ def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
 
 
 def _scan_all(
-    changes: list[_diff.Change], work: Path, scan_script: Path
+    changes: list[_diff.Change], work: Path, scan_script: Path, hashed: tuple[str, ...]
 ) -> tuple[list[dict], list[tuple[dict, Path]], tuple[dict, ...]]:
     """(records, (record, scan directory) per scan, policy warnings the scans found) for the changes to scan.
 
@@ -709,7 +709,7 @@ def _scan_all(
         records.append(record)
         scans.append((record, dest))
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
-        for (_change, target, record), found in zip(covered, pool.map(lambda item: _bind(*item), covered)):
+        for (_change, target, record), found in zip(covered, pool.map(lambda item: _bind(*item, hashed), covered)):
             record["binding"] = found._asdict()
             record["repo_source"] = _binding.repo_source(target.repo.source, found)
     return records, scans, tuple(warnings)
@@ -727,7 +727,7 @@ def main() -> None:
     remove_entry(work)
     work.mkdir()
     try:
-        scanned, scans, found = _scan_all(changes, work, scan_script)
+        scanned, scans, found = _scan_all(changes, work, scan_script, plan.hashed)
         records = [uncovered(Target(path=path), reason) for path, reason in gaps] + scanned
         unchecked = tuple(change._asdict() for change in plan.unchecked)
         report = aggregate(records, Disclosure(warnings + found, unchecked, plan.unparsed_locks))

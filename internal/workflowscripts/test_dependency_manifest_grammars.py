@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import dependency_manifest_go
 from dependency_manifest_go import go_mod, go_sum, go_sum_hash, go_zip_hash
-from dependency_manifest_lines import dockerfile_from, terraform_config, terraform_lock, workflow_uses
+from dependency_manifest_lines import Pin, dockerfile_from, terraform_config, terraform_lock, workflow_uses
 from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
 from dependency_manifest_python import (
     pipfile_lock,
@@ -21,6 +21,8 @@ from dependency_manifest_python import (
     poetry_lock,
     poetry_lock_hashes,
     requirements,
+    requirements_hashes,
+    requirements_txt,
 )
 
 
@@ -301,6 +303,144 @@ class PythonGrammarTest(unittest.TestCase):
             'rich = { version = "13.7.0", extras = ["jupyter"] }\n'
         )
         self.assertEqual(_entries(requirements(text)), {("httpx", "==0.27.0", True), ("rich", "13.7.0", True)})
+
+
+_A, _B = (f"sha256:{digit * 64}" for digit in "ab")
+
+
+def _pins(parsed: tuple[list, str] | None) -> list[tuple[str, str, str, str]] | None:
+    """(name, version, Pin fixed part, requirements_hashes) of each entry, or None when the file does not parse."""
+    if parsed is None:
+        return None
+    assert all(isinstance(entry[3], Pin) for entry in parsed[0])
+    return [(entry[0], entry[1], entry[3].fixed, requirements_hashes(entry)) for entry in parsed[0]]
+
+
+class RequirementsTxtGrammarTest(unittest.TestCase):
+    def test_each_line_reads_as_pip_reads_it(self) -> None:
+        """(case, text, pins); a hash is read only where pip reads it, and only from options the review reads."""
+        cases = (
+            ("one hash", f"sigstore==3.6.1 --hash={_A}\n", [("sigstore", "==3.6.1", "sigstore\0", _A)]),
+            (
+                "continued hashes",
+                f"requests==2.32.0 \\\n    --hash={_B} \\\n    --hash={_A}\n    # via app\n",
+                [("requests", "==2.32.0", "requests\0", f"{_A} {_B}")],
+            ),
+            (
+                "extras, marker, comment, both spellings, a repeated hash",
+                f"Django[argon2]==4.2.7 ; python_version >= '3.10' \\\n  --hash {_B} --hash={_A} --hash={_A}  # pin\n",
+                [("django", "==4.2.7", "Django[argon2]\0 ; python_version >= '3.10'", f"{_A} {_B}")],
+            ),
+            ("quoted value", f"sigstore==3.6.1 --hash='{_A}'\n", [("sigstore", "==3.6.1", "sigstore\0", _A)]),
+            ("continuation at the end", "requests==2.32.0 \\\n", [("requests", "==2.32.0", "requests\0", "")]),
+            ("hash in a comment", f"sigstore==3.6.1  # --hash={_A}\n", [("sigstore", "==3.6.1", "sigstore\0", "")]),
+            (
+                "a comment ends the line its continuation joins",
+                f"sigstore==3.6.1 # c \\\n    --hash={_A}\n",
+                [("sigstore", "==3.6.1", "sigstore\0", "")],
+            ),
+            (
+                "hash in a quoted marker, tab-separated",
+                f'sigstore==3.6.1 ; platform_machine == "\t--hash={_A}\t"\n',
+                [("sigstore", "==3.6.1", f'sigstore\0 ; platform_machine == "\t--hash={_A}\t"', "")],
+            ),
+            ("arbitrary equality", f"sigstore===3.6.1 --hash={_A}\n", [("sigstore", "===3.6.1", "sigstore\0", _A)]),
+            (
+                "parenthesized specifier",
+                f"sigstore (==3.6.1) --hash={_A}\n",
+                [("sigstore", "==3.6.1", "sigstore (\0)", _A)],
+            ),
+            (
+                "duplicate entries",
+                f"sigstore==3.6.1 --hash={_A}\nsigstore==3.6.1\n",
+                [("sigstore", "==3.6.1", "sigstore\0", _A), ("sigstore", "==3.6.1", "sigstore\0", "")],
+            ),
+        )
+        # Every pre-release spelling pip accepts is a version.
+        for version in ("1.0a1", "1.0alpha1", "1.0b1", "1.0beta1", "1.0c1", "1.0rc1", "1.0pre1", "1.0preview1"):
+            line = f"sigstore=={version} --hash={_A}\n"
+            cases += ((version, line, [("sigstore", f"=={version}", "sigstore\0", _A)]),)
+        # Values pip reads as hashes, or rejects, are read as written; the binding takes only lowercase sha256.
+        for value in ("md5:" + "a" * 32, "sha384:" + "a" * 96, "sha512:" + "a" * 128, "SHA256:" + "A" * 64):
+            cases += ((value, f"sigstore==3.6.1 --hash={value}\n", [("sigstore", "==3.6.1", "sigstore\0", value)]),)
+        # An option the review does not read, or a malformed `--hash`, reads no hash, and stays in the fixed part.
+        for options in (
+            "--hash=sha256",
+            "--hash=",
+            "--hash",
+            f"--hash='{_A} {_B}'",
+            f"--has={_A}",
+            f"--hash={_A} extra",
+            f"--hash={_A} -- --hash={_B}",
+            f"--config-settings a=b --hash={_A}",
+            f"-i https://example.org/simple --hash={_A}",
+            f"--hash='{_A}",
+        ):
+            cases += (
+                (options, f"sigstore==3.6.1 {options}\n", [("sigstore", "==3.6.1", f"sigstore\0 {options}", "")]),
+            )
+        # Option lines, lines pip completes from the environment, and requirements that are not pinned are residue.
+        for line in (
+            "-r base.txt",
+            "-c constraints.txt",
+            "-e ./local",
+            "-e git+https://github.com/a/b#egg=b",
+            "--index-url https://example.org/simple",
+            "--extra-index-url https://example.org/simple",
+            "-i https://example.org/simple",
+            "-f https://example.org/links",
+            "--find-links ./wheels",
+            "--require-hashes",
+            f"--hash={_A}",
+            "requests",
+            "./local/pkg",
+            f"sigstore==3.6.1,!=3.6.1 --hash={_A}",
+            f"sigstore==3.6.1,>3.6.1 --hash={_A}",
+            f"sigstore==3.6.1,<2 --hash={_A}",
+            f"sigstore==3.* --hash={_A}",
+            f"sigstore>=3.6 --hash={_A}",
+            f"sigstore @ https://example.org/sigstore-3.6.1.tar.gz --hash={_A}",
+            "sigstore==3.6.1 --hash=${SIGSTORE_HASH}",
+            "${SIGSTORE}",
+        ):
+            cases += ((line, line + "\n", []),)
+        # pip builds no requirement from these lines, so the file does not parse.
+        for line in (
+            'sigstore = "3.6.1"',
+            f'sigstore = "3.6.1" --hash={_A}',
+            f'sigstore==3.6.1 ; platform_machine == " --hash={_A} "',
+            f"sigstore==3.6.1\t--hash={_A}",
+            f"sigstore==3.6.1 extra --hash={_A}",
+            f"sigstore==3.6.1 ; platform_machine == --hash={_A}",
+            f"sigstore==3.6.1\t--hash={_A} --hash={_B}",
+            f"sigstore.==1.0 --hash={_A}",
+            f"sigstore===3.6.1,foo --hash={_A}",
+            f"sigstore~=1 --hash={_A}",
+            f"sigstore==3.6.1 ; {'(' * 600}os_name == 'nt'{')' * 600}",
+            "sigstore==",
+            "sigstore (==3.6.1",
+            "sigstore==3.6.1 ; unknown_variable == 'a'",
+            "sigstore==3.6.1 ; (python_version > '3'",
+            "[packages]",
+            "  [tool.poetry.dependencies]",
+            f'"sigstore==3.6.1 --hash={_A}"',
+            "'sigstore==3.6.1'",
+        ):
+            cases += ((line, f"{line}\nsigstore==3.6.1 --hash={_A}\n", None),)
+        for case, text, pins in cases:
+            with self.subTest(case=case):
+                self.assertEqual(_pins(requirements_txt(text)), pins)
+
+    def test_residue_is_every_other_line_as_written(self) -> None:
+        text = f"# via pip-compile\n-r base.txt\nrequests==2.32.0 \\\n    --hash={_A}\n    # via app\n# note \\\nidna\n"
+        parsed = requirements_txt(text)
+        self.assertEqual(_entries(parsed), {("requests", "==2.32.0", True)})
+        self.assertEqual(parsed[1], "# via pip-compile\n-r base.txt\n    # via app\n# note \\\nidna\n")
+
+    def test_a_requirements_file_is_read_without_the_manifest_grammar(self) -> None:
+        text = '[tool.poetry.dependencies]\nsigstore = "3.6.1"\n'
+        self.assertEqual(_entries(requirements(text)), {("sigstore", "3.6.1", True)})
+        self.assertIsNone(requirements_txt(text))
 
 
 class PythonLockGrammarTest(unittest.TestCase):

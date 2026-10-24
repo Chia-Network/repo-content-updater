@@ -22,8 +22,20 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-# A PEP 440 pre/post/dev release (`1.2.3rc1`, `1.2.3.post1`, `1.2.3.dev0`)
-# or a separator-prefixed pre/build suffix may spell out an exact version.
+# A PEP 440 version, the one grammar pip versions are read with: an optional epoch, a release, then a pre, post and
+# dev release in any of the spellings pip accepts (alternatives longest first, so `alpha` is not read as `a`).
+_PEP440_RELEASES = (
+    r"(?:[-_.]?(?:alpha|beta|preview|pre|rc|a|b|c)[-_.]?[0-9]*)?"
+    r"(?:-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?"
+    r"(?:[-_.]?dev[-_.]?[0-9]*)?"
+)
+PEP440_VERSION = r"v?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*" + _PEP440_RELEASES
+# `~=` takes a version with at least two release parts: `~=1.4` is `>=1.4, ==1.*`, and `~=1` means nothing.
+PEP440_COMPATIBLE_VERSION = r"v?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)+" + _PEP440_RELEASES
+# A PEP 440 local version label (`+ubuntu.1`).
+PEP440_LOCAL = r"\+[a-z0-9]+(?:[-_.][a-z0-9]+)*"
+# Outside pip, an npm, Go or action version may end in a pre/post/dev release (`1.2.3rc1`, `1.2.3.post1`) or a
+# separator-prefixed pre/build suffix.
 _SUFFIX = (
     r"(?:"
     r"(?:a|b|c|rc)[0-9]+(?:\.post[0-9]+)?(?:\.dev[0-9]+)?"
@@ -36,8 +48,8 @@ _SUFFIX = (
 _PIN_PREFIX_RE = re.compile(r"^(?:===|==|[vV])")
 # Outside a Python manifest only a tag-style `v`/`V` is dropped.
 _V_PREFIX_RE = re.compile(r"^[vV]")
-# Dot-separated numeric parts are the version. An x/X or * part is a wildcard.
-_EXACT_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*" + _SUFFIX)
+# A pip version is exact when it is a whole PEP 440 version; an x/X or * part is a wildcard.
+_EXACT_VERSION_RE = re.compile(rf"{PEP440_VERSION}(?:{PEP440_LOCAL})?", re.IGNORECASE)
 # `1` or `1.2` is an npm X-range and a moving action tag, never an exact
 # version, so npm and action versions have exactly three numeric parts.
 _SEMVER_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+" + _SUFFIX)

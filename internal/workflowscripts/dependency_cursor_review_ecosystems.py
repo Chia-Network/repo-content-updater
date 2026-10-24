@@ -17,9 +17,11 @@ versions the manifest beside them names, so every version a checksum file adds
 or drops must be one the manifest beside it adds or drops.
 
 Each grammar returns (name, version, top, text) entries. An entry's text may
-change only with its version. In a line grammar the text is the line with the
-version masked, so it may not change at all; in a record grammar (a lock copy,
-a provider block) it is the whole record, which changes with the version.
+change only with its version, and its row's `fixed` part of it not at all. In a
+line grammar the text is the line with the version masked, and all of it is
+fixed, or all but a requirements line's `--hash` options, which pin the
+version's files. In a record grammar (a lock copy, a provider block) it is the
+whole record, which changes with the version, and none of it is fixed.
 """
 
 from __future__ import annotations
@@ -33,7 +35,15 @@ import dependency_cursor_review_binding as binding
 import dependency_cursor_review_upstream as upstream
 from dependency_cursor_review_versions import commit_ref, exact_body, moving_ref
 from dependency_manifest_go import go_mod, go_sum, go_sum_hash
-from dependency_manifest_lines import Entry, Parsed, dockerfile_from, terraform_config, terraform_lock, workflow_uses
+from dependency_manifest_lines import (
+    Entry,
+    Parsed,
+    Pin,
+    dockerfile_from,
+    terraform_config,
+    terraform_lock,
+    workflow_uses,
+)
 from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
 from dependency_manifest_python import (
     pipfile_lock,
@@ -41,6 +51,8 @@ from dependency_manifest_python import (
     poetry_lock,
     poetry_lock_hashes,
     requirements,
+    requirements_hashes,
+    requirements_txt,
 )
 
 # Why a change is not scanned. Docker images and Terraform providers have no
@@ -107,13 +119,23 @@ class Ecosystem(NamedTuple):
     bind: Callable[[binding.Subject], binding.Binding] = binding.unsupported
 
 
+def _line(entry: Entry) -> str:
+    """A line entry's text, or a requirements Pin's fixed part."""
+    text = entry[3]
+    return text.fixed if isinstance(text, Pin) else text
+
+
+def _record(_entry: Entry) -> str:
+    return ""
+
+
 class FileKind(NamedTuple):
     ecosystem: Ecosystem
     role: str
     parse: Callable[[str], Parsed | None] | None
     names: frozenset[str] = frozenset()  # exact file names
     match: Callable[[PurePosixPath], bool] | None = None  # any other path shape
-    records: bool = False  # entries are whole records, not lines
+    fixed: Callable[[Entry], str] = _line  # the part of an entry's text no version change may change
     # The artifact hash an installed copy's entry records, "" for none; None for an entry that is no installed copy.
     hashes: Callable[[Entry], str | None] | None = None
 
@@ -138,7 +160,14 @@ CARGO, BUNDLER, COMPOSER, SWIFT, NUGET = (
 
 def _top_copy(read: Callable[[str], str]) -> Callable[[Entry], str | None]:
     """A lock installs the top entry for a name; a nested entry is the copy another dependency installs."""
-    return lambda entry: read(entry[3]) if entry[2] else None
+
+    def top(entry: Entry) -> str | None:
+        text = entry[3]
+        if not entry[2]:
+            return None
+        return read(text) if isinstance(text, str) else ""
+
+    return top
 
 
 def _requirements(path: PurePosixPath) -> bool:
@@ -169,21 +198,29 @@ _FILES = (
         LOCK,
         package_lock,
         frozenset({"package-lock.json", "npm-shrinkwrap.json"}),
-        records=True,
+        fixed=_record,
         hashes=_top_copy(package_lock_integrity),
     ),
-    FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), records=True, hashes=_top_copy(yarn_lock_integrity)),
+    FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), fixed=_record, hashes=_top_copy(yarn_lock_integrity)),
     FileKind(NPM, LOCK, None, frozenset({"pnpm-lock.yaml"})),
     FileKind(GO, MANIFEST, go_mod, frozenset({"go.mod"})),
-    FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), records=True, hashes=go_sum_hash),
+    FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), fixed=_record, hashes=go_sum_hash),
+    FileKind(PIP, MANIFEST, requirements, frozenset({"pyproject.toml", "setup.py", "setup.cfg", "Pipfile"})),
+    # A requirements file pinned with `--hash` is the lock of what pip installs from it.
     FileKind(
-        PIP, MANIFEST, requirements, frozenset({"pyproject.toml", "setup.py", "setup.cfg", "Pipfile"}), _requirements
+        PIP,
+        MANIFEST,
+        requirements_txt,
+        match=_requirements,
+        hashes=requirements_hashes,
     ),
-    FileKind(PIP, LOCK, poetry_lock, frozenset({"poetry.lock"}), records=True, hashes=_top_copy(poetry_lock_hashes)),
-    FileKind(PIP, LOCK, pipfile_lock, frozenset({"Pipfile.lock"}), records=True, hashes=_top_copy(pipfile_lock_hashes)),
+    FileKind(PIP, LOCK, poetry_lock, frozenset({"poetry.lock"}), fixed=_record, hashes=_top_copy(poetry_lock_hashes)),
+    FileKind(
+        PIP, LOCK, pipfile_lock, frozenset({"Pipfile.lock"}), fixed=_record, hashes=_top_copy(pipfile_lock_hashes)
+    ),
     FileKind(ACTIONS, MANIFEST, workflow_uses, match=_workflow),
     FileKind(DOCKER, MANIFEST, dockerfile_from, match=_dockerfile),
-    FileKind(TERRAFORM, MANIFEST, terraform_lock, frozenset({".terraform.lock.hcl"}), records=True),
+    FileKind(TERRAFORM, MANIFEST, terraform_lock, frozenset({".terraform.lock.hcl"}), fixed=_record),
     FileKind(TERRAFORM, MANIFEST, terraform_config, match=_terraform),
     FileKind(CARGO, MANIFEST, None, frozenset({"Cargo.toml"})),
     FileKind(CARGO, LOCK, None, frozenset({"Cargo.lock"})),
@@ -215,8 +252,24 @@ def _first(rules: tuple[_RefRule, ...], old: str, new: str) -> str:
     return next((reason for reason, applies in rules if applies(old, new)), "")
 
 
-def locked(ecosystem: str, directory: str, name: str, version: str, read: Callable[[str], str]) -> tuple[str, ...]:
-    """The hash each installed copy of `name` at exact `version` records in the locks and checksums beside `directory`.
+def hash_sources(ecosystem: Ecosystem, directory: str, hashed: tuple[str, ...]) -> dict[str, FileKind]:
+    """Each file that records the hashes of the installed copies beside `directory`, with its row.
+
+    That is the locks and checksums there, and each `hashed` path there (dependency_manifest_diff.Plan.hashed), such
+    as a requirements file.
+    """
+    sources = dict(item for role in (LOCK, CHECKSUMS) for item in beside(ecosystem, role, directory))
+    for path in hashed:
+        row = file_kind(path)
+        if row and row.ecosystem == ecosystem and str(PurePosixPath(path).parent) == directory:
+            sources[path] = row
+    return sources
+
+
+def locked(
+    ecosystem: str, directory: str, name: str, version: str, read: Callable[[str], str], hashed: tuple[str, ...]
+) -> tuple[str, ...]:
+    """The hash each installed copy of `name` at exact `version` records in the hash_sources beside `directory`.
 
     Each row's `hashes` reads which entries are installed copies and what they record. "" is a copy with no hash.
     """
@@ -224,7 +277,7 @@ def locked(ecosystem: str, directory: str, name: str, version: str, read: Callab
     if row is None or not version:
         return ()
     found: list[str] = []
-    for path, kind in [item for role in (LOCK, CHECKSUMS) for item in beside(row, role, directory)]:
+    for path, kind in hash_sources(row, directory, hashed).items():
         parsed = kind.parse(read(path)) if kind.hashes else None
         for entry in parsed[0] if parsed else ():
             recorded = kind.hashes(entry)
