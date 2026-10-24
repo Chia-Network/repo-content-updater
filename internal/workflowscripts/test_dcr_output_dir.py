@@ -140,26 +140,56 @@ class ScanJobOutputTest(_Checkout):
 class AgentOutputTest(_Checkout):
     _NAMES = ("cursor_output_malware.json", "cursor_output_compatibility.json")
 
-    def _run_agent_step(self, key: str) -> Path:
+    _AGENT = '#!/bin/sh\necho \'{"type":"result","result":"ok"}\'\n'
+    # Fails on a prompt read from stdin; answers a prompt passed as its last argument, which it keeps.
+    _STDIN_FAILS = (
+        '#!/bin/sh\n[ "$#" -eq 7 ] || exit 1\nprintf %s "$7" >>"$ARGV_PROMPTS"\n'
+        'echo \'{"type":"result","result":"ok"}\'\n'
+    )
+
+    def _run_agent_step(self, key: str, agent_script: str = _AGENT, prompt: str = "prompt\n", **extra: str) -> Path:
         bin_dir = self.outside / "bin"
         bin_dir.mkdir()
         agent = bin_dir / "agent"
-        agent.write_text('#!/bin/sh\necho \'{"type":"result","result":"ok"}\'\n', encoding="utf-8")
+        agent.write_text(agent_script, encoding="utf-8")
         agent.chmod(0o755)
         Path("dcr-scan-input").mkdir()
         for name in ("cursor_prompt_malware.txt", "cursor_prompt_compatibility.txt"):
-            (Path("dcr-scan-input") / name).write_text("prompt\n", encoding="utf-8")
+            (Path("dcr-scan-input") / name).write_text(prompt, encoding="utf-8")
         runner_temp = self.outside / "runner-temp"
         runner_temp.mkdir()
-        env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "CURSOR_API_KEY": key, "RUNNER_TEMP": str(runner_temp)}
+        env = {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "CURSOR_API_KEY": key,
+            "RUNNER_TEMP": str(runner_temp),
+            **extra,
+        }
         subprocess.run(["bash", "-c", _step_script("Run Cursor agent")], check=True, env=env)
-        self.assertEqual(sorted(p.name for p in self.checkout.iterdir()), ["dcr-scan-input"])
         return runner_temp / "dcr-out"
 
     def test_agent_outputs_are_written_to_the_output_dir(self) -> None:
         out = self._run_agent_step("key")
+        self.assertEqual(sorted(p.name for p in self.checkout.iterdir()), ["dcr-scan-input"])
         for name in self._NAMES:
             self.assertEqual(json.loads((out / name).read_text(encoding="utf-8"))["result"], "ok")
+
+    def test_agent_step_python_ignores_the_checkout_and_pythonpath(self) -> None:
+        """A json.py or sys.py in the working directory or on PYTHONPATH is never imported, fallback included."""
+        planted = self.outside / "planted"
+        planted.mkdir()
+        hit = self.outside / "imported"
+        for directory in (self.checkout, planted):
+            for module in ("json.py", "sys.py"):
+                (directory / module).write_text(f"open({str(hit)!r}, 'a').write('{module}')\n", encoding="utf-8")
+        prompts = self.outside / "argv-prompts"
+        out = self._run_agent_step(
+            "key", self._STDIN_FAILS, "p" * 60001, PYTHONPATH=str(planted), ARGV_PROMPTS=str(prompts)
+        )
+        self.assertFalse(hit.exists())
+        for name in self._NAMES:
+            self.assertEqual(json.loads((out / name).read_text(encoding="utf-8"))["result"], "ok")
+        notice = "\n\n[Prompt truncated for CLI argument compatibility.]"
+        self.assertEqual(prompts.read_text(encoding="utf-8"), ("p" * 60000 + notice) * 2)
 
     def test_skipped_agent_outputs_are_written_to_the_output_dir(self) -> None:
         out = self._run_agent_step("")

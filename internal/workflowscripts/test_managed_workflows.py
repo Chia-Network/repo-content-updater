@@ -119,7 +119,8 @@ class DependencyCursorReviewWorkflowSecurityTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(job.count(setup), 1)
                 self.assertLess(job.index(setup), job.index(runs.get(name, "python3 -I")))
-        self.assertNotIn("python3 -I", self._job(workflow, "dependency-review-agent"))
+        # The agent job runs no managed script: its only Python is stdlib code read from a heredoc.
+        self.assertNotRegex(self._job(workflow, "dependency-review-agent"), r"python3(?! -I - )")
         self.assertEqual(workflow.count("actions/setup-python@"), 2)
 
     def test_agent_job_cannot_reach_the_verdict(self) -> None:

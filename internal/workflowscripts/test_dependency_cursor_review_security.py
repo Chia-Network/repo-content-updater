@@ -85,6 +85,18 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
         self.assertIn("from_tag:", scan_outputs)
         self.assertIn("to_tag:", scan_outputs)
 
+    def test_every_python3_invocation_in_the_workflow_is_isolated(self) -> None:
+        """No python3 call reads code from argv, the working directory or PYTHONPATH."""
+        lines = [
+            line for line in _WORKFLOW.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#")
+        ]
+        calls = [match for line in lines for match in re.finditer(r"\bpython3?(?=\s|$)(.*)", line)]
+        self.assertGreaterEqual(len(calls), 5)
+        for call in calls:
+            with self.subTest(call=call.group(0)):
+                self.assertRegex(call.group(0), r"^python3 -I ")
+                self.assertNotRegex(call.group(1), r"(^|\s)-c(\s|$)")
+
     def test_agent_job_is_isolated_from_the_verdict(self) -> None:
         workflow = _WORKFLOW.read_text(encoding="utf-8")
         agent = workflow.split("\n  dependency-review-agent:\n", 1)[1].split("\n  dependency-review:\n", 1)[0]

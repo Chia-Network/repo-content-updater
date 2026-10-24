@@ -454,10 +454,22 @@ jobs:
             local stream_file
             stream_file="$(mktemp)"
             if ! agent -f --mode ask -p --output-format stream-json < "$prompt_file" > "$stream_file"; then
-              FALLBACK_PROMPT="$(python3 -c 'from pathlib import Path; import sys; path = sys.argv[1]; max_bytes = 60000; raw = Path(path).read_bytes(); text = raw[:max_bytes].decode("utf-8", errors="ignore"); text += "\n\n[Prompt truncated for CLI argument compatibility.]" if len(raw) > max_bytes else ""; print(text, end="")' "$prompt_file")"
+              FALLBACK_PROMPT="$(
+                python3 -I - "$prompt_file" <<'PY'
+          import sys
+
+          max_bytes = 60000
+          with open(sys.argv[1], "rb") as handle:
+              raw = handle.read(max_bytes + 1)
+          text = raw[:max_bytes].decode("utf-8", errors="ignore")
+          if len(raw) > max_bytes:
+              text += "\n\n[Prompt truncated for CLI argument compatibility.]"
+          print(text, end="")
+          PY
+              )"
               agent -f --mode ask -p --output-format stream-json "$FALLBACK_PROMPT" > "$stream_file"
             fi
-            python3 - "$stream_file" <<'PY' >"$output_file"
+            python3 -I - "$stream_file" <<'PY' >"$output_file"
           import json
           import sys
 
