@@ -26,7 +26,7 @@ _ListFiles = Callable[[str], list[tuple[str, str]] | None]
 
 _REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
 _REGISTRY_FIELD_RE = re.compile(r"^    ([A-Za-z0-9_-]+):[ \t]+(.+?)[ \t]*$")
-_REGISTRY_FIELDS = frozenset({"type", "url", "replaces-base"})
+_REGISTRY_FIELDS = frozenset({"type", "url"})
 _SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
 _PYPI_INDEXES = frozenset({"https://pypi.org/simple/", "https://pypi.python.org/simple/"})
@@ -84,8 +84,9 @@ def _dependabot_indexes(text: str) -> Indexes:
     """The python-index registries of one Dependabot config. Only a URL in TRUSTED_PYTHON_INDEXES is trusted.
 
     Inside `registries:` every line must be a registry key or a recognised field under one, and every mention of
-    `python-index` must be a parsed type field. Anything else leaves the config unread. `replaces-base` describes
-    Dependabot's resolution only, so it never makes an index replace PyPI for pip.
+    `python-index` must be a parsed type field. A field written twice under one registry is ambiguous, and anything
+    else that is not read leaves the config unread. `replaces-base` is not recorded: only a requirements file's
+    effective index replaces PyPI for pip.
     """
     in_registries = False
     fields: dict[str, str] | None = None
@@ -110,7 +111,7 @@ def _dependabot_indexes(text: str) -> Indexes:
                 registry_key = True
             elif fields is not None and (match := _REGISTRY_FIELD_RE.match(content)):
                 name, scalar = match.group(1), _registry_scalar(match.group(2))
-                if scalar is None:
+                if scalar is None or name in fields:
                     unread = True
                 elif name in _REGISTRY_FIELDS:
                     fields[name] = scalar

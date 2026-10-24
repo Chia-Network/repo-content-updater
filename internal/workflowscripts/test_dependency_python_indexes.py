@@ -282,6 +282,16 @@ class PythonIndexesTest(unittest.TestCase):
             indexes.Indexes(frozenset({_CHIA})),
         )
 
+    def test_a_registry_field_written_twice_leaves_the_config_unread(self) -> None:
+        text = (
+            "registries:\n"
+            "  chia:\n"
+            "    type: python-index\n"
+            "    url: https://example.com/simple/\n"
+            f"    url: {_CHIA}\n"
+        )
+        self.assertEqual(indexes._dependabot_indexes(text), indexes.Indexes(other=True))
+
     def test_a_registry_name_or_comment_does_not_hide_a_trusted_registry(self) -> None:
         text = (
             "# python-index\n"
