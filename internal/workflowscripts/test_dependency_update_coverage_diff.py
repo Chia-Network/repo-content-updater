@@ -234,6 +234,7 @@ class PolicyTest(_Diff):
             {".github/workflows/ci.yml": _WORKFLOW.format("v5"), "Cargo.toml": '[dependencies]\nserde = "1.0.2"\n'},
         )
         self.assertIs(report["scan_conclusive"], False)
+        self.assertIn("not covered (unscannable_ecosystem)", _summary)
         published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=True)
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
 

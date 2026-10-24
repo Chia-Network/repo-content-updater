@@ -148,9 +148,13 @@ def _registry_version(name: str, version: str, resolved: str) -> str:
 
 
 def _installed(name: str, record: dict) -> str:
-    """The installed version of a lock record. An alias installs another package, so it is never the registry copy."""
+    """The installed version of a lock record. An alias installs another package, so it is never the registry copy.
+
+    A `link` record's resolved source is a local path, so its version carries that source
+    like any other non-registry copy.
+    """
     version, resolved, alias = str(record.get("version") or ""), record.get("resolved"), record.get("name", name)
-    if not version or record.get("link") is True:
+    if not version:
         return version
     if alias != name:
         return f"{version} (alias of {alias})"

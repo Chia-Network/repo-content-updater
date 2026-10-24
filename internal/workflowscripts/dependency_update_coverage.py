@@ -2,7 +2,7 @@
 
 The manifest diff (dependency_manifest_diff.plan) is the update list. A
 primary change is scanned unless its ecosystem's policy warns; a dependency is
-covered only when its scan is conclusive and both from_tag and to_tag are set.
+covered only when its scan is conclusive and both release commits resolved.
 Anything else makes the group inconclusive. Each covered scan carries the
 binding of the scanned commit to the installed artifact, and where the
 scanned repository's name came from. Policy warnings,
@@ -102,13 +102,16 @@ def _tag(target: Target, report: dict) -> dict:
     return tagged
 
 
-def _tagged(report: dict) -> bool:
-    return bool(str(report.get("from_tag") or "").strip()) and bool(str(report.get("to_tag") or "").strip())
+def _resolved(report: dict) -> bool:
+    return bool(str(report.get("resolved_from") or "").strip()) and bool(str(report.get("resolved_to") or "").strip())
 
 
 def _covered(report: dict) -> bool:
-    """Conclusive tag-to-tag scan. A branch or HEAD does not count; an action's commit SHA is its own tag."""
-    return report.get("scan_conclusive") is True and _tagged(report)
+    """Conclusive release-to-release scan.
+
+    A branch or HEAD does not count; an action's commit SHA is its own release.
+    """
+    return report.get("scan_conclusive") is True and _resolved(report)
 
 
 def _apply_coverage(report: dict) -> dict:

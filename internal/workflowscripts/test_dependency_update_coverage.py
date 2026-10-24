@@ -157,8 +157,8 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
 
     def test_single_update_summary_reflects_coverage_not_the_child_summary(self) -> None:
         child = _clean("lodash", "lodash/lodash")
-        child["from_tag"] = ""
-        child["to_tag"] = ""
+        child["resolved_from"] = ""
+        child["resolved_to"] = ""
         child["scan_conclusive"] = False
 
         def scan_and_publish(_update: coverage.Target, dest: Path, _script: Path, _ecosystem: str) -> dict:
@@ -405,12 +405,9 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             self.assertIn(f"resolved_to={'c' * 40}", emitted)
             self.assertIn("scan_conclusive=false", emitted)
 
-    def test_conclusive_without_tags_is_not_covered(self) -> None:
+    def test_conclusive_without_resolved_releases_is_not_covered(self) -> None:
         report = _clean("lodash", "lodash/lodash")
-        report["from_tag"] = ""
-        report["to_tag"] = ""
-        report["resolved_from"] = "a" * 40
-        report["resolved_to"] = "a" * 40
+        report["resolved_from"] = ""
         report["materialized_count"] = 0
         aggregated = coverage.aggregate([report])
         self.assertIs(aggregated["scan_conclusive"], False)
@@ -419,11 +416,19 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIsNone(coverage.agent_target([report]))
         self.assertIsNone(aggregated["agent_target"])
 
+    def test_a_conclusive_untagged_commit_range_is_covered(self) -> None:
+        report = _clean("actions/checkout", "actions/checkout")
+        report["from_tag"] = ""
+        report["to_tag"] = ""
+        aggregated = coverage.aggregate([report])
+        self.assertIs(aggregated["scan_conclusive"], True)
+        self.assertEqual(coverage.agent_target([report]), ("actions/checkout", "actions/checkout", "b" * 40))
+
     def test_grouped_incomplete_review_cites_unread_and_is_not_benign(self) -> None:
         covered = _clean("lodash", "lodash/lodash")
         partial = _clean("minimist", "minimistjs/minimist")
-        partial["from_tag"] = ""
-        partial["to_tag"] = ""
+        partial["resolved_from"] = ""
+        partial["resolved_to"] = ""
         partial["scan_conclusive"] = False
         partial["status"] = "not_scanned"
         partial["not_scanned_reason"] = "incomplete_coverage"
@@ -457,8 +462,8 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
     def test_uncovered_finding_status_is_kept(self) -> None:
         for status in ("fail", "warn"):
             report = _clean("lodash", "lodash/lodash")
-            report["from_tag"] = ""
-            report["to_tag"] = ""
+            report["resolved_from"] = ""
+            report["resolved_to"] = ""
             report["status"] = status
             report["findings"]["ioc"] = [{"path": "pkg/index.js", "line": 1}]
             aggregated = coverage.aggregate([report])
@@ -468,8 +473,8 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
 
     def test_uncovered_fail_returns_after_writing_the_report(self) -> None:
         child = _clean("lodash", "lodash/lodash")
-        child["from_tag"] = ""
-        child["to_tag"] = ""
+        child["resolved_from"] = ""
+        child["resolved_to"] = ""
         child["status"] = "fail"
         child["findings"]["ioc"] = [{"path": "pkg/index.js", "line": 1, "kind": "ioc", "match": "x"}]
         report, summary, output = _run_main(

@@ -27,8 +27,10 @@ Entry = tuple[str, str, bool, EntryText]
 Parsed = tuple[list[Entry], str]
 
 # `uses: owner/repo[/path]@ref`, optionally a list item, optionally quoted, optionally with a trailing comment.
+# A comment that is only a version (`# v4.1.2`, the tag beside a pinned SHA) is group 4.
 _USES_RE = re.compile(
-    r"""^\s*(?:-\s+)?uses:\s*(["']?)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_./-]+)?)@([^\s"'#]+)\1\s*(?:#.*)?$"""
+    r"""^\s*(?:-\s+)?uses:\s*(["']?)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_./-]+)?)@([^\s"'#]+)\1"""
+    r"""\s*(?:#\s*([vV]?[0-9][0-9A-Za-z.+-]*)\s*|#.*)?$"""
 )
 _FROM_RE = re.compile(r"^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+\S+)?\s*$", re.IGNORECASE)
 _PROVIDER_RE = re.compile(r'^provider\s+"([^"]+)"\s*\{\s*$')
@@ -46,7 +48,9 @@ def workflow_uses(text: str) -> Parsed:
     for line in text.splitlines(keepends=True):
         match = _USES_RE.match(line)
         if match:
-            entries.append((match.group(2), match.group(3), True, _masked(line, match, 3)))
+            # The version comment is masked with the ref, so it may change with it.
+            masked = line[: match.start(4)] + "\0" + line[match.end(4) :] if match.group(4) else line
+            entries.append((match.group(2), match.group(3), True, _masked(masked, match, 3)))
         else:
             residue.append(line)
     return entries, "".join(residue)

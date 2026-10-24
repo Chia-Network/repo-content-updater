@@ -27,8 +27,7 @@ def _assert_not_benign(test: UpstreamScanCase, report: dict) -> None:
     test.assertNotIn("Status: **clean**", report["_summary"])
     summary = report["_summary"]
     test.assertTrue(
-        "not evidence the package is benign" in summary
-        or "not a benign result" in summary,
+        "not evidence the package is benign" in summary or "not a benign result" in summary,
         msg=summary,
     )
     test.assertNotIn("Changed node/vendor paths: `0`", summary)
@@ -51,7 +50,7 @@ class ReleaseResolutionTest(UpstreamScanCase):
                 MALWARE_IOC_PATTERNS='["COMMIT_RANGE_MARKER"]',
             )
             self.assertTrue(report["scan_conclusive"], msg=report)
-            self.assertEqual((report["from_tag"], report["to_tag"]), (old, new))
+            self.assertEqual((report["from_tag"], report["to_tag"]), ("", ""))
             self.assertEqual(report["resolved_range"], f"{old}..{new}")
             self.assertEqual([item["file"] for item in report["findings"]["ioc"]], ["action.js"])
 
@@ -77,9 +76,7 @@ class ReleaseResolutionTest(UpstreamScanCase):
             )
             _assert_not_benign(self, report)
             self.assertEqual(report["not_scanned_reason"], "tag_spellings_disagree")
-            self.assertIn(
-                "pkg/index.js", {item["file"] for item in report["findings"]["ioc"]}
-            )
+            self.assertIn("pkg/index.js", {item["file"] for item in report["findings"]["ioc"]})
 
     def test_prefixed_version_does_not_ignore_the_bare_tag(self) -> None:
         with self._workspace() as (work, repo):
@@ -123,9 +120,7 @@ class ReleaseResolutionTest(UpstreamScanCase):
             )
             _assert_not_benign(self, report)
             self.assertEqual(report["not_scanned_reason"], "from_ref_unresolved")
-            self.assertIn(
-                "pkg/index.js", {item["file"] for item in report["findings"]["ioc"]}
-            )
+            self.assertIn("pkg/index.js", {item["file"] for item in report["findings"]["ioc"]})
 
     def test_line_separators_do_not_hide_a_signature(self) -> None:
         blobs = {
@@ -187,11 +182,7 @@ class ReleaseResolutionTest(UpstreamScanCase):
             self.assertTrue(report["scan_conclusive"], msg=report)
             self.assertIn("- Status: **warn**", report["_summary"])
             self.assertNotIn("Status: **clean**", report["_summary"])
-            hits = [
-                item
-                for item in report["findings"]["ioc"]
-                if item["file"] == "pkg/both.js"
-            ]
+            hits = [item for item in report["findings"]["ioc"] if item["file"] == "pkg/both.js"]
             self.assertTrue(hits, msg=report["findings"]["ioc"])
             self.assertTrue(all(item["line"] == 0 for item in hits), msg=hits)
 
@@ -349,7 +340,11 @@ class ReleaseResolutionTest(UpstreamScanCase):
         }
         for label, (stub, reason, error) in cases.items():
             with self.subTest(label), self._workspace() as (work, repo), TemporaryDirectory() as scripts:
-                for name in ("upstream_malware_scan.sh", "upstream_malware_scan_lib.sh", "upstream_malware_scan_findings.sh"):
+                for name in (
+                    "upstream_malware_scan.sh",
+                    "upstream_malware_scan_lib.sh",
+                    "upstream_malware_scan_findings.sh",
+                ):
                     shutil.copy(_SCRIPTS / name, scripts)
                 if stub is not None:
                     Path(scripts, "dependency_cursor_review_versions.py").write_text(stub, encoding="utf-8")

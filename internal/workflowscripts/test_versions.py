@@ -55,6 +55,16 @@ class ReleaseTagTest(_TagRepo):
                 )
                 _git(self.repo, "tag", "-d", *tags)
 
+    def test_a_go_incompatible_version_reads_its_release_tag(self) -> None:
+        self._tag("v2.0.0")
+        self.assertEqual(
+            versions.release_tag(str(self.repo), "v2.0.0+incompatible", "go"),
+            versions.ReleaseTag(versions.TagStatus.FOUND, self.commits[0], "v2.0.0"),
+        )
+        self._tag("v3.0.0+incompatible", 1)
+        absent = versions.ReleaseTag(versions.TagStatus.ABSENT)
+        self.assertEqual(versions.release_tag(str(self.repo), "v3.0.0+incompatible", "go"), absent)
+
     def test_annotated_tag_peels_to_its_commit(self) -> None:
         _git(self.repo, "tag", "-a", "-m", "release", "1.0.0", self.commits[1])
         found = versions.release_tag(str(self.repo), "1.0.0")
@@ -98,12 +108,12 @@ class ReleaseTagTest(_TagRepo):
 
 
 class CommitRefTest(_TagRepo):
-    """An action's commit SHA is its own release when a branch or tag of the repository contains it."""
+    """An action's commit SHA is its own untagged release when a branch or tag of the repository contains it."""
 
     def _found(self, sha: str) -> versions.ReleaseTag:
-        return versions.ReleaseTag(versions.TagStatus.FOUND, sha, sha)
+        return versions.ReleaseTag(versions.TagStatus.FOUND, sha, "")
 
-    def test_a_commit_on_a_branch_or_tag_names_itself_in_either_case(self) -> None:
+    def test_a_commit_on_a_branch_or_tag_is_its_own_untagged_release_in_either_case(self) -> None:
         for version in (self.commits[0], self.commits[1], self.commits[0].upper()):
             with self.subTest(version=version):
                 found = versions.release_tag(str(self.repo), version, "github-actions")
@@ -132,7 +142,7 @@ class CommitRefTest(_TagRepo):
 
     def test_the_command_line_takes_the_mode(self) -> None:
         found = _cli("release-tag", str(self.repo), self.commits[0], "github-actions")
-        self.assertEqual((found.returncode, found.stdout), (0, f"{self.commits[0]}\t{self.commits[0]}\n"), found.stderr)
+        self.assertEqual((found.returncode, found.stdout), (0, f"{self.commits[0]}\t\n"), found.stderr)
         self.assertEqual(_cli("release-tag", str(self.repo), self.commits[0]).returncode, 3)
 
 

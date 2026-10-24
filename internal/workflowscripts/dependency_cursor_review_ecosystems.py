@@ -55,8 +55,9 @@ from dependency_manifest_python import (
     requirements_txt,
 )
 
-# Why a change is not scanned. Docker images and Terraform providers have no
-# source tree to read; a moving tag can resolve to another commit after the review;
+# Why a change is not scanned. Docker images, Terraform providers and the
+# grammar-less ecosystems (Cargo, Bundler, Composer, Swift, NuGet) have no
+# source tree this scan reads; a moving tag can resolve to another commit after the review;
 # a bump from one commit to another whose commits no branch or tag of the action's repository contains.
 UNSCANNABLE_ECOSYSTEM = "unscannable_ecosystem"
 MOVING_REF = "moving_ref"
@@ -152,9 +153,9 @@ ACTIONS = Ecosystem(
 )
 DOCKER = Ecosystem("docker", warn=UNSCANNABLE_ECOSYSTEM)
 TERRAFORM = Ecosystem("terraform", warn=UNSCANNABLE_ECOSYSTEM)
-# Ecosystems with no grammar: a manifest change is a gap, and so is a lock change without a primary change beside it.
+# Ecosystems with no grammar or scan: every manifest or lock change is a gap named by the warn reason.
 CARGO, BUNDLER, COMPOSER, SWIFT, NUGET = (
-    Ecosystem(name) for name in ("cargo", "bundler", "composer", "swift", "nuget")
+    Ecosystem(name, warn=UNSCANNABLE_ECOSYSTEM) for name in ("cargo", "bundler", "composer", "swift", "nuget")
 )
 
 

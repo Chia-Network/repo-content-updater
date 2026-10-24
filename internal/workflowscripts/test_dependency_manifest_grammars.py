@@ -159,6 +159,7 @@ class NpmGrammarTest(unittest.TestCase):
             {**registry, "name": "evil"},
             {"version": "4.17.21"},
             {"version": "4.17.21", "resolved": "git+ssh://git@github.com/lodash/lodash.git#" + "a" * 40},
+            {"version": "4.17.21", "resolved": "packages/lodash", "link": True},
         ):
             with self.subTest(meta=meta):
                 (entry,) = _entries(package_lock(lock(meta)))
@@ -547,7 +548,7 @@ class LineGrammarTest(unittest.TestCase):
         )
         entries, residue = workflow_uses(text)
         self.assertEqual(
-            _texts((entries, residue))["github/codeql-action/init"], "uses: github/codeql-action/init@\0 # v3.25.0"
+            _texts((entries, residue))["github/codeql-action/init"], "uses: github/codeql-action/init@\0 # \0"
         )
         self.assertEqual(
             _entries((entries, residue)),

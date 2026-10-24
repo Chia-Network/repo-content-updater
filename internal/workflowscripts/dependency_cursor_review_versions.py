@@ -142,7 +142,7 @@ def _tag(repo: str, name: str) -> str:
 
 
 def _commit(repo: str, sha: str) -> ReleaseTag:
-    """A commit SHA names itself when a branch or tag of `repo` contains it.
+    """A commit SHA is its own release, with no tag name, when a branch or tag of `repo` contains it.
 
     GitHub serves a commit that only a fork of the repository has under the
     repository's name, so a commit off every branch and tag is ABSENT.
@@ -165,13 +165,15 @@ def _commit(repo: str, sha: str) -> ReleaseTag:
         text=True,
         check=False,
     )
-    return ReleaseTag(TagStatus.FOUND, sha, sha) if proc.returncode == 0 and proc.stdout.strip() else _ABSENT
+    return ReleaseTag(TagStatus.FOUND, sha, "") if proc.returncode == 0 and proc.stdout.strip() else _ABSENT
 
 
 def release_tag(repo: str, version: str, mode: str = "") -> ReleaseTag:
     """The commit and tag name of the release tag for `version` in `repo`.
 
-    In github-actions mode a commit SHA is its own release: its commit and name are the SHA.
+    In github-actions mode a commit SHA is its own release: its commit is the
+    SHA and its name is empty, because a SHA is not a tag. In go mode the
+    `+incompatible` build suffix is not part of the tag.
 
     One leading `v` or `V` is noted. Every existing spelling of the bare
     version (`<bare>`, `v<bare>`, `V<bare>`) must peel to the same commit.
@@ -182,6 +184,8 @@ def release_tag(repo: str, version: str, mode: str = "") -> ReleaseTag:
     """
     if mode == "github-actions" and commit_ref(version):
         return _commit(repo, version.lower())
+    if mode == "go":
+        version = version.removesuffix("+incompatible")
     lead = version[:1] if version[:1] in {"v", "V"} else ""
     bare = version[len(lead) :]
     if not bare or not _tag_name_ok(bare):

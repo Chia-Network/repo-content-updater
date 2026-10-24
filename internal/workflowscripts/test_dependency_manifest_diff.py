@@ -106,6 +106,19 @@ class NpmTest(unittest.TestCase):
         self.assertEqual(plan.primary, ())
         self.assertEqual(plan.unchecked, (Change("npm", ".", "qs", "6.5.2", "6.5.3"),))
 
+    def test_a_removed_dependency_is_disclosed_not_scanned(self) -> None:
+        base = {
+            "package.json": _package(dependencies={"lodash": "4.17.21", "left-pad": "1.3.0"}),
+            "requirements.txt": "requests==2.31.0\nsix==1.16.0\n",
+        }
+        head = {"package.json": _package(dependencies={"lodash": "4.17.21"}), "requirements.txt": "requests==2.31.0\n"}
+        plan = _plan(base, head)
+        self.assertEqual((plan.primary, plan.gaps), ((), ()))
+        self.assertEqual(
+            set(plan.unchecked),
+            {Change("npm", ".", "left-pad", "1.3.0", ""), Change("pip", ".", "six", "==1.16.0", "")},
+        )
+
     def test_added_and_removed_lock_copies_are_unchecked_upgrades(self) -> None:
         package = _package(dependencies={"a": "1.0.0"})
         base = {
@@ -284,6 +297,20 @@ class NpmTest(unittest.TestCase):
         plan = _plan(base, head)
         self.assertEqual(plan.primary, (Change("npm", ".", "zod", "3.22.0", "3.22.4"),))
         self.assertEqual((plan.gaps, plan.unparsed_locks), ((), ("pnpm-lock.yaml",)))
+
+    def test_a_root_workspace_lock_covers_a_primary_change_below_it(self) -> None:
+        lock = "lockfileVersion: '9.0'\n"
+        base = {"packages/web/package.json": _package(dependencies={"zod": "3.22.0"}), "pnpm-lock.yaml": lock}
+        head = {"packages/web/package.json": _package(dependencies={"zod": "3.22.4"}), "pnpm-lock.yaml": lock + "#\n"}
+        plan = _plan(base, head)
+        self.assertEqual(plan.primary, (Change("npm", "packages/web", "zod", "3.22.0", "3.22.4"),))
+        self.assertEqual((plan.gaps, plan.unparsed_locks), ((), ("pnpm-lock.yaml",)))
+        beside = {"packages/web/pnpm-lock.yaml": lock, "packages/api/package.json": base["packages/web/package.json"]}
+        moved = {
+            "packages/web/pnpm-lock.yaml": lock + "#\n",
+            "packages/api/package.json": head["packages/web/package.json"],
+        }
+        self.assertEqual(_plan(beside, moved).gaps, (("packages/web/pnpm-lock.yaml", "unresolved"),))
 
     def test_an_unparsed_lock_with_no_primary_change_beside_it_is_a_gap(self) -> None:
         package = _package(dependencies={"zod": "^3.22.0"})
@@ -498,6 +525,19 @@ class LineGrammarTest(unittest.TestCase):
             (Change("github-actions", ".github/workflows", "actions/checkout", "v4", "v5"),),
         )
 
+    def test_a_version_comment_beside_a_pinned_sha_moves_with_it(self) -> None:
+        old, new = "a" * 40, "b" * 40
+        base = {".github/workflows/ci.yml": self._WORKFLOW.format(f"{old} # v4.1.1")}
+        head = {".github/workflows/ci.yml": self._WORKFLOW.format(f"{new} # v4.2.0")}
+        plan = _plan(base, head)
+        self.assertEqual(plan.gaps, ())
+        self.assertEqual(plan.primary, (Change("github-actions", ".github/workflows", "actions/checkout", old, new),))
+        prose = {".github/workflows/ci.yml": self._WORKFLOW.format(f"{new} # pinned for v4.2.0")}
+        self.assertEqual(
+            _plan({".github/workflows/ci.yml": self._WORKFLOW.format(f"{old} # pinned for v4.1.1")}, prose).gaps,
+            ((".github/workflows/ci.yml", "unresolved"),),
+        )
+
     def test_a_uses_line_that_changed_beside_its_ref_is_a_gap(self) -> None:
         base = {".github/workflows/ci.yml": self._WORKFLOW.format("v4")}
         head = {
@@ -558,10 +598,20 @@ class ChangedPathTest(unittest.TestCase):
         plan = _plan({"README.md": "a\n", "src/lib.go": "a\n"}, {"README.md": "b\n", "src/lib.go": "b\n"})
         self.assertEqual(plan.gaps, (("README.md", "unresolved"), ("src/lib.go", "unresolved")))
 
-    def test_manifests_with_no_grammar_are_unparsed_manifest_gaps(self) -> None:
-        paths = ("Cargo.toml", "Package.swift", "src/App.csproj", "packages.config")
+    def test_files_of_unscannable_ecosystems_are_unscannable_ecosystem_gaps(self) -> None:
+        paths = (
+            "Cargo.toml",
+            "Cargo.lock",
+            "Gemfile.lock",
+            "composer.lock",
+            "Package.swift",
+            "Package.resolved",
+            "src/App.csproj",
+            "packages.config",
+        )
         plan = _plan({path: "a\n" for path in paths}, {path: "b\n" for path in paths})
-        self.assertEqual(set(plan.gaps), {(path, "unparsed_manifest") for path in paths})
+        self.assertEqual(set(plan.gaps), {(path, "unscannable_ecosystem") for path in paths})
+        self.assertEqual((plan.primary, plan.unparsed_locks), ((), ()))
 
     def test_deleted_and_renamed_off_paths_are_gaps(self) -> None:
         base = {"requirements.txt": "requests==2.31.0\n", "package-lock.json": _npm_lock({})}

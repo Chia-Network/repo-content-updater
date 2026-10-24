@@ -9,15 +9,17 @@ version move ends up in one of:
   beside it only says which names are declared, and the lock supplies the
   versions; a name the manifest moved must also move in that lock. A primary
   is scanned, or reported by its ecosystem's policy.
-- unchecked: every other package whose version moved, such as an undeclared
+- unchecked: every other package whose version moved, such as a removed
+  dependency, an undeclared
   or nested lock copy, a go.mod `// indirect` require, or a go.sum version
   that no version move beside it accounts for. Disclosed, not scanned.
-- gaps: (path, reason) for a path that is not a dependency file, was deleted
+- gaps: (path, reason) for a file of an ecosystem the scan cannot read (its
+  warn reason), and for a path that is not a dependency file, was deleted
   or changed type, does not parse, or changed in a way its versions do not
   account for: residue outside the entries, an entry whose text changed at an
   unchanged version, or a line entry whose text outside the version changed.
-- unparsed_locks: a lockfile with no grammar beside a primary change. With no
-  primary change beside it, it is a gap.
+- unparsed_locks: a lockfile with no grammar beside or above a primary change.
+  With no such primary change, it is a gap.
 
 hashed lists each changed file read whose row records artifact hashes, such as
 a requirements file, for the binding to read the hashes beside a change from.
@@ -139,6 +141,8 @@ def _read(old_path: str, path: str, status: str, read: Read, base: str) -> list[
     if status in {"D", "T"} or row is None:
         return [_File(label, ("", directory), _GAP) for label in dict.fromkeys((old_path, path))]
     group = (row.ecosystem.name, directory)
+    if row.parse is None and row.ecosystem.warn:
+        return [_File(path, group, _GAP, row.ecosystem.warn)]
     if row.parse is None:
         return [_File(path, group, _GAP, "unparsed_manifest") if row.role == MANIFEST else _File(path, group, _OPAQUE)]
     moves = _file_moves(row, old_path, path, read, base)
@@ -168,13 +172,19 @@ def _accounts_for(change: Change, checksum: Change) -> bool:
     )
 
 
+def _under(change: Change, group: tuple[str, str]) -> bool:
+    ecosystem, directory = group
+    return change.ecosystem == ecosystem and (directory in {".", change.dir} or change.dir.startswith(directory + "/"))
+
+
 def _resolve(file: _File, changes: list[tuple[Change, bool]]) -> Plan:
     """What one file adds to the Plan, given every (change, primary) the VERSIONS files of the diff moved."""
     beside = [(change, primary) for change, primary in changes if (change.ecosystem, change.dir) == file.group]
     if file.kind == _VERSIONS:
+        # A removed dependency installs nothing to scan, so it is disclosed with the other upgrades.
         return Plan(
-            primary=tuple(change for change, primary in file.moves if primary),
-            unchecked=tuple(change for change, primary in file.moves if not primary),
+            primary=tuple(change for change, primary in file.moves if primary and change.new),
+            unchecked=tuple(change for change, primary in file.moves if not (primary and change.new)),
         )
     if file.kind == _NAMES:
         locked = {change.name for change, primary in beside if primary}
@@ -189,7 +199,8 @@ def _resolve(file: _File, changes: list[tuple[Change, bool]]) -> Plan:
                 if not any(_accounts_for(change, checksum) for change, _primary in beside)
             )
         )
-    if file.kind == _OPAQUE and any(primary for _change, primary in beside):
+    # A workspace lock (pnpm-lock.yaml, yarn.lock) at a root covers the manifests below it.
+    if file.kind == _OPAQUE and any(primary and _under(change, file.group) for change, primary in changes):
         return Plan(unparsed_locks=(file.path,))
     return Plan(gaps=((file.path, file.reason),))
 
