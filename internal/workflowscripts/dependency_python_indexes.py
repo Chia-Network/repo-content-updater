@@ -196,6 +196,7 @@ class _Requirements:
         self._list_files = list_files
         self._search = search
         self._listings: dict[str, list[tuple[str, str]] | None] = {}
+        self._texts: dict[str, str] = {}
         self._options: dict[str, _python.IndexOptions] = {}
         self._included: dict[str, tuple[str | None, ...]] = {}
         self._effective: dict[str, _Effective] = {}
@@ -222,9 +223,14 @@ class _Requirements:
         mode = self._mode(included)
         return included if mode is not None and _is_blob(mode) else None
 
+    def _text(self, path: str) -> str:
+        if path not in self._texts:
+            self._texts[path] = self._read("HEAD", path)
+        return self._texts[path]
+
     def _options_for(self, path: str) -> _python.IndexOptions:
         if path not in self._options:
-            self._options[path] = _python.requirements_index_options(self._read("HEAD", path))
+            self._options[path] = _python.requirements_index_options(self._text(path))
         return self._options[path]
 
     def _resolve_includes(self, path: str) -> tuple[str | None, ...]:
@@ -248,7 +254,7 @@ class _Requirements:
         if candidate == path:
             return
         mode = self._mode(candidate)
-        if mode is None or not _is_blob(mode):
+        if mode is None or not _is_blob(mode) or not self._text(candidate):
             self._broken.add(path)
             return
         options = self._options_for(candidate)

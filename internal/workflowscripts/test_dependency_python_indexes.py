@@ -225,6 +225,13 @@ class PythonIndexesTest(unittest.TestCase):
         found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree.get, _search(texts))
         self.assertEqual(found.for_path("requirements.txt"), indexes.Indexes(other=True))
 
+    def test_a_candidate_that_cannot_be_read_leaves_the_base_unread(self) -> None:
+        texts = {"requirements.txt": f"-i {_CHIA}\nchiapos==2.0.4\n"}
+        tree = {".": [("requirements.txt", "100644"), ("dev.txt", "100644")]}
+        search = lambda needle: ["dev.txt"] if needle == "requirements.txt" else []
+        found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree.get, search)
+        self.assertEqual(found.for_path("requirements.txt"), indexes.Indexes(other=True))
+
     def test_an_unread_requirements_file_leaves_every_replacement_unread(self) -> None:
         texts = {
             "app/requirements.txt": f"-i {_CHIA}\nchiapos==2.0.4\n",
