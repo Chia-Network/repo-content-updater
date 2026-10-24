@@ -120,6 +120,9 @@ class PnpmLockTest(unittest.TestCase):
         self.assertIsNotNone(pnpm_lock(_lock()))
         self.assertIsNone(pnpm_lock(_lock() + "\n  zod@3.25.76: {}\n"))
 
+    def test_an_importer_dependency_line_that_is_not_a_block_is_not_parsed(self) -> None:
+        self.assertIsNone(pnpm_lock(_lock().replace("      zod:\n", "      - zod:\n")))
+
     def test_the_lockfile_version_it_does_not_read_is_named(self) -> None:
         self.assertEqual(pnpm_lock_unsupported_version(_lock().replace("'9.0'", "'5.4'")), "5.4")
         self.assertEqual(pnpm_lock_unsupported_version("lockfileVersion: 5.3\n#\n"), "5.3")

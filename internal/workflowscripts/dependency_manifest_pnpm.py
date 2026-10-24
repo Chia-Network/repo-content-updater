@@ -72,9 +72,12 @@ def _importer(where: str, body: list[_Line], indent: int) -> tuple[list[tuple[st
         if header.key not in _SECTIONS or header.value:
             residue += [f"{where}\t{line.raw}" for line in (header, *lines)]
             continue
-        for dep, fields in _blocks(lines, indent + 2) or [(None, [])] * bool(lines):
+        blocks = _blocks(lines, indent + 2)
+        if blocks is None:
+            return None
+        for dep, fields in blocks:
             values = {line.key: line.value for line in fields}
-            if dep is None or dep.value or set(values) != {"specifier", "version"} or len(fields) != 2:
+            if dep.value or set(values) != {"specifier", "version"} or len(fields) != 2:
                 return None
             if any(line.indent != indent + 4 for line in fields):
                 return None
