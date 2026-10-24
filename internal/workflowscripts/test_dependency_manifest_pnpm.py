@@ -33,6 +33,9 @@ importers:
 
 packages:
 
+  react@18.3.1:
+    resolution: {{integrity: sha512-react}}
+
   react-dom@18.2.0:
     resolution: {{integrity: sha512-rd}}
     peerDependencies:
@@ -43,9 +46,11 @@ packages:
 
 snapshots:
 
+  react@18.3.1: {{}}
+
   react-dom@18.2.0({peer}):
     dependencies:
-      react: {peer.split("@")[1]}
+      react: 18.3.1
 
   zod@{zod}: {{}}
 """
@@ -146,6 +151,9 @@ class PnpmLockTest(unittest.TestCase):
         plan = _plan(base, head)
         self.assertEqual((plan.primary, plan.unchecked), ((), ()))
         self.assertEqual(plan.gaps, (("pnpm-lock.yaml", "unresolved"),))
+
+    def test_a_dependency_reference_to_a_version_with_no_stanza_is_not_parsed(self) -> None:
+        self.assertIsNone(pnpm_lock(_stanza_lock("3.0.0")))
 
     def test_a_dependency_value_change_between_shared_versions_is_a_gap(self) -> None:
         base = {"pnpm-lock.yaml": _shared_stanza_lock("1.0.0")}

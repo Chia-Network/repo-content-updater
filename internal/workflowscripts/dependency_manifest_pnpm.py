@@ -171,11 +171,12 @@ def pnpm_lock(text: str) -> Parsed | None:
         entries.append(
             (name, f"{version} ({resolution})" if resolution else version, (name, version) in top, stanza_text)
         )
+        if any((ref_name, ref_version) not in stanza_versions for ref_name, ref_version in references):
+            return None
         reference_text = json.dumps(["dependency reference", name])
         entries.extend(
             (ref_name, ref_version, (ref_name, ref_version) in top, reference_text)
             for ref_name, ref_version in references
-            if (ref_name, ref_version) in stanza_versions
         )
     return entries, "\n".join(residue)
 
