@@ -5,8 +5,10 @@ An entry is (name, version, top, text). A package.json spec is a declaration,
 so it is top, and its text is its section. In a lock, top marks the copy a
 declaration installs, which is the top-level `node_modules/<name>` path, a
 lockfile v1 top-level record, or any Yarn stanza; a nested or workspace copy
-is not top. A lock entry's text is its whole record, or its stanza without the
-descriptor header. Residue is the document left once the entries are taken out.
+is not top. A lock entry's text is its whole record, or its whole stanza with
+the descriptor header. A lock restates each root declaration as an entry at
+the version its top copy installs, so a declaration in a lock can change only
+with that version. Residue is the document left once the entries are taken out.
 
 A lock copy installed from anywhere but the registry tarball for its own name
 and version keeps its version with the source appended, so it is never read as
@@ -19,7 +21,7 @@ from __future__ import annotations
 import json
 import re
 
-Parsed = tuple[list[tuple[str, str, bool, str]], str]
+from dependency_manifest_lines import Entry, Parsed
 
 _YARN_DESCRIPTOR_RE = re.compile(r'(@?[^@"\s]+)@')
 _LOCK_PREFIX = "node_modules/"
@@ -114,21 +116,23 @@ def _json_split(text: str) -> tuple[dict[str, dict[str, object]], dict[str, obje
 
 
 def _json_entries(text: str, *, lock: bool) -> Parsed | None:
-    """A string spec is a declaration; a lock reads only its install records, so its root specs are dropped."""
+    """A string spec is a declaration. In a lock it is an entry at the version the top copy installs, "" with none."""
     if not text.strip():
         return [], ""
     split = _json_split(text)
     if split is None:
         return None
     parts, doc = split
-    entries: list[tuple[str, str, bool, str]] = []
+    entries: list[Entry] = []
     for name, blob in parts.items():
+        locks = blob.get("locks") or ()
+        top = next((_installed(name, meta) for path, meta in locks if path == _LOCK_PREFIX + name), "")
         for section, spec in blob.get("specs") or ():
             if isinstance(spec, dict):
                 entries.append((name, _installed(name, spec), ">" not in section, _record(section, spec)))
-            elif not lock:
-                entries.append((name, spec, True, section))
-        for path, meta in blob.get("locks") or ():
+            else:
+                entries.append((name, top, True, _record(section, spec)) if lock else (name, spec, True, section))
+        for path, meta in locks:
             entries.append((name, _installed(name, meta), path == _LOCK_PREFIX + name, _record(path, meta)))
     return entries, json.dumps(doc, sort_keys=True, separators=(",", ":"))
 
@@ -175,7 +179,7 @@ def _yarn_names(header: str) -> list[str]:
 
 def yarn_lock(text: str) -> Parsed | None:
     """Yarn classic stanzas. A stanza with no quoted `version` line, such as a Yarn Berry lock, does not parse."""
-    entries: list[tuple[str, str, bool, str]] = []
+    entries: list[Entry] = []
     residue: list[str] = []
     names: list[str] = []
     block: list[str] = []
@@ -186,7 +190,7 @@ def yarn_lock(text: str) -> Parsed | None:
         nonlocal names, block, version, resolved, complete
         if names:
             complete = complete and bool(version)
-            body = "\n".join(block[1:])
+            body = "\n".join(block)
             entries.extend((name, _registry_version(name, version, resolved), True, body) for name in names)
         elif block:
             residue.append("\n".join(block) + "\n")

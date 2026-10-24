@@ -17,26 +17,56 @@ import shutil
 import subprocess
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import dependency_cursor_review_ecosystems as _ecosystems
 import dependency_cursor_review_versions as _versions
 import dependency_manifest_diff as _diff
+from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN
 
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
-# The diff changed dependencies, and none of them is a scan target.
-NOTHING_TO_SCAN = "nothing_to_scan"
-_DISCLOSED_KEYS = ("policy_warnings", "unchecked_upgrades", "unparsed_locks")
+# Registry lookups run at once; each waits on the network, not on the others.
+_LOOKUPS = 8
 
 
-def _label(update: dict) -> str:
-    return str(update.get("packageName") or update.get("path") or update.get("upstreamRepo") or "dependency")
+class Target(NamedTuple):
+    """What one scan record is about: a primary change, or a path the diff could not account for."""
+
+    package: str = ""
+    path: str = ""
+    repo: str = ""
+    old: str = ""
+    new: str = ""
 
 
-def uncovered(update: dict, reason: str) -> dict:
-    name = _label(update)
+class Disclosure(NamedTuple):
+    """The changes the report lists and does not scan. Its fields are DISCLOSED_KEYS."""
+
+    policy_warnings: tuple[dict, ...] = ()
+    unchecked_upgrades: tuple[dict, ...] = ()
+    unparsed_locks: tuple[str, ...] = ()
+
+
+_NONE_DISCLOSED = Disclosure()
+
+
+def _fields(target: Target) -> dict[str, str]:
+    """The record fields that name a target."""
+    return {
+        "package_name": target.package,
+        "path": target.path,
+        "upstream_repo": target.repo,
+        "from_version": target.old,
+        "to_version": target.new,
+    }
+
+
+def uncovered(target: Target, reason: str) -> dict:
+    fields = _fields(target)
     return {
         "status": "not_scanned",
         "scan_conclusive": False,
@@ -52,22 +82,14 @@ def uncovered(update: dict, reason: str) -> dict:
         "materialized_count": 0,
         "filtered_count": 0,
         "changed_files": [],
-        "errors": [f"{name}: {reason}"],
+        "errors": [f"{_record_label(fields)}: {reason}"],
         "findings": {key: [] for key in _FINDING_KEYS},
-        "package_name": str(update.get("packageName") or ""),
-        "path": str(update.get("path") or ""),
-        "upstream_repo": str(update.get("upstreamRepo") or ""),
-        "from_version": str(update.get("fromVersion") or ""),
-        "to_version": str(update.get("toVersion") or ""),
+        **fields,
     }
 
 
-def _tag(update: dict, report: dict) -> dict:
-    tagged = dict(report)
-    tagged["package_name"] = str(update.get("packageName") or tagged.get("package_name") or "")
-    tagged["upstream_repo"] = str(update.get("upstreamRepo") or tagged.get("upstream_repo") or "")
-    tagged["from_version"] = str(update.get("fromVersion") or "")
-    tagged["to_version"] = str(update.get("toVersion") or "")
+def _tag(target: Target, report: dict) -> dict:
+    tagged = {**report, **_fields(target)}
     if tagged.get("scan_conclusive") is not True:
         tagged["scan_conclusive"] = False
     return tagged
@@ -126,10 +148,10 @@ def _candidate(record: dict) -> dict:
     }
 
 
-def _stamp(report: dict, records: list[dict], target: tuple[str, str, str] | None, disclosed: dict) -> dict:
+def _stamp(report: dict, records: list[dict], target: tuple[str, str, str] | None, disclosed: Disclosure) -> dict:
     report["agent_candidates"] = [_candidate(record) for record in records]
     report["agent_target"] = list(target) if target else None
-    report.update({key: list(disclosed.get(key) or ()) for key in _DISCLOSED_KEYS})
+    report.update({key: list(items) for key, items in zip(DISCLOSED_KEYS, disclosed, strict=True)})
     return report
 
 
@@ -180,21 +202,20 @@ def _unread_items(records: list[dict]) -> list[dict]:
     return found
 
 
-def aggregate(records: list[dict], disclosed: dict | None = None) -> dict:
+def aggregate(records: list[dict], disclosed: Disclosure = _NONE_DISCLOSED) -> dict:
     """Covered only when every record was scanned conclusively.
 
     With no record, a change that was only disclosed (a policy warning, an
     unchecked upgrade or an unparsed lockfile) is NOTHING_TO_SCAN. With
     nothing at all, coverage is incomplete.
     """
-    disclosed = disclosed or {}
     target = agent_target(records)
     if len(records) == 1:
         return _stamp(_apply_coverage(records[0]), records, target, disclosed)
     if not records:
-        if any(disclosed.get(key) for key in _DISCLOSED_KEYS):
-            return _stamp({**uncovered({}, NOTHING_TO_SCAN), "errors": []}, records, None, disclosed)
-        return _stamp(uncovered({}, "incomplete_coverage"), records, None, disclosed)
+        if any(disclosed):
+            return _stamp({**uncovered(Target(), NOTHING_TO_SCAN), "errors": []}, records, None, disclosed)
+        return _stamp(uncovered(Target(), "incomplete_coverage"), records, None, disclosed)
 
     findings = {key: [] for key in _FINDING_KEYS}
     errors: list[str] = []
@@ -449,22 +470,18 @@ def _plan(token: str = "") -> _diff.Plan | None:
     return None if changed is None else _diff.plan(changed, _git_text, base)
 
 
-def _sort(plan: _diff.Plan) -> tuple[list[_diff.Change], dict]:
-    """Scan targets, and what the report discloses: policy warnings, unchecked upgrades and unparsed lockfiles."""
-    targets: list[_diff.Change] = []
+def _split(plan: _diff.Plan) -> tuple[list[_diff.Change], Disclosure]:
+    """The primary changes to scan, and the Disclosure of the rest."""
+    scanned: list[_diff.Change] = []
     warnings: list[dict] = []
     for change in plan.primary:
         reason = _ecosystems.warn_reason(change.ecosystem, change.old, change.new)
         if reason:
             warnings.append({**change._asdict(), "reason": reason})
         else:
-            targets.append(change)
-    disclosed = {
-        "policy_warnings": warnings,
-        "unchecked_upgrades": [change._asdict() for change in plan.unchecked],
-        "unparsed_locks": list(plan.unparsed_locks),
-    }
-    return targets, disclosed
+            scanned.append(change)
+    unchecked = tuple(change._asdict() for change in plan.unchecked)
+    return scanned, Disclosure(tuple(warnings), unchecked, plan.unparsed_locks)
 
 
 def remove_entry(path: Path) -> None:
@@ -492,33 +509,45 @@ def _clone(repo: str, dest: Path) -> bool:
     return proc.returncode == 0 and dest.is_dir()
 
 
-def _primary_record(change: _diff.Change, dest: Path, scan_script: Path) -> dict:
-    """The scan of one primary change. Both versions must be exact in the ecosystem's grammar.
+def _exact(change: _diff.Change) -> tuple[Target, str]:
+    """The Target of one primary change, and "unresolved" unless both versions are exact in its ecosystem's grammar.
 
     An empty from version stays inconclusive. A range, wildcard, tag name, operator or moving major could resolve to a
     tree other than the one installed, so it is never scanned.
     """
     old = _versions._exact_body(change.old, mode=change.ecosystem)
     new = _versions._exact_body(change.new, mode=change.ecosystem)
-    update = {"packageName": change.name, "fromVersion": old or change.old, "toVersion": new or change.new}
-    if not new or (change.old and not old):
-        return uncovered(update, "unresolved")
-    update["upstreamRepo"] = _ecosystems.upstream_repo(change.ecosystem, change.name, new)
-    if not update["upstreamRepo"]:
-        return uncovered(update, "no_upstream_link")
-    return _scan_one(update, dest, scan_script)
+    target = Target(package=change.name, old=old or change.old, new=new or change.new)
+    return target, "" if new and (old or not change.old) else "unresolved"
 
 
-def _scan_one(update: dict, dest: Path, scan_script: Path) -> dict:
+def _targets(changes: list[_diff.Change]) -> list[tuple[Target, str]]:
+    """Each change as (Target with its repository, why it is not scanned or "").
+
+    Each distinct (ecosystem, name, version) is looked up once, and the lookups run concurrently.
+    """
+    exact = [_exact(change) for change in changes]
+    keys = [(change.ecosystem, change.name, target.new) for change, (target, _why) in zip(changes, exact)]
+    wanted = list(dict.fromkeys(key for key, (_target, why) in zip(keys, exact) if not why))
+    with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
+        repos = dict(zip(wanted, pool.map(lambda key: _ecosystems.upstream_repo(*key), wanted)))
+    resolved: list[tuple[Target, str]] = []
+    for key, (target, why) in zip(keys, exact):
+        repo = "" if why else repos[key]
+        resolved.append((target._replace(repo=repo), why or ("" if repo else "no_upstream_link")))
+    return resolved
+
+
+def _scan_one(target: Target, dest: Path, scan_script: Path) -> dict:
     dest = dest.absolute()
     checkout = dest / ".upstream-dependency"
-    if not _clone(str(update["upstreamRepo"]), checkout):
-        return uncovered(update, "unresolved")
+    if not _clone(target.repo, checkout):
+        return uncovered(target, "unresolved")
     env = os.environ.copy()
     env["GITHUB_OUTPUT"] = str(dest / "github_output.txt")
-    env["PACKAGE_NAME"] = str(update.get("packageName") or "")
-    env["FROM_VERSION"] = str(update.get("fromVersion") or "")
-    env["TO_VERSION"] = str(update.get("toVersion") or "")
+    env["PACKAGE_NAME"] = target.package
+    env["FROM_VERSION"] = target.old
+    env["TO_VERSION"] = target.new
     proc = subprocess.run(
         ["bash", str(scan_script)],
         cwd=dest,
@@ -529,14 +558,14 @@ def _scan_one(update: dict, dest: Path, scan_script: Path) -> dict:
     )
     report_path = dest / "malware_scan_report.json"
     if not report_path.is_file():
-        return uncovered(update, "not_scanned")
+        return uncovered(target, "not_scanned")
     try:
         report = json.loads(report_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return uncovered(update, "not_scanned")
+        return uncovered(target, "not_scanned")
     if not isinstance(report, dict):
-        return uncovered(update, "not_scanned")
-    tagged = _tag(update, report)
+        return uncovered(target, "not_scanned")
+    tagged = _tag(target, report)
     if proc.returncode != 0 and tagged.get("status") != "fail":
         tagged["scan_conclusive"] = False
         tagged["not_scanned_reason"] = "scanner_error"
@@ -611,19 +640,22 @@ def main() -> None:
     out = Path(os.environ["DCR_OUT"])
     plan = _plan(fetch_token)
     if plan is None:
-        records, targets, disclosed = [uncovered({"path": "pull request diff"}, "unresolved")], [], {}
+        records, scanned, disclosed = [uncovered(Target(path="pull request diff"), "unresolved")], [], _NONE_DISCLOSED
     else:
-        targets, disclosed = _sort(plan)
-        records = [uncovered({"path": path}, reason) for path, reason in plan.gaps]
+        scanned, disclosed = _split(plan)
+        records = [uncovered(Target(path=path), reason) for path, reason in plan.gaps]
     work = Path(".dcr-dependency-scans")
     remove_entry(work)
     work.mkdir()
     scans: list[tuple[dict, Path]] = []
     try:
-        for index, change in enumerate(targets):
+        for index, (target, why) in enumerate(_targets(scanned)):
+            if why:
+                records.append(uncovered(target, why))
+                continue
             dest = work / str(index)
             dest.mkdir()
-            record = _primary_record(change, dest, scan_script)
+            record = _scan_one(target, dest, scan_script)
             records.append(record)
             scans.append((record, dest))
         report = aggregate(records, disclosed)

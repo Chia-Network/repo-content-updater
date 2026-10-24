@@ -1,6 +1,7 @@
 """Line grammars: workflow and composite-action `uses:`, Dockerfile `FROM`, and Terraform versions.
 
-Each reader returns (entries, residue), or None when the text does not parse.
+Entry and Parsed are the one shape every grammar returns: (entries, residue),
+or None when the text does not parse.
 An entry is (name, version, top, text) and every entry here is a declaration,
 so top. A line entry's text is its line with the version masked, so the rest of
 the line cannot change unseen; a .terraform.lock.hcl provider block is one
@@ -11,7 +12,9 @@ from __future__ import annotations
 
 import re
 
-Parsed = tuple[list[tuple[str, str, bool, str]], str]
+# (name, version, top, text)
+Entry = tuple[str, str, bool, str]
+Parsed = tuple[list[Entry], str]
 
 # `uses: owner/repo[/path]@ref`, optionally a list item, optionally quoted, optionally with a trailing comment.
 _USES_RE = re.compile(
@@ -28,7 +31,7 @@ def _masked(line: str, match: re.Match[str], group: int, keep: str = "") -> str:
 
 
 def workflow_uses(text: str) -> Parsed:
-    entries: list[tuple[str, str, bool, str]] = []
+    entries: list[Entry] = []
     residue: list[str] = []
     for line in text.splitlines(keepends=True):
         match = _USES_RE.match(line)
@@ -44,7 +47,7 @@ def dockerfile_from(text: str) -> Parsed:
 
     A line that continues the instruction before it (after a trailing `\\`, across comment lines) is never a FROM.
     """
-    entries: list[tuple[str, str, bool, str]] = []
+    entries: list[Entry] = []
     residue: list[str] = []
     continued = False
     for line in text.splitlines(keepends=True):
@@ -65,7 +68,7 @@ def dockerfile_from(text: str) -> Parsed:
 
 def terraform_lock(text: str) -> Parsed | None:
     """One entry per `provider "address" { ... }` block. An unclosed or versionless block does not parse."""
-    entries: list[tuple[str, str, bool, str]] = []
+    entries: list[Entry] = []
     residue: list[str] = []
     provider: str | None = None
     version = ""
@@ -93,7 +96,7 @@ def terraform_lock(text: str) -> Parsed | None:
 
 def terraform_config(text: str) -> Parsed:
     """Each `version = "..."` line of a .tf file, named by the `source` line before it. Every other line is residue."""
-    entries: list[tuple[str, str, bool, str]] = []
+    entries: list[Entry] = []
     residue: list[str] = []
     source = ""
     for line in text.splitlines(keepends=True):

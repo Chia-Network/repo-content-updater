@@ -19,7 +19,7 @@ class FileKindTest(unittest.TestCase):
             "yarn.lock": ("npm", ecosystems.LOCK, True),
             "pnpm-lock.yaml": ("npm", ecosystems.LOCK, False),
             "go.mod": ("go", ecosystems.MANIFEST, True),
-            "go.sum": ("go", ecosystems.CHECKSUMS, False),
+            "go.sum": ("go", ecosystems.CHECKSUMS, True),
             "requirements-dev.txt": ("pip", ecosystems.MANIFEST, True),
             "requirements/base.txt": ("pip", ecosystems.MANIFEST, True),
             "pyproject.toml": ("pip", ecosystems.MANIFEST, True),

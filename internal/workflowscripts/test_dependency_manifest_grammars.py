@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from dependency_manifest_go import go_mod
+from dependency_manifest_go import go_mod, go_sum
 from dependency_manifest_lines import dockerfile_from, terraform_config, terraform_lock, workflow_uses
 from dependency_manifest_npm import package_json, package_lock, yarn_lock
 from dependency_manifest_python import requirements
@@ -59,6 +59,13 @@ class NpmGrammarTest(unittest.TestCase):
         self.assertIn("packages/gui", parsed[1])
         self.assertNotIn("^1.0.0", parsed[1])
 
+    def test_a_lock_root_spec_is_an_entry_at_the_version_its_top_copy_installs(self) -> None:
+        root = {"dependencies": {"a": "^1.0.0", "gone": "^2.0.0"}}
+        text = json.dumps({"lockfileVersion": 3, "packages": {"": root, "node_modules/a": _meta("a", "1.0.1")}})
+        specs = [entry for entry in package_lock(text)[0] if entry[3].startswith('["packages:dependencies"')]
+        self.assertEqual({entry[:3] for entry in specs}, {("a", "1.0.1", True), ("gone", "", True)})
+        self.assertTrue(all("^" in entry[3] for entry in specs))
+
     def test_lock_v1_top_level_records_are_top_and_nested_records_are_not(self) -> None:
         text = json.dumps(
             {
@@ -76,7 +83,7 @@ class NpmGrammarTest(unittest.TestCase):
     def test_yarn_header_names_every_package_once(self) -> None:
         text = '"@babel/core@^7.0.0", "@babel/core@^7.1.0":\n  version "7.2.0"\n'
         self.assertEqual(_entries(yarn_lock(text)), {("@babel/core", "7.2.0 (no resolved source)", True)})
-        self.assertEqual(_texts(yarn_lock(text)), {"@babel/core": '  version "7.2.0"'})
+        self.assertEqual(_texts(yarn_lock(text)), {"@babel/core": text.rstrip("\n")})
 
     def test_only_the_registry_tarball_for_the_name_and_version_is_a_registry_copy(self) -> None:
         def lock(meta: dict) -> str:
@@ -131,6 +138,14 @@ class GoGrammarTest(unittest.TestCase):
         )
         self.assertEqual(entries, [])
         self.assertIn("github.com/x/b", residue)
+
+    def test_go_sum_keeps_the_go_mod_suffix_and_every_other_line_is_residue(self) -> None:
+        entries, residue = go_sum("github.com/a/b v1.0.0 h1:x=\ngithub.com/a/b v1.0.0/go.mod h1:y=\n\nnot a sum\n")
+        self.assertEqual(
+            _entries((entries, residue)),
+            {("github.com/a/b", "v1.0.0", False), ("github.com/a/b", "v1.0.0/go.mod", False)},
+        )
+        self.assertEqual(residue, "\nnot a sum\n")
 
 
 class PythonGrammarTest(unittest.TestCase):

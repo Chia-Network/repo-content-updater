@@ -28,7 +28,8 @@ _INCONCLUSIVE_REPORT = {
 }
 _CONCLUSIVE_BYTES = (
     b'{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false,'
-    b'"findings":{"ioc":[],"unicode":[],"confusable":[],"heuristic":[]}}\n'
+    b'"findings":{"ioc":[],"unicode":[],"confusable":[],"heuristic":[]},'
+    b'"policy_warnings":[],"unchecked_upgrades":[],"unparsed_locks":[]}\n'
 )
 
 
@@ -244,6 +245,7 @@ class DependencyCursorReviewSecurityTest(unittest.TestCase):
                 cwd=root,
                 env=_seal_env(root, _CONCLUSIVE_BYTES),
                 capture_output=True,
+                check=False,
                 text=True,
             )
             self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
@@ -324,6 +326,7 @@ def _render_prompts(
             cwd=tmp,
             env=env,
             capture_output=True,
+            check=False,
             text=True,
         )
         if proc.returncode != 0:
@@ -366,6 +369,7 @@ def _run_combine(workspace: Path, updates: dict[str, str]) -> subprocess.Complet
         cwd=workspace,
         env=env,
         capture_output=True,
+        check=False,
         text=True,
     )
 

@@ -150,6 +150,9 @@ class PublishedCheckTest(unittest.TestCase):
             "unread": [],
             "verdict_token_in_tree": False,
             "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            "policy_warnings": [],
+            "unchecked_upgrades": [],
+            "unparsed_locks": [],
         }
         passed = self._enforce(clean, stored='{"check": "fail"}')
         self.assertEqual(passed.returncode, 0, msg=passed.stderr or passed.stdout)
@@ -195,6 +198,9 @@ class PublishedCheckTest(unittest.TestCase):
             "unread": [],
             "verdict_token_in_tree": False,
             "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            "policy_warnings": [],
+            "unchecked_upgrades": [],
+            "unparsed_locks": [],
         }
         finding = {"kind": "unicode", "file": "pkg/index.js", "line": "1", "match": "bidi"}
         suspicious = {**clean, "status": "warn", "findings": {**clean["findings"], "unicode": [finding]}}
@@ -225,6 +231,9 @@ class PublishedCheckTest(unittest.TestCase):
             "unread": [],
             "verdict_token_in_tree": False,
             "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+            "policy_warnings": [],
+            "unchecked_upgrades": [],
+            "unparsed_locks": [],
         }
         malware = json.dumps(
             {

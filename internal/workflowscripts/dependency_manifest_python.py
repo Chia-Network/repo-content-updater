@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import re
 
+from dependency_manifest_lines import Entry, Parsed
+
 _REQ_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*((?:===|==|~=|!=|>=|<=|>|<)\s*[^\s#;,]+)")
 # A TOML table header, and a `name = "spec"` or `name = { version = "spec" }` dependency line.
 _TOML_TABLE_RE = re.compile(r"^\s*\[+\s*([^\]]+?)\s*\]+\s*$")
@@ -44,8 +46,8 @@ def _requirement_specs(line: str, table: str) -> list[tuple[str, str]]:
     return [(match.group(1), match.group(2)) for match in candidates if match]
 
 
-def requirements(text: str) -> tuple[list[tuple[str, str, bool, str]], str]:
-    entries: list[tuple[str, str, bool, str]] = []
+def requirements(text: str) -> Parsed:
+    entries: list[Entry] = []
     residue: list[str] = []
     table = ""
     for line in text.splitlines(keepends=True):

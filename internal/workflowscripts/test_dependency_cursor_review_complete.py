@@ -36,6 +36,9 @@ class CombineCompleteTest(unittest.TestCase):
                     "unread": [],
                     "verdict_token_in_tree": False,
                     "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+                    "policy_warnings": [],
+                    "unchecked_upgrades": [],
+                    "unparsed_locks": [],
                 }
             payload = (json.dumps(report) + "\n").encode()
             report_path = root / "sealed-scan-report.json"
@@ -562,6 +565,9 @@ class CombineCompleteTest(unittest.TestCase):
                 "unread": [],
                 "verdict_token_in_tree": False,
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": hits},
+                "policy_warnings": [],
+                "unchecked_upgrades": [],
+                "unparsed_locks": [],
             },
         )
         self.assertIn("**Verdict: benign**", written["result"])
@@ -588,6 +594,9 @@ class CombineCompleteTest(unittest.TestCase):
                 "unread": [],
                 "verdict_token_in_tree": False,
                 "findings": {"unicode": [], "confusable": [], "ioc": [], "heuristic": []},
+                "policy_warnings": [],
+                "unchecked_upgrades": [],
+                "unparsed_locks": [],
             },
         )
         body = written["compatibility_review"]["result"]

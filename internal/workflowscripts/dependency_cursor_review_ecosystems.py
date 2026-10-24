@@ -7,7 +7,9 @@ can move, is never scanned and never benign: decide() reports it inconclusive
 with a named warning and does not block on it.
 
 Roles: a manifest declares dependencies; a lock records the installed copies
-of the dependencies the manifest beside it declares; checksums hold neither.
+of the dependencies the manifest beside it declares; checksums hash the
+versions the manifest beside them names, so every version a checksum file adds
+or drops must be one the manifest beside it adds or drops.
 
 Each grammar returns (name, version, top, text) entries. An entry's text may
 change only with its version. In a line grammar the text is the line with the
@@ -23,8 +25,8 @@ from typing import NamedTuple
 
 import dependency_cursor_review_upstream as upstream
 from dependency_cursor_review_versions import moving_ref
-from dependency_manifest_go import go_mod
-from dependency_manifest_lines import dockerfile_from, terraform_config, terraform_lock, workflow_uses
+from dependency_manifest_go import go_mod, go_sum
+from dependency_manifest_lines import Parsed, dockerfile_from, terraform_config, terraform_lock, workflow_uses
 from dependency_manifest_npm import package_json, package_lock, yarn_lock
 from dependency_manifest_python import requirements
 
@@ -35,8 +37,6 @@ MOVING_REF = "moving_ref"
 WARN_REASONS = frozenset({UNSCANNABLE_ECOSYSTEM, MOVING_REF})
 
 MANIFEST, LOCK, CHECKSUMS = "manifest", "lock", "checksums"
-
-Parsed = tuple[list[tuple[str, str, bool, str]], str]
 
 
 def _no_repo(_name: str, _version: str) -> str:
@@ -98,7 +98,7 @@ _FILES = (
     FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), records=True),
     FileKind(NPM, LOCK, None, frozenset({"pnpm-lock.yaml"})),
     FileKind(GO, MANIFEST, go_mod, frozenset({"go.mod"})),
-    FileKind(GO, CHECKSUMS, None, frozenset({"go.sum"})),
+    FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), records=True),
     FileKind(
         PIP, MANIFEST, requirements, frozenset({"pyproject.toml", "setup.py", "setup.cfg", "Pipfile"}), _requirements
     ),

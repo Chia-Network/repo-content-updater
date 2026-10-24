@@ -192,7 +192,7 @@ class NpmTest(unittest.TestCase):
         (primary,) = plan.primary
         self.assertEqual(primary.new, f"1.0.0 (https://codeload.github.com/org/tool/tar.gz/{'b' * 40})")
 
-    def test_a_range_added_to_a_yarn_stanza_header_at_the_same_version_is_not_a_change(self) -> None:
+    def test_a_range_added_to_a_yarn_stanza_header_at_the_same_version_is_a_gap(self) -> None:
         base = {
             "package.json": _package(dependencies={"lodash": "^4.17.0"}),
             "yarn.lock": _yarn(("lodash@^4.17.0", "4.17.21")),
@@ -203,7 +203,33 @@ class NpmTest(unittest.TestCase):
                 "lodash@^4.17.0:", "lodash@^4.17.0, lodash@^4.17.21:"
             ),
         }
-        self.assertEqual(_plan(base, head), diff.Plan((), (), (("package.json", "unresolved"),), ()))
+        self.assertEqual(
+            _plan(base, head), diff.Plan(gaps=(("package.json", "unresolved"), ("yarn.lock", "unresolved")))
+        )
+
+    def test_a_yarn_header_range_change_alone_is_a_gap(self) -> None:
+        package = _package(dependencies={"lodash": "^4.17.0"})
+        base = {"package.json": package, "yarn.lock": _yarn(("lodash@^4.17.0", "4.17.21"))}
+        head = {"package.json": package, "yarn.lock": _yarn(("lodash@^4.17.21", "4.17.21"))}
+        self.assertEqual(_plan(base, head), diff.Plan(gaps=(("yarn.lock", "unresolved"),)))
+
+    def test_a_lock_root_range_change_at_an_unchanged_version_is_a_gap(self) -> None:
+        package = _package(dependencies={"lodash": "^4.17.0"})
+        installed = {"node_modules/lodash": "4.17.21"}
+        base = {"package.json": package, "package-lock.json": _npm_lock(installed, {"lodash": "^4.17.0"})}
+        head = {"package.json": package, "package-lock.json": _npm_lock(installed, {"lodash": "^4.17.21"})}
+        self.assertEqual(_plan(base, head), diff.Plan(gaps=(("package-lock.json", "unresolved"),)))
+
+    def test_a_lock_root_range_that_moves_with_its_version_is_a_primary_change(self) -> None:
+        base = {
+            "package.json": _package(dependencies={"lodash": "^4.17.20"}),
+            "package-lock.json": _npm_lock({"node_modules/lodash": "4.17.20"}, {"lodash": "^4.17.20"}),
+        }
+        head = {
+            "package.json": _package(dependencies={"lodash": "^4.17.21"}),
+            "package-lock.json": _npm_lock({"node_modules/lodash": "4.17.21"}, {"lodash": "^4.17.21"}),
+        }
+        self.assertEqual(_plan(base, head), diff.Plan(primary=(Change("npm", ".", "lodash", "4.17.20", "4.17.21"),)))
 
     def test_manifest_text_outside_the_dependency_entries_is_a_gap(self) -> None:
         base = {"package.json": _package(dependencies={"a": "1.0.0"}, scripts={"test": "jest"})}
@@ -268,16 +294,53 @@ class NpmTest(unittest.TestCase):
 class GoTest(unittest.TestCase):
     _MOD = "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/spf13/cobra {}\n\tgolang.org/x/sys {} // indirect\n)\n"
 
+    @staticmethod
+    def _sum(*lines: tuple[str, str]) -> str:
+        return "".join(f"{module} {version} h1:{module}-{version}=\n" for module, version in lines)
+
+    def _bump(self, base_sum: str, head_sum: str) -> diff.Plan:
+        """cobra v1.8.0 -> v1.8.1 and sys v0.20.0 -> v0.21.0 in go.mod, beside `base_sum` -> `head_sum`."""
+        return _plan(
+            {"go.mod": self._MOD.format("v1.8.0", "v0.20.0"), "go.sum": base_sum},
+            {"go.mod": self._MOD.format("v1.8.1", "v0.21.0"), "go.sum": head_sum},
+        )
+
     def test_direct_requires_are_primary_and_indirect_requires_are_unchecked(self) -> None:
-        base = {"go.mod": self._MOD.format("v1.8.0", "v0.20.0"), "go.sum": "a\n"}
-        head = {"go.mod": self._MOD.format("v1.8.1", "v0.21.0"), "go.sum": "b\n"}
-        plan = _plan(base, head)
-        self.assertEqual(plan.primary, (Change("go", ".", "github.com/spf13/cobra", "v1.8.0", "v1.8.1"),))
-        self.assertEqual(plan.unchecked, (Change("go", ".", "golang.org/x/sys", "v0.20.0", "v0.21.0"),))
+        cobra, sys = "github.com/spf13/cobra", "golang.org/x/sys"
+        plan = self._bump(
+            self._sum((cobra, "v1.8.0"), (cobra, "v1.8.0/go.mod"), (sys, "v0.20.0/go.mod")),
+            self._sum((cobra, "v1.8.0/go.mod"), (cobra, "v1.8.1"), (cobra, "v1.8.1/go.mod"), (sys, "v0.21.0/go.mod")),
+        )
+        self.assertEqual(plan.primary, (Change("go", ".", cobra, "v1.8.0", "v1.8.1"),))
+        self.assertEqual(plan.unchecked, (Change("go", ".", sys, "v0.20.0", "v0.21.0"),))
         self.assertEqual(plan.gaps, ())
 
-    def test_a_go_sum_change_alone_is_neither_a_change_nor_a_gap(self) -> None:
-        self.assertEqual(_plan({"go.sum": "a\n"}, {"go.sum": "b\n"}), diff.Plan((), (), (), ()))
+    def test_a_go_sum_version_no_go_mod_move_accounts_for_is_unchecked(self) -> None:
+        cobra, other = "github.com/spf13/cobra", "github.com/other/mod"
+        plan = self._bump(
+            self._sum((cobra, "v1.8.0")),
+            self._sum((cobra, "v1.8.1"), (other, "v0.2.0/go.mod")),
+        )
+        self.assertEqual(plan.primary, (Change("go", ".", cobra, "v1.8.0", "v1.8.1"),))
+        self.assertIn(Change("go", ".", other, "", "v0.2.0/go.mod"), plan.unchecked)
+        self.assertEqual(plan.gaps, ())
+
+    def test_a_go_sum_version_outside_the_go_mod_move_is_unchecked(self) -> None:
+        cobra = "github.com/spf13/cobra"
+        plan = self._bump(self._sum((cobra, "v1.8.0")), self._sum((cobra, "v1.9.0")))
+        self.assertIn(Change("go", ".", cobra, "v1.8.0", "v1.9.0"), plan.unchecked)
+
+    def test_a_go_sum_hash_change_at_an_unchanged_version_is_a_gap(self) -> None:
+        cobra = "github.com/spf13/cobra"
+        base_sum = self._sum((cobra, "v1.8.0"), ("golang.org/x/sys", "v0.20.0"))
+        head_sum = base_sum.replace("h1:golang.org/x/sys-v0.20.0=", "h1:other=") + self._sum((cobra, "v1.8.1"))
+        self.assertEqual(self._bump(base_sum, head_sum).gaps, (("go.sum", "unresolved"),))
+
+    def test_a_go_sum_change_alone_is_a_gap_or_unchecked(self) -> None:
+        self.assertEqual(_plan({"go.sum": "a\n"}, {"go.sum": "b\n"}), diff.Plan(gaps=(("go.sum", "unresolved"),)))
+        module = "github.com/spf13/cobra"
+        plan = _plan({"go.sum": self._sum((module, "v1.8.0"))}, {"go.sum": self._sum((module, "v1.8.1"))})
+        self.assertEqual(plan, diff.Plan(unchecked=(Change("go", ".", module, "v1.8.0", "v1.8.1"),)))
 
     def test_a_directive_or_replace_change_is_a_gap(self) -> None:
         base = {"go.mod": self._MOD.format("v1.8.0", "v0.20.0")}

@@ -41,7 +41,7 @@ class _Diff(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(self.enterContext(TemporaryDirectory())) / "repo"
         _git_repo(self.root)
-        self.scanned: list[dict] = []
+        self.scanned: list[coverage.Target] = []
 
     def run_main(
         self,
@@ -60,10 +60,10 @@ class _Diff(unittest.TestCase):
             if base.get(path) != text:
                 _commit(self.root, path, text, f"head {path}")
 
-        def clean_scan(update: dict, *_args: object) -> dict:
+        def clean_scan(update: coverage.Target, *_args: object) -> dict:
             self.scanned.append(update)
-            record = _clean(update["packageName"], update["upstreamRepo"])
-            return {**record, "from_version": update["fromVersion"], "to_version": update["toVersion"]}
+            record = _clean(update.package, update.repo)
+            return {**record, "from_version": update.old, "to_version": update.new}
 
         answers = fetch or {}
 
@@ -115,14 +115,7 @@ class PolicyTest(_Diff):
         )
         self.assertEqual(
             self.scanned,
-            [
-                {
-                    "packageName": "actions/checkout",
-                    "fromVersion": "4.1.0",
-                    "toVersion": "4.2.0",
-                    "upstreamRepo": "actions/checkout",
-                }
-            ],
+            [coverage.Target(package="actions/checkout", old="4.1.0", new="4.2.0", repo="actions/checkout")],
         )
         self.assertEqual(report["policy_warnings"], [])
         self.assertIs(report["scan_conclusive"], True)
@@ -143,7 +136,7 @@ class PolicyTest(_Diff):
                 "go.mod": "require github.com/a/b v1.0.1\n",
             },
         )
-        self.assertEqual([update["upstreamRepo"] for update in self.scanned], ["a/b"])
+        self.assertEqual([update.repo for update in self.scanned], ["a/b"])
         self.assertEqual(
             {(item["ecosystem"], item["reason"]) for item in report["policy_warnings"]},
             {("docker", "unscannable_ecosystem"), ("terraform", "unscannable_ecosystem")},
@@ -174,7 +167,7 @@ class UncheckedUpgradeTest(_Diff):
                 "package-lock.json": _lock({"lodash": "4.17.21", "qs": "6.5.3", "ms": "2.1.3"}),
             },
         )
-        self.assertEqual([(u["packageName"], u["toVersion"]) for u in self.scanned], [])
+        self.assertEqual([(u.package, u.new) for u in self.scanned], [])
         self.assertEqual(report["not_scanned_reason"], "no_upstream_link")
         self.assertEqual(
             report["unchecked_upgrades"],
@@ -192,7 +185,7 @@ class UncheckedUpgradeTest(_Diff):
             {"package.json": _package({"lodash": "4.17.21"}), **head},
             fetch={"https://registry.npmjs.org/lodash/4.17.21": b'{"repository": "github:lodash/lodash"}'},
         )
-        self.assertEqual([(u["packageName"], u["upstreamRepo"]) for u in self.scanned], [("lodash", "lodash/lodash")])
+        self.assertEqual([(u.package, u.repo) for u in self.scanned], [("lodash", "lodash/lodash")])
         self.assertIs(report["scan_conclusive"], True)
         return report, summary
 
@@ -245,9 +238,50 @@ class UncheckedUpgradeTest(_Diff):
         self.assertIn(formatter._NOTHING_SCANNED, published["malware_text"])
 
     def test_an_empty_diff_is_incomplete_coverage(self) -> None:
-        report, _summary = self.run_main({"go.sum": "a\n"}, {"go.sum": "b\n"})
+        report, _summary = self.run_main({"README.md": "a\n"}, {"README.md": "a\n"})
         self.assertEqual(report["not_scanned_reason"], "incomplete_coverage")
         self.assertEqual(formatter.compose_published_review(report, _BENIGN, _MERGE)["check"], "fail")
+
+    def test_a_lock_range_change_at_an_unchanged_version_is_never_benign(self) -> None:
+        base_lock = json.loads(_lock({"lodash": "4.17.20", "qs": "6.5.2"}))
+        head_lock = json.loads(_lock({"lodash": "4.17.21", "qs": "6.5.2"}))
+        base_lock["packages"][""]["dependencies"] = {"qs": "^6.5.0"}
+        head_lock["packages"][""]["dependencies"] = {"qs": "^6.5.2"}
+        report, _summary = self.run_main(
+            {"package.json": _package({"lodash": "4.17.20"}), "package-lock.json": json.dumps(base_lock)},
+            {"package.json": _package({"lodash": "4.17.21"}), "package-lock.json": json.dumps(head_lock)},
+        )
+        self.assertEqual(self.scanned, [])
+        self.assertIn("package-lock.json: unresolved", report["errors"])
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
+        self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
+
+
+class GoSumTest(_Diff):
+    _MOD = "module example.com/app\n\ngo 1.22\n\nrequire github.com/spf13/cobra {}\n"
+    _SUM = "github.com/spf13/cobra {0} h1:tree-{0}=\ngithub.com/spf13/cobra {0}/go.mod h1:mod-{0}=\n"
+
+    def _bump(self, head_sum: str) -> dict:
+        """The published review of cobra v1.8.0 -> v1.8.1 in go.mod, beside go.sum moving to `head_sum`."""
+        report, _summary = self.run_main(
+            {"go.mod": self._MOD.format("v1.8.0"), "go.sum": self._SUM.format("v1.8.0")},
+            {"go.mod": self._MOD.format("v1.8.1"), "go.sum": head_sum},
+        )
+        self.assertEqual([(u.package, u.repo) for u in self.scanned], [("github.com/spf13/cobra", "spf13/cobra")])
+        return formatter.compose_published_review(report, _BENIGN, _MERGE)
+
+    def test_go_sum_lines_for_the_go_mod_move_are_accounted_for(self) -> None:
+        published = self._bump(self._SUM.format("v1.8.1"))
+        self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+
+    def test_a_go_sum_version_no_go_mod_move_accounts_for_is_inconclusive(self) -> None:
+        published = self._bump(self._SUM.format("v1.8.1") + "github.com/other/mod v0.2.0/go.mod h1:x=\n")
+        self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+
+    def test_a_go_sum_hash_rewrite_is_inconclusive_and_blocks(self) -> None:
+        rewritten = self._SUM.format("v1.8.0").replace("h1:tree-v1.8.0=", "h1:other=")
+        published = self._bump(rewritten + self._SUM.format("v1.8.1"))
+        self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
 
 
 class BaseCommitTest(_Diff):
@@ -293,9 +327,9 @@ class PublishedStatusTest(_Diff):
         finding = {"file": "src/client.py", "line": 3, "kind": "network_beacon", "match": "beacon()"}
         findings = {"unicode": [], "confusable": [], "ioc": [], "heuristic": [finding]}
 
-        def strict_warn(update: dict, *_args: object) -> dict:
+        def strict_warn(update: coverage.Target, *_args: object) -> dict:
             return {
-                **_clean("requests", update["upstreamRepo"]),
+                **_clean("requests", update.repo),
                 "status": "warn",
                 "findings": findings,
             }
