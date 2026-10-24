@@ -87,6 +87,12 @@ func removedPaths(fileinfo *config.File) []string {
 	return append(slices.Clone(fileinfo.AlternatePaths), fileinfo.RetiredPaths...)
 }
 
+// writtenPaths lists every path writing fileinfo touches: its repo_path, then
+// the removedPaths it deletes.
+func writtenPaths(fileinfo *config.File) []string {
+	return append([]string{fileinfo.RepoPath}, removedPaths(fileinfo)...)
+}
+
 // adoptableDefaults returns the files of every default bundle that may be
 // written to repoName, in bundle order.
 func adoptableDefaults(repoName string, bundles []config.DefaultBundle, cfg *config.Config) ([]config.SelectedFile, error) {

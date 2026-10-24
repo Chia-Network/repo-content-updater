@@ -316,7 +316,7 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 		if err != nil {
 			return err
 		}
-		for _, repoRelPath := range append([]string{fileinfo.RepoPath}, removedPaths(fileinfo)...) {
+		for _, repoRelPath := range writtenPaths(fileinfo) {
 			if _, err := confinedPath(repoDir(repoName), repoRelPath); err != nil {
 				return err
 			}
@@ -325,8 +325,8 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 	}
 
 	for _, write := range planned {
-		removed := removedPaths(write.fileinfo)
-		if err := removeConfined(repoDir(repoName), removed); err != nil {
+		written := writtenPaths(write.fileinfo)
+		if err := removeConfined(repoDir(repoName), written[1:]); err != nil {
 			return err
 		}
 		repoPath, err := managedWritePath(repoDir(repoName), write.fileinfo.RepoPath)
@@ -336,7 +336,7 @@ func (c *Content) applySelection(repoName string, selection config.ManagedFileSe
 		if err := writeManagedContent(repoPath, write.content); err != nil {
 			return err
 		}
-		if err := stage(write.name, append([]string{write.fileinfo.RepoPath}, removed...)); err != nil {
+		if err := stage(write.name, written); err != nil {
 			return err
 		}
 	}
