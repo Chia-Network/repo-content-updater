@@ -494,7 +494,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
             urls.append(url)
             return fetched.get(url)
 
-        def download(url: str, _hosts: frozenset[str]) -> str | None:
+        def download(url: str, _hosts: frozenset[str], **_kwargs: object) -> str | None:
             downloaded.append(url)
             body = served.get(url)
             return _sha(body) if isinstance(body, bytes) else None
@@ -507,8 +507,9 @@ class TrustedPythonIndexTest(unittest.TestCase):
 
     def test_a_hashed_pin_is_trusted_only_when_a_downloaded_file_matches(self) -> None:
         self.assertEqual(self.trusted("2.0.4", (f"sha256:{_sha(_WHEEL)}",)), _HOST)
-        self.assertEqual(self.downloaded, [_WHEEL_URL, _SDIST_URL])
+        self.assertEqual(self.downloaded, [_WHEEL_URL])
         self.assertEqual(self.trusted("2.0.4", (f"sha256:{_sha(_WHEEL)} sha256:{_sha(_SDIST)}",)), _HOST)
+        self.assertEqual(self.downloaded, [_WHEEL_URL, _SDIST_URL])
         self.assertEqual(self.trusted("2.0.4", (f"sha256:{_sha(b'other')}",)), "")
 
     def test_every_locked_hash_must_match_a_downloaded_file(self) -> None:
@@ -523,6 +524,23 @@ class TrustedPythonIndexTest(unittest.TestCase):
     def test_a_failed_download_is_not_trusted(self) -> None:
         hashed = (f"sha256:{_sha(_WHEEL)}",)
         self.assertEqual(self.trusted("2.0.4", hashed, downloads={_WHEEL_URL: None, _SDIST_URL: _SDIST}), "")
+
+    def test_a_download_budget_limit_is_not_trusted(self) -> None:
+        body = b"body"
+        page = b'<a href="../../files/chiapos-2.0.4.tar.gz">s</a>\n'
+
+        def get_response(url: str, _accept: str) -> tuple[_Connection, _Reply]:
+            return _Connection(), _Reply([page if url == f"{_CHIA}chiapos/" else body])
+
+        real_budget = upstream._DownloadBudget
+        with (
+            patch.object(upstream, "_get_response", get_response),
+            patch.object(upstream, "_DownloadBudget", lambda **_kwargs: real_budget(size=1, clock=lambda: 0.0)),
+        ):
+            found = upstream.trusted_python_index(
+                "ChiaPos", "2.0.4", (upstream.Locked(f"sha256:{_sha(body)}"),), frozenset({_CHIA})
+            )
+        self.assertEqual(found, "")
 
     def test_an_off_host_file_link_is_not_downloaded(self) -> None:
         page = b'<a href="https://example.com/chiapos-2.0.4.tar.gz">x</a>\n'
@@ -602,7 +620,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
 
         with (
             patch.object(upstream, "_get", get),
-            patch.object(upstream, "_sha256_download", lambda _url, _hosts: _sha(_SDIST)),
+            patch.object(upstream, "_sha256_download", lambda _url, _hosts, **_kwargs: _sha(_SDIST)),
         ):
             found = upstream.trusted_python_index(
                 "ChiaPos", version, (upstream.Locked(f"sha256:{_sha(_SDIST)}"),), frozenset({_CHIA})
@@ -649,14 +667,30 @@ class _Connection:
 
 
 class Sha256DownloadTest(unittest.TestCase):
-    def download(self, chunks: list[bytes], limit: int = 8) -> str | None:
+    def download(
+        self,
+        chunks: list[bytes],
+        limit: int = 8,
+        budget: upstream._DownloadBudget | None = None,
+    ) -> str | None:
         reply = _Reply(chunks)
         with patch.object(upstream, "_get_response", lambda _url, _accept: (_Connection(), reply)):
-            return upstream._sha256_download(f"https://{_HOST}/x", frozenset({_HOST}), limit)
+            return upstream._sha256_download(f"https://{_HOST}/x", frozenset({_HOST}), limit, budget)
 
     def test_a_body_over_the_limit_has_no_digest(self) -> None:
         self.assertIsNone(self.download([b"1234", b"5678", b"9"]))
         self.assertEqual(self.download([b"1234", b"5678"]), _sha(b"12345678"))
+
+    def test_the_byte_budget_is_shared_across_downloads(self) -> None:
+        budget = upstream._DownloadBudget(size=8, clock=lambda: 0.0)
+        self.assertEqual(self.download([b"1234"], budget=budget), _sha(b"1234"))
+        self.assertIsNone(self.download([b"56789"], budget=budget))
+
+    def test_an_expired_deadline_has_no_digest(self) -> None:
+        now = [0.0]
+        budget = upstream._DownloadBudget(clock=lambda: now[0])
+        now[0] = upstream._INDEX_DOWNLOAD_SECONDS + 1
+        self.assertIsNone(self.download([b"abc"], budget=budget))
 
     def test_a_download_from_another_host_is_not_read(self) -> None:
         self.assertIsNone(upstream._sha256_download("https://example.com/x", frozenset({_HOST})))

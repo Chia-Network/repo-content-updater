@@ -20,8 +20,9 @@ import hashlib
 import http.client
 import json
 import re
+import time
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import NamedTuple
 
 import dependency_cursor_review_versions as versions
@@ -81,6 +82,8 @@ _TIMEOUT = 20
 _CHUNK = 1024 * 1024
 _MAX_INDEX_FILE = 512 * 1024 * 1024
 _MAX_INDEX_FILES = 64
+_INDEX_DOWNLOAD_SECONDS = 120.0
+_MAX_INDEX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 
 
 def _get_response(url: str, accept: str) -> tuple[http.client.HTTPSConnection, http.client.HTTPResponse] | None:
@@ -168,12 +171,45 @@ def fetch_archive(url: str, limit: int, follow: Mapping[str, str] | None = None)
     return _fetch(url, limit, follow) or None
 
 
-def _sha256_download(url: str, hosts: frozenset[str], limit: int = _MAX_INDEX_FILE) -> str | None:
+class _DownloadBudget:
+    """The time and total byte allowance shared by all file downloads of one check."""
+
+    def __init__(
+        self,
+        seconds: float = _INDEX_DOWNLOAD_SECONDS,
+        size: int = _MAX_INDEX_DOWNLOAD_BYTES,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._clock = clock
+        self.deadline = clock() + seconds
+        self.remaining = size
+
+    def expired(self) -> bool:
+        return self._clock() >= self.deadline
+
+    def take(self, size: int) -> bool:
+        """Consume `size` bytes, or return False when they exceed what is left."""
+        if size > self.remaining:
+            return False
+        self.remaining -= size
+        return True
+
+
+def _sha256_download(
+    url: str,
+    hosts: frozenset[str],
+    limit: int = _MAX_INDEX_FILE,
+    budget: _DownloadBudget | None = None,
+) -> str | None:
     """The sha256 of an https GET body from a host in `hosts`, or None when it is not a 200 or exceeds `limit` bytes.
 
     The body is read in chunks. A redirect is followed only to a host in `hosts`, and at most _MAX_REDIRECTS times.
+    `budget` bounds the whole check's time and bytes; a limit that it hits gives no digest.
     """
+    budget = budget or _DownloadBudget()
     for _hop in range(_MAX_REDIRECTS + 1):
+        if budget.expired():
+            return None
         parts = urllib.parse.urlsplit(url)
         if parts.scheme != "https" or parts.hostname not in hosts:
             return None
@@ -194,7 +230,7 @@ def _sha256_download(url: str, hosts: frozenset[str], limit: int = _MAX_INDEX_FI
             size = 0
             while chunk := response.read(_CHUNK):
                 size += len(chunk)
-                if size > limit:
+                if size > limit or not budget.take(len(chunk)) or budget.expired():
                     return None
                 digest.update(chunk)
             return digest.hexdigest()
@@ -359,6 +395,22 @@ class Locked(NamedTuple):
     index: str = ""  # the trusted index its file replaces PyPI with, "" when it does not
 
 
+def _serves_wanted(files: tuple[str, ...], hosts: frozenset[str], wanted: set[str], budget: _DownloadBudget) -> bool:
+    """Whether `files` serve every wanted digest, stopping once they all match.
+
+    A file that cannot be read or a budget limit means no match.
+    """
+    found: set[str] = set()
+    for url in files:
+        if wanted <= found:
+            return True
+        digest = _sha256_download(url, hosts, budget=budget)
+        if digest is None:
+            return False
+        found.add(digest)
+    return wanted <= found
+
+
 def trusted_python_index(
     name: str,
     version: str,
@@ -382,6 +434,7 @@ def trusted_python_index(
     pages: dict[str, tuple[str, ...] | None] = {}
     served: set[str] = set()
     matched = ""
+    budget = _DownloadBudget()
     for index in TRUSTED_PYTHON_INDEXES:
         if index not in configured:
             continue
@@ -393,12 +446,8 @@ def trusted_python_index(
         hosts = _index_hosts(index)
         if index in required:
             served.add(index)
-        if wanted:
-            downloaded = [_sha256_download(url, hosts) for url in files]
-            if all(digest is not None for digest in downloaded) and wanted <= {
-                digest for digest in downloaded if digest
-            }:
-                matched = matched or index
+        if wanted and _serves_wanted(files, hosts, wanted, budget):
+            matched = matched or index
     if required - served or (wanted and not matched):
         return ""
     chosen = next(index for index in TRUSTED_PYTHON_INDEXES if index in required) if required else matched
