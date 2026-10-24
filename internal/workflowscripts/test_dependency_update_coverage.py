@@ -621,6 +621,28 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         )
         self.assertEqual(published["check"], "fail")
 
+    def test_a_pip_change_beside_another_configured_package_index_is_not_looked_up(self) -> None:
+        config = "registries:\n  extra:\n    type: 'python-index'\n    url: https://example.com/simple/\n"
+        looked_up: list[str] = []
+
+        def repo(_ecosystem: str, name: str, _version: str) -> upstream.Repo:
+            looked_up.append(name)
+            return _found(f"upstream/{name}")
+
+        plan = _plan(("pip", ".", "attrs", "23.1.0", "23.2.0"), ("npm", ".", "lodash", "4.17.20", "4.17.21"))
+        texts = {".github/dependabot.yml": config}
+        with patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path, "")):
+            report, summary, _output = _run_main(
+                plan, repo=repo, scan=lambda target, *_args: _clean(target.package, target.repo.slug)
+            )
+        self.assertEqual(looked_up, ["lodash"])
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertIn("configured_index", summary)
+        published = formatter.compose_published_review(
+            report, "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n", "COMPATIBILITY_RECOMMENDATION: Merge\n"
+        )
+        self.assertNotEqual(published["verdict"], "benign")
+
     def test_unreadable_diff_is_one_unresolved_gap(self) -> None:
         report, summary, _output = _run_main(None)
         self.assertEqual((report["path"], report["not_scanned_reason"]), ("pull request diff", "unresolved"))

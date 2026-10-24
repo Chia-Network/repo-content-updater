@@ -380,6 +380,9 @@ def any_read(report: dict) -> bool:
 
 
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
+# A Dependabot registry of a Python package index. pip may install from it as well as PyPI.
+_PYTHON_INDEX_RE = re.compile(r"""^\s*type:\s*(["']?)python-index\1\s*(#.*)?$""", re.MULTILINE)
+_DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
 
 
 def _git_text(rev: str, path: str) -> str:
@@ -559,9 +562,16 @@ def _exact(change: _diff.Change) -> tuple[Target, str]:
 def _targets(changes: list[_diff.Change]) -> list[tuple[_diff.Change, Target, str]]:
     """Each change as (change, Target with its repository, why it is not scanned or "").
 
-    Each distinct (ecosystem, name, version) is looked up once, and the lookups run concurrently.
+    Each distinct (ecosystem, name, version) is looked up once, and the lookups run concurrently. A pip change is
+    "configured_index" when the Dependabot config names another Python package index: the lookups read PyPI, which
+    may not be where pip installs it from.
     """
+    other_index = any(_PYTHON_INDEX_RE.search(_git_text("HEAD", path)) for path in _DEPENDABOT_CONFIGS)
     exact = [(change, *_exact(change)) for change in changes]
+    exact = [
+        (change, target, why or ("configured_index" if other_index and change.ecosystem == "pip" else ""))
+        for change, target, why in exact
+    ]
     keys = [(change.ecosystem, change.name, target.new) for change, target, _why in exact]
     wanted = list(dict.fromkeys(key for key, (_change, _target, why) in zip(keys, exact) if not why))
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
