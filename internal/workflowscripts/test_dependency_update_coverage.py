@@ -643,6 +643,87 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         )
         self.assertNotEqual(published["verdict"], "benign")
 
+    def test_a_pip_change_a_trusted_index_serves_is_trusted_and_the_rest_are_looked_up(self) -> None:
+        config = "registries:\n  chia:\n    type: python-index\n    url: https://pypi.chia.net/simple\n"
+        looked_up: list[str] = []
+        asked: list[tuple[str, str, frozenset[str]]] = []
+
+        def repo(_ecosystem: str, name: str, _version: str) -> upstream.Repo:
+            looked_up.append(name)
+            return _found(f"upstream/{name}")
+
+        def trusted(name: str, version: str, _locked: tuple[str, ...], configured: frozenset[str]) -> str:
+            asked.append((name, version, configured))
+            return "pypi.chia.net" if name == "chiapos" else ""
+
+        plan = _plan(
+            ("pip", ".", "chiapos", "2.0.3", "2.0.4"),
+            ("pip", ".", "attrs", "23.1.0", "23.2.0"),
+            ("npm", ".", "lodash", "4.17.20", "4.17.21"),
+        )
+        texts = {".github/dependabot.yml": config}
+        with (
+            patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path, "")),
+            patch.object(upstream, "trusted_python_index", trusted),
+        ):
+            report, summary, _output = _run_main(
+                plan, repo=repo, scan=lambda target, *_args: _clean(target.package, target.repo.slug)
+            )
+        self.assertEqual(sorted(looked_up), ["attrs", "lodash"])
+        self.assertEqual(
+            sorted(asked),
+            [
+                (name, "2.0.4" if name == "chiapos" else "23.2.0", frozenset({"https://pypi.chia.net/simple/"}))
+                for name in ("attrs", "chiapos")
+            ],
+        )
+        self.assertEqual(
+            [(item["name"], item["index"]) for item in report["trusted_packages"]], [("chiapos", "pypi.chia.net")]
+        )
+        self.assertNotIn("configured_index", summary)
+        self.assertIn("configured package indexes are trusted", summary)
+        self.assertIn("`chiapos 2.0.3 -> 2.0.4`", summary)
+        published = formatter.compose_published_review(
+            report, "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n", "COMPATIBILITY_RECOMMENDATION: Merge\n"
+        )
+        without = formatter.compose_published_review(
+            {**report, "trusted_packages": []},
+            "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n",
+            "COMPATIBILITY_RECOMMENDATION: Merge\n",
+        )
+        self.assertEqual((published["verdict"], published["check"]), (without["verdict"], without["check"]))
+
+    def test_only_listed_indexes_are_trusted_and_anything_else_trusts_none(self) -> None:
+        chia = "https://pypi.chia.net/simple/"
+        download = "https://download.chia.net/simple/"
+
+        def config(*entries: tuple[str, str]) -> str:
+            blocks = "".join(
+                f"  r{i}:\n    type: {kind}\n    url: {url}  # note\n" for i, (kind, url) in enumerate(entries)
+            )
+            return f"version: 2\nregistries:\n{blocks}updates:\n  - package-ecosystem: pip\n    registries: '*'\n"
+
+        cases = {
+            "both": (config(("python-index", chia), ("python-index", download.rstrip("/"))), {chia, download}, False),
+            "none": ("version: 2\n", set(), False),
+            "other kind": (config(("npm-registry", "https://npm.example.com")), set(), False),
+            "lookalike": (config(("python-index", "https://pypi.chia.net.evil/simple/")), set(), True),
+            "plain http": (config(("python-index", "http://pypi.chia.net/simple/")), set(), True),
+            "beside unknown": (
+                config(("python-index", chia), ("python-index", "https://example.com/simple/")),
+                set(),
+                True,
+            ),
+            "unread form": (
+                'registries: {x: {type: python-index, url: "https://pypi.chia.net/simple/"}}\n',
+                set(),
+                True,
+            ),
+        }
+        for label, (text, trusted, other) in cases.items():
+            with self.subTest(label):
+                self.assertEqual(coverage._python_indexes(text), coverage.Indexes(frozenset(trusted), other))
+
     def test_unreadable_diff_is_one_unresolved_gap(self) -> None:
         report, summary, _output = _run_main(None)
         self.assertEqual((report["path"], report["not_scanned_reason"]), ("pull request diff", "unresolved"))

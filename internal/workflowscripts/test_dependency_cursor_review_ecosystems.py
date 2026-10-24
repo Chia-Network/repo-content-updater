@@ -384,7 +384,7 @@ class UpstreamRepoTest(unittest.TestCase):
     def _follow(self, answers: dict[str, tuple[int, str, bytes]], url: str, follow: frozenset[str]) -> object:
         self.requested: list[str] = []
 
-        def get(url: str, _limit: int) -> tuple[int, str, bytes]:
+        def get(url: str, _limit: int, _accept: str) -> tuple[int, str, bytes]:
             self.requested.append(url)
             return answers[url]
 
@@ -434,3 +434,52 @@ class UpstreamRepoTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+_CHIA = "https://pypi.chia.net/simple/"
+_PAGE = (
+    b'<a href="../../files/chiapos-2.0.4-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=AAAA">w</a>\n'
+    b'<a href="../../files/chiapos-2.0.4.tar.gz#sha256=bbbb">s</a>\n'
+    b'<a href="../../files/chiapos-2.0.3.tar.gz#sha256=cccc">old</a>\n'
+)
+
+
+class TrustedPythonIndexTest(unittest.TestCase):
+    def trusted(self, version: str, locked: tuple[str, ...] = (), configured=frozenset({_CHIA}), pages=None) -> str:
+        urls: list[str] = []
+        pages = {f"{_CHIA}chiapos/": _PAGE} if pages is None else pages
+
+        def fetch(url: str, **_kwargs: object) -> bytes | None:
+            urls.append(url)
+            return pages.get(url)
+
+        with patch.object(upstream, "_fetch", fetch):
+            found = upstream.trusted_python_index("ChiaPos", version, locked, configured)
+        self.urls = urls
+        return found
+
+    def test_a_served_version_is_trusted_with_its_host(self) -> None:
+        self.assertEqual(self.trusted("2.0.4"), "pypi.chia.net")
+        self.assertEqual(self.urls, [f"{_CHIA}chiapos/"])
+
+    def test_every_locked_hash_must_be_served(self) -> None:
+        self.assertEqual(self.trusted("2.0.4", ("sha256:aaaa sha256:BBBB",)), "pypi.chia.net")
+        self.assertEqual(self.trusted("2.0.4", ("sha256:aaaa sha256:dddd",)), "")
+        self.assertEqual(self.trusted("2.0.4", ("sha256:cccc",)), "")
+
+    def test_a_version_the_index_does_not_serve_is_not_trusted(self) -> None:
+        self.assertEqual(self.trusted("2.0.5"), "")
+        self.assertEqual(self.trusted("2.0.4", pages={}), "")
+
+    def test_only_a_listed_index_is_ever_read(self) -> None:
+        evil = "https://pypi.chia.net.evil/simple/"
+        self.assertEqual(self.trusted("2.0.4", configured=frozenset({evil}), pages={f"{evil}chiapos/": _PAGE}), "")
+        self.assertEqual(self.urls, [])
+        self.assertEqual(self.trusted("2.0.4", configured=frozenset()), "")
+        self.assertEqual(self.urls, [])
+
+    def test_release_reads_wheel_and_sdist_names(self) -> None:
+        self.assertEqual(upstream._release("Chia_Pos-2.0.4-cp312-cp312-linux_x86_64.whl"), ("chia-pos", "2.0.4"))
+        self.assertEqual(upstream._release("chia.pos-2.0.4.tar.gz"), ("chia-pos", "2.0.4"))
+        self.assertEqual(upstream._release("chiapos-2.0.4.whl"), ("", ""))
+        self.assertEqual(upstream._release("chiapos-2.0.4.exe"), ("", ""))

@@ -39,6 +39,7 @@ class CombineCompleteTest(unittest.TestCase):
                     "policy_warnings": [],
                     "unchecked_upgrades": [],
                     "unparsed_locks": [],
+                    "trusted_packages": [],
                     "binding": {"kind": "intrinsic", "reason": ""},
                     "repo_source": "identity",
                 }
@@ -570,6 +571,7 @@ class CombineCompleteTest(unittest.TestCase):
                 "policy_warnings": [],
                 "unchecked_upgrades": [],
                 "unparsed_locks": [],
+                "trusted_packages": [],
                 "binding": {"kind": "intrinsic", "reason": ""},
                 "repo_source": "identity",
             },
@@ -601,6 +603,7 @@ class CombineCompleteTest(unittest.TestCase):
                 "policy_warnings": [],
                 "unchecked_upgrades": [],
                 "unparsed_locks": [],
+                "trusted_packages": [],
                 "binding": {"kind": "intrinsic", "reason": ""},
                 "repo_source": "identity",
             },

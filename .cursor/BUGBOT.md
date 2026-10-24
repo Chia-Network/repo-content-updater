@@ -16,6 +16,10 @@ adversarial.
 - Version or tag text accepted without the ecosystem's canonical grammar.
 - A second parser or decision point for something that already has a
   canonical one.
+- Anything that lets repository or upstream content add a trusted package
+  index, or trust a package that a listed index does not serve at that
+  exact version and lock hashes (see "Trusted package indexes" in
+  `AGENTS.md`).
 
 ## Do not raise
 
@@ -25,3 +29,6 @@ adversarial.
   defending against the agent.
 - Hypothetical attacks that need write access to the default branch or to
   repository secrets.
+- "Packages from the organization's configured package indexes are not
+  scanned." That trust is deliberate (see "Trusted package indexes" in
+  `AGENTS.md`).

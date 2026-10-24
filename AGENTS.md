@@ -34,3 +34,21 @@ review agent on Dependabot and Renovate pull requests.
 - **Keep it simple.** Each defense must answer an upstream-content threat.
   Complexity whose only purpose is guarding against the trusted agent should
   be removed, not extended.
+
+## Trusted package indexes
+
+This is a deliberate decision: **packages from the organization's
+configured package indexes are trusted and are not scanned.** The indexes
+are listed only in `TRUSTED_PYTHON_INDEXES` in
+`internal/workflowscripts/dependency_cursor_review_upstream.py`.
+
+- A repository's Dependabot config can select among the listed indexes. It
+  cannot add one. A config naming any other Python index, or one the
+  scripts cannot read, leaves every pip change inconclusive.
+- A pip change is trusted only when a listed, configured index serves that
+  exact version and every file hash its lock records. Otherwise it is
+  looked up and scanned as usual.
+- Trusted changes are disclosed in the review summary. They never block,
+  and they are not counted as scanned.
+- Do not "fix" this by scanning or blocking these packages. Changing the
+  list or this rule needs the maintainers' explicit sign-off.

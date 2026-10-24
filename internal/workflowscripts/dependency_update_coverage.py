@@ -55,6 +55,7 @@ class Disclosure(NamedTuple):
     policy_warnings: tuple[dict, ...] = ()
     unchecked_upgrades: tuple[dict, ...] = ()
     unparsed_locks: tuple[str, ...] = ()
+    trusted_packages: tuple[dict, ...] = ()  # served by a configured trusted index: change fields and its "index"
 
 
 _NONE_DISCLOSED = Disclosure()
@@ -344,6 +345,10 @@ def _disclosure(report: dict) -> list[str]:
     if locks:
         lines.append("- These lockfiles were not parsed, so the packages they changed were not checked:")
         lines.extend(f"  - {_code(path)}" for path in locks)
+    trusted = report.get("trusted_packages") or []
+    if trusted:
+        lines.append("- Packages from the organization's configured package indexes are trusted and were not scanned:")
+        lines.extend(f"  - {_change(item)} from {_code(item.get('index'))}" for item in trusted)
     return lines
 
 
@@ -380,9 +385,44 @@ def any_read(report: dict) -> bool:
 
 
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
-# A Dependabot registry of a Python package index. pip may install from it as well as PyPI.
-_PYTHON_INDEX_RE = re.compile(r"""^\s*type:\s*(["']?)python-index\1\s*(#.*)?$""", re.MULTILINE)
+_REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
+_REGISTRY_FIELD_RE = re.compile(r"""^    (type|url):\s*(["']?)([^"'\s#]+)\2\s*(#.*)?$""")
 _DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
+
+
+class Indexes(NamedTuple):
+    """The Python package indexes the Dependabot config names besides PyPI."""
+
+    trusted: frozenset[str] = frozenset()  # each one in upstream.TRUSTED_PYTHON_INDEXES
+    other: bool = False  # whether it names any other one, or one this cannot read
+
+
+def _python_indexes(text: str) -> Indexes:
+    """The python-index registries of one Dependabot config. Only a URL in TRUSTED_PYTHON_INDEXES is trusted."""
+    fields: dict[str, str] | None = None
+    blocks: list[dict[str, str]] = []
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line.startswith(" "):
+            fields = {} if line.split("#", 1)[0].strip() == "registries:" else None
+            blocks += [fields] if fields is not None else []
+        elif fields is not None and _REGISTRY_RE.match(line):
+            fields = {}
+            blocks.append(fields)
+        elif fields is not None and (match := _REGISTRY_FIELD_RE.match(line)):
+            fields[match.group(1)] = match.group(3)
+    urls = [block.get("url", "") for block in blocks if block.get("type") == "python-index"]
+    urls = [url if url.endswith("/") else f"{url}/" for url in urls]
+    trusted = frozenset(url for url in urls if url in _upstream.TRUSTED_PYTHON_INDEXES)
+    # Every python-index this reads has a URL, or the config is not read and nothing is trusted.
+    other = len(urls) != text.count("python-index") or len(trusted) != len(set(urls))
+    return Indexes(frozenset() if other else trusted, other)
+
+
+def _configured_indexes() -> Indexes:
+    found = [_python_indexes(_git_text("HEAD", path)) for path in _DEPENDABOT_CONFIGS]
+    return Indexes(frozenset().union(*(item.trusted for item in found)), any(item.other for item in found))
 
 
 def _git_text(rev: str, path: str) -> str:
@@ -559,17 +599,42 @@ def _exact(change: _diff.Change) -> tuple[Target, str]:
     return target, "" if new and (old or not change.old) else "unresolved"
 
 
-def _targets(changes: list[_diff.Change]) -> list[tuple[_diff.Change, Target, str]]:
+def _trusted(
+    changes: list[_diff.Change], indexes: Indexes, hashed: tuple[str, ...]
+) -> tuple[list[_diff.Change], tuple[dict, ...]]:
+    """The changes still to scan, and the pip changes a configured trusted index serves (with its host).
+
+    Packages from the organization's configured package indexes are trusted and not scanned (AGENTS.md). With any
+    other index configured, none is.
+    """
+    if indexes.other or not indexes.trusted:
+        return changes, ()
+
+    def host(change: _diff.Change) -> str:
+        version = _versions.exact_body(change.new, mode=change.ecosystem)
+        if change.ecosystem != "pip" or not version:
+            return ""
+        locked = _ecosystems.locked(
+            change.ecosystem, change.dir, change.name, version, lambda path: _git_text("HEAD", path), hashed
+        )
+        return _upstream.trusted_python_index(change.name, version, locked, indexes.trusted)
+
+    with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
+        hosts = list(pool.map(host, changes))
+    rest = [change for change, found in zip(changes, hosts) if not found]
+    return rest, tuple({**change._asdict(), "index": found} for change, found in zip(changes, hosts) if found)
+
+
+def _targets(changes: list[_diff.Change], indexes: Indexes) -> list[tuple[_diff.Change, Target, str]]:
     """Each change as (change, Target with its repository, why it is not scanned or "").
 
     Each distinct (ecosystem, name, version) is looked up once, and the lookups run concurrently. A pip change is
-    "configured_index" when the Dependabot config names another Python package index: the lookups read PyPI, which
-    may not be where pip installs it from.
+    "configured_index" when the Dependabot config names a Python package index that is not trusted: the lookups
+    read PyPI, which may not be where pip installs it from.
     """
-    other_index = any(_PYTHON_INDEX_RE.search(_git_text("HEAD", path)) for path in _DEPENDABOT_CONFIGS)
     exact = [(change, *_exact(change)) for change in changes]
     exact = [
-        (change, target, why or ("configured_index" if other_index and change.ecosystem == "pip" else ""))
+        (change, target, why or ("configured_index" if indexes.other and change.ecosystem == "pip" else ""))
         for change, target, why in exact
     ]
     keys = [(change.ecosystem, change.name, target.new) for change, target, _why in exact]
@@ -696,7 +761,7 @@ def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
 
 
 def _scan_all(
-    changes: list[_diff.Change], work: Path, scan_script: Path, hashed: tuple[str, ...]
+    changes: list[_diff.Change], work: Path, scan_script: Path, hashed: tuple[str, ...], indexes: Indexes
 ) -> tuple[list[dict], list[tuple[dict, Path]], tuple[dict, ...]]:
     """(records, (record, scan directory) per scan, policy warnings the scans found) for the changes to scan.
 
@@ -706,7 +771,7 @@ def _scan_all(
     scans: list[tuple[dict, Path]] = []
     warnings: list[dict] = []
     covered: list[tuple[_diff.Change, Target, dict]] = []
-    for index, (change, target, why) in enumerate(_targets(changes)):
+    for index, (change, target, why) in enumerate(_targets(changes, indexes)):
         if why:
             records.append(uncovered(target, why))
             continue
@@ -736,14 +801,16 @@ def main() -> None:
     gaps = plan.gaps if plan else (("pull request diff", "unresolved"),)
     plan = plan or _diff.Plan()
     changes, warnings = _split(plan)
+    indexes = _configured_indexes()
+    changes, trusted = _trusted(changes, indexes, plan.hashed)
     work = Path(".dcr-dependency-scans")
     remove_entry(work)
     work.mkdir()
     try:
-        scanned, scans, found = _scan_all(changes, work, scan_script, plan.hashed)
+        scanned, scans, found = _scan_all(changes, work, scan_script, plan.hashed, indexes)
         records = [uncovered(Target(path=path), reason) for path, reason in gaps] + scanned
         unchecked = tuple(change._asdict() for change in plan.unchecked)
-        report = aggregate(records, Disclosure(warnings + found, unchecked, plan.unparsed_locks))
+        report = aggregate(records, Disclosure(warnings + found, unchecked, plan.unparsed_locks, trusted))
         summary = render_summary(report, records)
         _write_report(out, report, summary)
         _keep_checkout(records, scans)

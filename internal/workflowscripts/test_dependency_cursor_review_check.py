@@ -153,6 +153,7 @@ class PublishedCheckTest(unittest.TestCase):
             "policy_warnings": [],
             "unchecked_upgrades": [],
             "unparsed_locks": [],
+            "trusted_packages": [],
         }
         passed = self._enforce(clean, stored='{"check": "fail"}')
         self.assertEqual(passed.returncode, 0, msg=passed.stderr or passed.stdout)
@@ -201,6 +202,7 @@ class PublishedCheckTest(unittest.TestCase):
             "policy_warnings": [],
             "unchecked_upgrades": [],
             "unparsed_locks": [],
+            "trusted_packages": [],
         }
         finding = {"kind": "unicode", "file": "pkg/index.js", "line": "1", "match": "bidi"}
         suspicious = {**clean, "status": "warn", "findings": {**clean["findings"], "unicode": [finding]}}
@@ -234,6 +236,7 @@ class PublishedCheckTest(unittest.TestCase):
             "policy_warnings": [],
             "unchecked_upgrades": [],
             "unparsed_locks": [],
+            "trusted_packages": [],
         }
         malware = json.dumps(
             {

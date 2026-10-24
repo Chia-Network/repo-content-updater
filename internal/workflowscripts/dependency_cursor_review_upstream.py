@@ -75,7 +75,7 @@ _REDIRECTS = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 5
 
 
-def _get(url: str, limit: int) -> tuple[int, str, bytes] | None:
+def _get(url: str, limit: int, accept: str = "application/json") -> tuple[int, str, bytes] | None:
     """The status, Location header and first `limit + 1` body bytes of an https GET, or None when there is none."""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != "https" or not parts.hostname:
@@ -83,7 +83,7 @@ def _get(url: str, limit: int) -> tuple[int, str, bytes] | None:
     target = parts.path + (f"?{parts.query}" if parts.query else "")
     connection = http.client.HTTPSConnection(parts.hostname, timeout=20)
     try:
-        connection.request("GET", target, headers={"Accept": "application/json", "User-Agent": "dependency-review"})
+        connection.request("GET", target, headers={"Accept": accept, "User-Agent": "dependency-review"})
         response = connection.getresponse()
         return response.status, response.getheader("Location") or "", response.read(limit + 1)
     except (OSError, http.client.HTTPException):
@@ -92,13 +92,15 @@ def _get(url: str, limit: int) -> tuple[int, str, bytes] | None:
         connection.close()
 
 
-def _fetch(url: str, limit: int = _LIMIT, follow: frozenset[str] = frozenset()) -> bytes | None:
+def _fetch(
+    url: str, limit: int = _LIMIT, follow: frozenset[str] = frozenset(), accept: str = "application/json"
+) -> bytes | None:
     """The body of a 200 response to an https GET, b"" for a 404, or None when there is no readable answer.
 
     A redirect is followed only to an https URL on a host in `follow`, and at most _MAX_REDIRECTS times.
     """
     for _hop in range(_MAX_REDIRECTS + 1):
-        answer = _get(url, limit)
+        answer = _get(url, limit, accept)
         if answer is None:
             return None
         status, location, body = answer
@@ -201,3 +203,59 @@ def go(module: str, _version: str) -> Repo:
     if parts[0] == "github.com":
         return _found(_repo(parts[1], parts[2]) if len(parts) >= 3 else "", IDENTITY)
     return _found(_go_get_repository(module), PUBLISHER)
+
+
+# Deliberate trust decision (AGENTS.md, "Trusted package indexes"): a Python package that one of the organization's
+# own indexes below serves, at the exact version and with every file hash the lock records, is trusted and is not
+# scanned. This tuple is the only list of trusted indexes. A repository's Dependabot config can select among them,
+# but nothing a repository or a package says can add one; any other configured index leaves pip changes inconclusive.
+TRUSTED_PYTHON_INDEXES = ("https://pypi.chia.net/simple/", "https://download.chia.net/simple/")
+_INDEX_LINK_RE = re.compile(r"""<a\s[^>]*?href=["']([^"']+)["']""", re.IGNORECASE)
+_SDIST_SUFFIXES = (".tar.gz", ".zip", ".tar.bz2")
+
+
+def _canonical(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _release(filename: str) -> tuple[str, str]:
+    """(canonical project name, version) of a wheel or sdist file name, or ("", "")."""
+    if filename.endswith(".whl"):
+        parts = filename.removesuffix(".whl").split("-")
+        return (_canonical(parts[0]), parts[1]) if len(parts) >= 5 else ("", "")
+    for suffix in _SDIST_SUFFIXES:
+        if filename.endswith(suffix):
+            name, _, version = filename.removesuffix(suffix).rpartition("-")
+            return (_canonical(name), version) if name else ("", "")
+    return ("", "")
+
+
+def _index_digests(index: str, name: str, version: str) -> set[str] | None:
+    """The sha256 of each file a simple index page lists for `name` at `version` ("" for one with no hash), or None."""
+    body = _fetch(f"{index}{_canonical(name)}/", accept="text/html")
+    if not body:
+        return None
+    page = body.decode("utf-8", errors="replace")
+    digests: set[str] = set()
+    for href in _INDEX_LINK_RE.findall(page):
+        parts = urllib.parse.urlsplit(urllib.parse.unquote(href.replace("&amp;", "&")))
+        if _release(parts.path.rsplit("/", 1)[-1]) == (_canonical(name), version):
+            fragment = urllib.parse.parse_qs(parts.fragment)
+            digests.add((fragment.get("sha256") or [""])[0].lower())
+    return digests or None
+
+
+def trusted_python_index(name: str, version: str, locked: tuple[str, ...], configured: frozenset[str]) -> str:
+    """The host of the first trusted index in `configured` that serves `name` at `version`, or "".
+
+    The index must list a file of that exact version, and the sha256 of every file the lock records (`locked`, as
+    binding.Subject.locked) when it records any.
+    """
+    if not _PYPI_NAME_RE.fullmatch(name) or not version:
+        return ""
+    wanted = {digest.removeprefix("sha256:").lower() for hashes in locked for digest in hashes.split()}
+    for index in TRUSTED_PYTHON_INDEXES:
+        served = _index_digests(index, name, version) if index in configured else None
+        if served and wanted <= served - {""}:
+            return urllib.parse.urlsplit(index).hostname or ""
+    return ""

@@ -346,7 +346,7 @@ class GoTest(_Registry):
             stored: (200, "", _UTFBOM),
             _GO_INFO: (200, "", json.dumps(_origin(_GO_COMMIT)).encode()),
         }
-        with patch.object(upstream, "_get", lambda url, _limit: answers[url]):
+        with patch.object(upstream, "_get", lambda url, _limit, _accept: answers[url]):
             self.assertEqual(binding.go(_GO), binding.Binding(binding.CHECKSUM))
 
     def test_a_proxy_zip_that_does_not_hash_to_go_sum_is_a_hash_mismatch(self) -> None:
