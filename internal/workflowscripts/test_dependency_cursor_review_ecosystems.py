@@ -561,9 +561,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
             patch.object(upstream, "_get_response", get_response),
             patch.object(upstream, "_DownloadBudget", lambda **_kwargs: real_budget(seconds=3, clock=lambda: now[0])),
         ):
-            found = upstream.trusted_python_index(
-                "ChiaPos", "2.0.4", (upstream.Locked("", _CHIA),), frozenset({_CHIA})
-            )
+            found = upstream.trusted_python_index("ChiaPos", "2.0.4", (upstream.Locked("", _CHIA),), frozenset({_CHIA}))
         self.assertEqual(found, "")
         self.assertLessEqual(now[0], 3.0)
 
@@ -788,6 +786,7 @@ class Sha256DownloadTest(unittest.TestCase):
         with patch.object(upstream, "_get_response", get_response):
             self.assertEqual(upstream._sha256_download(f"https://{_HOST}/x", hosts), _sha(b"abc"))
             self.assertIsNone(upstream._sha256_download(f"https://{_HOST}/x", frozenset({_HOST})))
+
 
 class FetchBudgetTest(unittest.TestCase):
     def test_the_default_budget_is_the_non_index_fetch_limit(self) -> None:

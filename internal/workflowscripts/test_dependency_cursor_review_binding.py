@@ -364,7 +364,9 @@ class GoTest(_Registry):
         ):
             with self.subTest(stored=stored):
                 answers = {_GO_ZIP: (302, stored, b""), stored: (200, "", _UTFBOM)}
-                with patch.object(upstream, "_get", lambda url, _limit, _accept, _budget=None, answers=answers: answers[url]):
+                with patch.object(
+                    upstream, "_get", lambda url, _limit, _accept, _budget=None, answers=answers: answers[url]
+                ):
                     found = binding.go(_GO)
                 self.assertEqual(found, binding.Binding(binding.UNBOUND, binding.REGISTRY_UNAVAILABLE))
 
