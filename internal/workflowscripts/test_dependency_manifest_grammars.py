@@ -347,15 +347,11 @@ class RequirementsTxtGrammarTest(unittest.TestCase):
                 f'sigstore==3.6.1 ; platform_machine == "\t--hash={_A}\t"\n',
                 [("sigstore", "==3.6.1", f'sigstore\0 ; platform_machine == "\t--hash={_A}\t"', "")],
             ),
+            ("arbitrary equality", f"sigstore===3.6.1 --hash={_A}\n", [("sigstore", "===3.6.1", "sigstore\0", _A)]),
             (
-                "hash in a quoted marker, space-separated",
-                f'sigstore==3.6.1 ; platform_machine == " --hash={_A} "\n',
-                [("sigstore", "==3.6.1", f'sigstore\0 ; platform_machine == " --hash={_A} "', "")],
-            ),
-            (
-                "a tab before the option",
-                f"sigstore==3.6.1\t--hash={_A}\n",
-                [("sigstore", "==3.6.1", f"sigstore\0\t--hash={_A}", "")],
+                "parenthesized specifier",
+                f"sigstore (==3.6.1) --hash={_A}\n",
+                [("sigstore", "==3.6.1", "sigstore (\0)", _A)],
             ),
             (
                 "duplicate entries",
@@ -397,14 +393,30 @@ class RequirementsTxtGrammarTest(unittest.TestCase):
             f"--hash={_A}",
             "requests",
             "./local/pkg",
-            'sigstore = "3.6.1"',
-            f'sigstore = "3.6.1" --hash={_A}',
+            f"sigstore==3.6.1,!=3.6.1 --hash={_A}",
+            f"sigstore==3.6.1,>3.6.1 --hash={_A}",
+            f"sigstore==3.6.1,<2 --hash={_A}",
+            f"sigstore==3.* --hash={_A}",
+            f"sigstore>=3.6 --hash={_A}",
+            f"sigstore @ https://example.org/sigstore-3.6.1.tar.gz --hash={_A}",
             "sigstore==3.6.1 --hash=${SIGSTORE_HASH}",
             "${SIGSTORE}",
         ):
             cases += ((line, line + "\n", []),)
-        # pip builds no requirement from a TOML table or a quoted string, so the file does not parse.
+        # pip builds no requirement from these lines, so the file does not parse.
         for line in (
+            'sigstore = "3.6.1"',
+            f'sigstore = "3.6.1" --hash={_A}',
+            f'sigstore==3.6.1 ; platform_machine == " --hash={_A} "',
+            f"sigstore==3.6.1\t--hash={_A}",
+            f"sigstore==3.6.1 extra --hash={_A}",
+            f"sigstore==3.6.1 ; platform_machine == --hash={_A}",
+            f"sigstore==3.6.1\t--hash={_A} --hash={_B}",
+            f"sigstore.==1.0 --hash={_A}",
+            "sigstore==",
+            "sigstore (==3.6.1",
+            "sigstore==3.6.1 ; unknown_variable == 'a'",
+            "sigstore==3.6.1 ; (python_version > '3'",
             "[packages]",
             "  [tool.poetry.dependencies]",
             f'"sigstore==3.6.1 --hash={_A}"',

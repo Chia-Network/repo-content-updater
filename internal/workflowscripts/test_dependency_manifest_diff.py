@@ -403,7 +403,18 @@ class PythonTest(unittest.TestCase):
             "quoted": (f'"{base.strip()}"\n', f'"{head.strip()}"\n'),
             "an option beside the hash": (base, head.replace(" --hash", " --config-settings a=b --hash")),
             "a marker": (base, head.replace(" --hash", " ; os_name == 'nt' --hash")),
+            "an invalid tail": (base.replace(" --hash", " x --hash"), head.replace(" --hash", " x --hash")),
+            "an invalid marker": (
+                base.replace(" --hash", " ; os_name == --hash"),
+                head.replace(" --hash", " ; os_name == --hash"),
+            ),
+            "a tab before a hash": (base.replace(" --hash", "\t--hash"), head.replace(" --hash", "\t--hash")),
         }
+        for extra in ("!={}", ">{}", "<2"):
+            cases[f"=={{}},{extra}"] = tuple(
+                pin.format(f"{version},{extra.format(version)}", digest)
+                for version, digest in (("3.5.0", "0" * 64), ("3.6.1", "1" * 64))
+            )
         for option in ("-r", "-c", "-e", "--index-url", "--extra-index-url", "-i", "-f"):
             cases[option] = (f"{option} a\n{base}", f"{option} b\n{head}")
         for case, (before, after) in cases.items():

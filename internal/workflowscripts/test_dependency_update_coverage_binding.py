@@ -217,8 +217,6 @@ class PypiBindingTest(_Diff):
         digest = f"sha256:{_SDIST_SHA256}"
         heads = {
             "a quoted marker, tab-separated": f'sigstore==3.6.1 ; platform_machine == "\t--hash={digest}\t"\n',
-            "a quoted marker, space-separated": f'sigstore==3.6.1 ; platform_machine == " --hash={digest} "\n',
-            "a tab before the option": f"sigstore==3.6.1\t--hash={digest}\n",
             "a comment before the continuation": f"sigstore==3.6.1 # c \\\n    --hash={digest}\n",
             "an abbreviated option": f"sigstore==3.6.1 --has={digest}\n",
             "an unread option": f"sigstore==3.6.1 --hash={digest} -i https://example.org/simple\n",
@@ -232,6 +230,13 @@ class PypiBindingTest(_Diff):
                 self.setUp()
                 report, summary = self._run({"requirements.txt": (head.replace("3.6.1", "3.5.0"), head)})
                 _inconclusive(self, report, summary, "no_lock_hash")
+
+    def test_an_arbitrary_equality_pin_is_read_as_exact(self) -> None:
+        pin = "sigstore==={} --hash=sha256:{}\n"
+        report, _summary = self._run(
+            {"requirements.txt": (pin.format("3.5.0", "0" * 64), pin.format("3.6.1", _SDIST_SHA256))}
+        )
+        self.assertEqual(report["binding"], {"kind": "provenance", "reason": ""})
 
     def test_the_space_spelling_of_a_requirements_hash_is_read(self) -> None:
         pin = "sigstore=={} --hash sha256:{}\n"
