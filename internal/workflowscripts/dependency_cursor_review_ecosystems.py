@@ -56,14 +56,15 @@ from dependency_manifest_python import (
     requirements_txt,
 )
 
-# Why a change is not scanned. Docker images, Terraform providers and the
-# grammar-less ecosystems (Cargo, Bundler, Composer, Swift, NuGet) have no
+# Why a change is not scanned. Docker images and Terraform providers have no
 # source tree this scan reads; a moving tag can resolve to another commit after the review;
 # a bump from one commit to another whose commits no branch or tag of the action's repository contains.
 UNSCANNABLE_ECOSYSTEM = "unscannable_ecosystem"
 MOVING_REF = "moving_ref"
 UNRESOLVED_SHA = "unresolved_sha"
-WARN_REASONS = frozenset({UNSCANNABLE_ECOSYSTEM, MOVING_REF, UNRESOLVED_SHA})
+# Why a file of an ecosystem this review has no grammar for cannot be read at all.
+UNREAD_ECOSYSTEM = "unread_ecosystem"
+WARN_REASONS = frozenset({UNSCANNABLE_ECOSYSTEM, UNREAD_ECOSYSTEM, MOVING_REF, UNRESOLVED_SHA})
 
 MANIFEST, LOCK, CHECKSUMS = "manifest", "lock", "checksums"
 # The scan's not_scanned_reason for a ref the cloned repository does not resolve (upstream_malware_scan.sh).
@@ -156,9 +157,9 @@ ACTIONS = Ecosystem(
 )
 DOCKER = Ecosystem("docker", warn=UNSCANNABLE_ECOSYSTEM)
 TERRAFORM = Ecosystem("terraform", warn=UNSCANNABLE_ECOSYSTEM)
-# Ecosystems with no grammar or scan: every manifest or lock change is a gap named by the warn reason.
+# Ecosystems with no grammar: every manifest or lock change is a gap named by the warn reason.
 CARGO, BUNDLER, COMPOSER, SWIFT, NUGET = (
-    Ecosystem(name, warn=UNSCANNABLE_ECOSYSTEM) for name in ("cargo", "bundler", "composer", "swift", "nuget")
+    Ecosystem(name, warn=UNREAD_ECOSYSTEM) for name in ("cargo", "bundler", "composer", "swift", "nuget")
 )
 
 

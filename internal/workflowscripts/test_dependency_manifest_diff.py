@@ -633,7 +633,7 @@ class ChangedPathTest(unittest.TestCase):
         plan = _plan({"README.md": "a\n", "src/lib.go": "a\n"}, {"README.md": "b\n", "src/lib.go": "b\n"})
         self.assertEqual(plan.gaps, (("README.md", "unresolved"), ("src/lib.go", "unresolved")))
 
-    def test_files_of_unscannable_ecosystems_are_unscannable_ecosystem_gaps(self) -> None:
+    def test_files_of_grammarless_ecosystems_are_unread_ecosystem_gaps(self) -> None:
         paths = (
             "Cargo.toml",
             "Cargo.lock",
@@ -645,7 +645,7 @@ class ChangedPathTest(unittest.TestCase):
             "packages.config",
         )
         plan = _plan({path: "a\n" for path in paths}, {path: "b\n" for path in paths})
-        self.assertEqual(set(plan.gaps), {(path, "unscannable_ecosystem") for path in paths})
+        self.assertEqual(set(plan.gaps), {(path, "unread_ecosystem") for path in paths})
         self.assertEqual((plan.primary, plan.unparsed_locks), ((), ()))
 
     def test_deleted_and_renamed_off_paths_are_gaps(self) -> None:

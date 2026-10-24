@@ -60,10 +60,13 @@ _SHA = "0123456789abcdef0123456789abcdef01234567"
 
 
 class WarnPolicyTest(unittest.TestCase):
-    def test_docker_terraform_and_grammarless_ecosystems_are_unscannable(self) -> None:
-        for ecosystem in ("docker", "terraform", "cargo", "bundler", "composer", "swift", "nuget"):
+    def test_docker_and_terraform_are_unscannable_and_grammarless_ecosystems_are_unread(self) -> None:
+        for ecosystem in ("docker", "terraform"):
             with self.subTest(ecosystem=ecosystem):
                 self.assertEqual(ecosystems.warn_reason(ecosystem, "1.0", "1.1"), ecosystems.UNSCANNABLE_ECOSYSTEM)
+        for ecosystem in ("cargo", "bundler", "composer", "swift", "nuget"):
+            with self.subTest(ecosystem=ecosystem):
+                self.assertEqual(ecosystems.warn_reason(ecosystem, "1.0", "1.1"), ecosystems.UNREAD_ECOSYSTEM)
 
     def test_major_and_major_minor_action_tags_and_branches_are_moving_refs(self) -> None:
         for old, new in (

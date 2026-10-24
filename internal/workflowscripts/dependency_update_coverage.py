@@ -33,7 +33,7 @@ import dependency_cursor_review_upstream as _upstream
 import dependency_cursor_review_versions as _versions
 import dependency_manifest_diff as _diff
 import dependency_python_indexes as _python_indexes
-from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN
+from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN, reason_note
 
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
 # Registry lookups and bindings run at once; each waits on the network, not on the others.
@@ -353,10 +353,6 @@ def _disclosure(report: dict) -> list[str]:
     return lines
 
 
-# A plain sentence for a reason code the code alone does not explain.
-_REASON_NOTES = {"configured_index": ". pip may install this from a package index the review does not read."}
-
-
 def render_summary(report: dict, records: list[dict]) -> str:
     lines = ["## Malware Scan Summary", ""]
     if report.get("scan_conclusive") is True:
@@ -378,7 +374,7 @@ def render_summary(report: dict, records: list[dict]) -> str:
             lines.append(f"- {label} ({repo}): covered, artifact not bound (`{reason}`){named}")
         else:
             reason = record.get("not_scanned_reason") or "not_conclusive"
-            lines.append(f"- {label} ({repo}): not covered ({reason}){_REASON_NOTES.get(reason, '')}")
+            lines.append(f"- {label} ({repo}): not covered ({reason}){reason_note(reason)}")
     lines.extend(_disclosure(report))
     if not any_read(report):
         lines.append("- No release tree was read. This is not evidence the package is benign.")
