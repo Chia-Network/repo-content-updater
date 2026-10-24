@@ -393,6 +393,24 @@ class PythonTest(unittest.TestCase):
         marked = head["requirements.txt"].replace(" \\\n    --hash", " ; os_name == 'nt' \\\n    --hash")
         self.assertEqual(_plan(base, {"requirements.txt": marked}).gaps, (("requirements.txt", "unresolved"),))
 
+    def test_a_requirements_file_change_pip_reads_differently_or_not_at_all_is_a_gap(self) -> None:
+        pin = "sigstore=={} --hash=sha256:{}\n"
+        base, head = pin.format("3.5.0", "0" * 64), pin.format("3.6.1", "1" * 64)
+        cases = {
+            "toml header": ("[packages]\n" + base, "[packages]\n" + head),
+            "poetry header": ("[tool.poetry.dependencies]\n" + base, "[tool.poetry.dependencies]\n" + head),
+            "toml dependency": ('sigstore = "3.5.0"\n', 'sigstore = "3.6.1"\n'),
+            "quoted": (f'"{base.strip()}"\n', f'"{head.strip()}"\n'),
+            "an option beside the hash": (base, head.replace(" --hash", " --config-settings a=b --hash")),
+            "a marker": (base, head.replace(" --hash", " ; os_name == 'nt' --hash")),
+        }
+        for option in ("-r", "-c", "-e", "--index-url", "--extra-index-url", "-i", "-f"):
+            cases[option] = (f"{option} a\n{base}", f"{option} b\n{head}")
+        for case, (before, after) in cases.items():
+            with self.subTest(case=case):
+                plan = _plan({"requirements.txt": before}, {"requirements.txt": after})
+                self.assertEqual((plan.primary, plan.gaps), ((), (("requirements.txt", "unresolved"),)))
+
     def test_a_poetry_lock_supplies_the_versions_of_the_names_the_pyproject_declares(self) -> None:
         """A Poetry 1.1 lock, with its files in `[metadata.files]`, moves the same way."""
         manifest = '[tool.poetry.dependencies]\npython = "^3.11"\nrequests = "{}"\n'

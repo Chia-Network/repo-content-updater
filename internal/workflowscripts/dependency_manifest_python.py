@@ -1,14 +1,18 @@
 """requirements, pyproject, setup.py, setup.cfg, Pipfile, poetry.lock and Pipfile.lock grammar.
 
-requirements returns (entries, residue). An entry is (PEP 503 name, version
+requirements reads the manifests and returns (entries, residue). An entry is (PEP 503 name, version
 token, top, text); every declared requirement is top. The token keeps its
 operator, so `==1.2.3` is exact and `>=1.2` is a range. text is the line with
 each of its version tokens masked, so the rest of the line cannot change unseen.
-requirements_txt reads a requirements file the way pip does: a line ending in
-a backslash continues on the next, and the joined line is one entry, whose
-text keeps its `--hash` options. requirements_hashes reads those hashes, and
-requirements_line is the text without them, the part that may not change with
-the version (the hashes are the version's files, so they change with it).
+requirements_txt reads a requirements file with its own grammar, the way pip
+reads it: no TOML tables and no quoted strings. It joins continued lines, drops
+comments, and splits each line into its requirement and its options as pip
+does. That one split makes an entry's text, a Pin: requirements_line, the requirement
+with its version masked and any option that is not a `--hash`, which may not
+change with the version; and requirements_hashes, the `--hash` values, which
+are the version's files and so change with it. An option the review does not
+read means no hash is read, and a line pip cannot build a requirement from
+means the file does not parse.
 
 poetry_lock and pipfile_lock return (entries, residue), or None when the text
 does not parse. Every locked package is installed at the top of the
@@ -26,9 +30,11 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
+from collections.abc import Iterator
 
 import tomllib
-from dependency_manifest_lines import Entry, Parsed
+from dependency_manifest_lines import Entry, Parsed, Pin
 
 _REQ_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*((?:===|==|~=|!=|>=|<=|>|<)\s*[^\s#;,]+)")
 # A TOML table header, and a `name = "spec"` or `name = { version = "spec" }` dependency line.
@@ -37,9 +43,12 @@ _TOML_DEP_RE = re.compile(
     r'^\s*"?([A-Za-z0-9][A-Za-z0-9._-]*)"?\s*=\s*(?:\{[^}]*?\bversion\s*=\s*)?["\']([^"\']+)["\']'
 )
 _QUOTED_RE = re.compile(r'["\']([^"\']+)["\']')
-# pip's comment, and one `--hash=<algorithm>:<digest>` (or `--hash <algorithm>:<digest>`) option of a requirement.
+# pip's comment; the `${VAR}` it fills from the installing environment; the start of a requirement it can build (a
+# name, a URL or a path); and one `--hash` value, a single `<algorithm>:<digest>`.
 _COMMENT_RE = re.compile(r"(^|\s+)#.*$")
-_HASH_RE = re.compile(r"\s+--hash(?:=|\s+)(\S+)")
+_ENV_VAR_RE = re.compile(r"\$\{[A-Z0-9_]+\}")
+_ARG_START_RE = re.compile(r"[A-Za-z0-9./]")
+_HASH_VALUE_RE = re.compile(r"[^\s:]+:\S+")
 # PEP 503: lowercase, and collapse each run of `-`, `_`, or `.` to one `-`.
 _PEP503_SEPARATORS = re.compile(r"[-_.]+")
 
@@ -49,7 +58,7 @@ def _requirement_name(name: str) -> str:
 
 
 def _requirement_specs(line: str, table: str) -> list[tuple[str, str]]:
-    """(name, version) pairs on one requirements, setup or TOML line.
+    """(name, version) pairs on one setup or TOML line.
 
     A pinned PEP 508 line, or each quoted PEP 508 string when every quoted
     string on the line is one, is an entry. Inside a Poetry or Pipfile
@@ -67,12 +76,12 @@ def _requirement_specs(line: str, table: str) -> list[tuple[str, str]]:
     return [(match.group(1), match.group(2)) for match in candidates if match]
 
 
-def _requirement_lines(lines: list[tuple[str, str]]) -> Parsed:
-    """(entries, residue) of (line as read, its text in the file) pairs."""
+def requirements(text: str) -> Parsed:
+    """(entries, residue) of a pyproject, setup.py, setup.cfg or Pipfile."""
     entries: list[Entry] = []
     residue: list[str] = []
     table = ""
-    for line, original in lines:
+    for line in text.splitlines(keepends=True):
         header = _TOML_TABLE_RE.match(line)
         table = header.group(1) if header else table
         found = _requirement_specs(line, table)
@@ -81,50 +90,97 @@ def _requirement_lines(lines: list[tuple[str, str]]) -> Parsed:
             masked = masked.replace(version, "\0", 1)
         entries.extend((_requirement_name(name), version, True, masked) for name, version in found)
         if not found:
-            residue.append(original)
+            residue.append(line)
     return entries, "".join(residue)
 
 
-def requirements(text: str) -> Parsed:
-    return _requirement_lines([(line, line) for line in text.splitlines(keepends=True)])
+def _pip_lines(text: str) -> Iterator[tuple[str, str]]:
+    """Each line of a requirements file as pip reads it, with its text in the file.
 
-
-def requirements_txt(text: str) -> Parsed:
-    """requirements, with each backslash-continued line joined to the next as pip joins them.
-
-    pip ends a continuation at a line that holds a comment, and drops each joining backslash and line break.
+    A line ending in a backslash continues on the next unless it is a comment, and pip strips the backslashes of
+    each continued line. pip then drops the comment of the joined line, and the whitespace around it.
     """
-    lines: list[tuple[str, str]] = []
-    joined = original = ""
+
+    def read(joined: list[str]) -> str:
+        line = _COMMENT_RE.sub("", "".join(joined)).strip()
+        # pip fills each `${VAR}` from the installing environment, which the review cannot see, so it reads nothing.
+        return "" if _ENV_VAR_RE.search(line) else line
+
+    joined: list[str] = []
+    original = ""
     for line in text.splitlines(keepends=True):
-        bare = line.rstrip("\r\n")
+        bare = line.splitlines()[0]
         original += line
-        if bare.endswith("\\") and not _COMMENT_RE.search(bare):
-            joined += bare[:-1]
+        if bare.endswith("\\") and not _COMMENT_RE.match(bare):
+            joined.append(bare.strip("\\"))
             continue
-        lines.append((joined + line, original))
-        joined = original = ""
+        joined.append(f" {bare}" if _COMMENT_RE.match(bare) else bare)
+        yield read(joined), original
+        joined, original = [], ""
     if original:
-        lines.append((joined, original))
-    return _requirement_lines(lines)
+        yield read(joined), original
 
 
-def _code(text: str) -> tuple[str, str]:
-    """A requirements_txt entry's text before its comment, and the comment."""
-    match = _COMMENT_RE.search(text)
-    cut = match.start() if match else len(text)
-    return text[:cut], text[cut:]
+def _pip_line(line: str) -> tuple[str, str]:
+    """A line's requirement and its options, split as pip splits them: the options start at the first
+    space-separated token that starts with `-`."""
+    tokens = line.split(" ")
+    at = next((index for index, token in enumerate(tokens) if token.startswith("-")), len(tokens))
+    return " ".join(tokens[:at]).strip(), " ".join(tokens[at:])
 
 
-def requirements_hashes(text: str) -> str:
-    """The `--hash` values of a requirements_txt entry, or "" when it has none."""
-    return _locked_hashes(_HASH_RE.findall(_code(text)[0]))
+def _hash_options(options: str) -> str | None:
+    """The `--hash` values of a requirement's options, or None when shlex cannot split them or one is anything
+    else: pip also reads an abbreviated `--hash`, which the review does not."""
+    try:
+        words = shlex.split(options)
+    except ValueError:
+        return None
+    values: list[str] = []
+    while words:
+        word = words.pop(0)
+        if word == "--hash" and words:
+            values.append(words.pop(0))
+        elif word.startswith("--hash="):
+            values.append(word.removeprefix("--hash="))
+        else:
+            return None
+    return _locked_hashes(values) if all(_HASH_VALUE_RE.fullmatch(value) for value in values) else None
 
 
-def requirements_line(text: str) -> str:
-    """A requirements_txt entry's text without its `--hash` options."""
-    code, comment = _code(text)
-    return _HASH_RE.sub("", code) + comment
+def requirements_txt(text: str) -> Parsed | None:
+    """(entries, residue) of a requirements file, or None when a line has a requirement pip cannot build.
+
+    An entry's text is a Pin. A line that is not a pinned
+    requirement, or that pip fills from the environment, is residue.
+    """
+    entries: list[Entry] = []
+    residue: list[str] = []
+    for line, original in _pip_lines(text):
+        args, options = _pip_line(line)
+        if args and not _ARG_START_RE.match(args):
+            return None
+        match = _REQ_RE.match(args)
+        if not match:
+            residue.append(original)
+            continue
+        start, end = match.span(2)
+        fixed, hashes = args[:start] + "\0" + args[end:], _hash_options(options)
+        if hashes is None:
+            fixed, hashes = f"{fixed} {options}", ""
+        entries.append((_requirement_name(match.group(1)), match.group(2), True, Pin(fixed, hashes)))
+    return entries, "".join(residue)
+
+
+def requirements_line(pin: Pin) -> str:
+    """A requirements_txt entry's requirement, with its version masked and every option but its `--hash`es."""
+    return pin.fixed
+
+
+def requirements_hashes(pin: Pin) -> str:
+    """The `--hash` values of a requirements_txt entry, or "" when it has none or an option the review does not
+    read."""
+    return pin.hashes
 
 
 def _record(where: str, record: dict) -> str:

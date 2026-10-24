@@ -213,6 +213,33 @@ class PypiBindingTest(_Diff):
         report, summary = self._run(self._requirements("1" * 64))
         _inconclusive(self, report, summary, "hash_mismatch")
 
+    def test_a_requirements_hash_pip_does_not_enforce_or_the_review_does_not_read_is_no_lock_hash(self) -> None:
+        digest = f"sha256:{_SDIST_SHA256}"
+        heads = {
+            "a quoted marker, tab-separated": f'sigstore==3.6.1 ; platform_machine == "\t--hash={digest}\t"\n',
+            "a quoted marker, space-separated": f'sigstore==3.6.1 ; platform_machine == " --hash={digest} "\n',
+            "a tab before the option": f"sigstore==3.6.1\t--hash={digest}\n",
+            "a comment before the continuation": f"sigstore==3.6.1 # c \\\n    --hash={digest}\n",
+            "an abbreviated option": f"sigstore==3.6.1 --has={digest}\n",
+            "an unread option": f"sigstore==3.6.1 --hash={digest} -i https://example.org/simple\n",
+            "an unread hash beside it": f"sigstore==3.6.1 --hash={digest} --hash=sha512:{'a' * 128}\n",
+            "a duplicate without a hash": f"sigstore==3.6.1 --hash={digest}\nsigstore==3.6.1\n",
+        }
+        for value in (f"md5:{'a' * 32}", f"sha384:{'a' * 96}", f"sha512:{'a' * 128}", digest.upper(), "sha256", ""):
+            heads[value or "empty"] = f"sigstore==3.6.1 --hash={value}\n"
+        for case, head in heads.items():
+            with self.subTest(case=case):
+                self.setUp()
+                report, summary = self._run({"requirements.txt": (head.replace("3.6.1", "3.5.0"), head)})
+                _inconclusive(self, report, summary, "no_lock_hash")
+
+    def test_the_space_spelling_of_a_requirements_hash_is_read(self) -> None:
+        pin = "sigstore=={} --hash sha256:{}\n"
+        report, _summary = self._run(
+            {"requirements.txt": (pin.format("3.5.0", "0" * 64), pin.format("3.6.1", _SDIST_SHA256))}
+        )
+        self.assertEqual(report["binding"], {"kind": "provenance", "reason": ""})
+
     def test_a_requirements_pin_beside_a_hashed_one_without_a_hash_is_inconclusive(self) -> None:
         files = self._requirements(_SDIST_SHA256)
         files["requirements/dev.txt"] = ("sigstore==3.5.0\n", "sigstore==3.6.1\n")

@@ -571,7 +571,7 @@ def _targets(changes: list[_diff.Change]) -> list[tuple[_diff.Change, Target, st
     return resolved
 
 
-def _bind(change: _diff.Change, target: Target, record: dict, hashed: tuple[str, ...] = ()) -> _binding.Binding:
+def _bind(change: _diff.Change, target: Target, record: dict, hashed: tuple[str, ...]) -> _binding.Binding:
     """The binding of a covered scan to the artifact the change installs, read from the locks and `hashed` files."""
     subject = _binding.Subject(
         name=target.package,
@@ -683,7 +683,7 @@ def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
 
 
 def _scan_all(
-    changes: list[_diff.Change], work: Path, scan_script: Path, hashed: tuple[str, ...] = ()
+    changes: list[_diff.Change], work: Path, scan_script: Path, hashed: tuple[str, ...]
 ) -> tuple[list[dict], list[tuple[dict, Path]], tuple[dict, ...]]:
     """(records, (record, scan directory) per scan, policy warnings the scans found) for the changes to scan.
 

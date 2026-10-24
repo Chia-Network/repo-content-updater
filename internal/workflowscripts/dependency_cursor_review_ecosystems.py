@@ -17,11 +17,11 @@ versions the manifest beside them names, so every version a checksum file adds
 or drops must be one the manifest beside it adds or drops.
 
 Each grammar returns (name, version, top, text) entries. An entry's text may
-change only with its version. In a line grammar the text is the line with the
-version masked, so its `fixed` part may not change at all: all of it, or a
-requirements line without the `--hash` options its version pins. In a record
-grammar (a lock copy, a provider block) it is the whole record, which changes
-with the version.
+change only with its version, and its row's `fixed` part of it not at all. In a
+line grammar the text is the line with the version masked, and all of it is
+fixed, or all but a requirements line's `--hash` options, which pin the
+version's files. In a record grammar (a lock copy, a provider block) it is the
+whole record, which changes with the version, and none of it is fixed.
 """
 
 from __future__ import annotations
@@ -116,13 +116,17 @@ def _line(text: str) -> str:
     return text
 
 
+def _record(_text: str) -> str:
+    return ""
+
+
 class FileKind(NamedTuple):
     ecosystem: Ecosystem
     role: str
     parse: Callable[[str], Parsed | None] | None
     names: frozenset[str] = frozenset()  # exact file names
     match: Callable[[PurePosixPath], bool] | None = None  # any other path shape
-    fixed: Callable[[str], str] | None = _line  # the part of an entry's text no version change may change
+    fixed: Callable[[str], str] = _line  # the part of an entry's text no version change may change
     # The artifact hash an installed copy's entry records, "" for none; None for an entry that is no installed copy.
     hashes: Callable[[Entry], str | None] | None = None
 
@@ -178,13 +182,13 @@ _FILES = (
         LOCK,
         package_lock,
         frozenset({"package-lock.json", "npm-shrinkwrap.json"}),
-        fixed=None,
+        fixed=_record,
         hashes=_top_copy(package_lock_integrity),
     ),
-    FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), fixed=None, hashes=_top_copy(yarn_lock_integrity)),
+    FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), fixed=_record, hashes=_top_copy(yarn_lock_integrity)),
     FileKind(NPM, LOCK, None, frozenset({"pnpm-lock.yaml"})),
     FileKind(GO, MANIFEST, go_mod, frozenset({"go.mod"})),
-    FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), fixed=None, hashes=go_sum_hash),
+    FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), fixed=_record, hashes=go_sum_hash),
     FileKind(PIP, MANIFEST, requirements, frozenset({"pyproject.toml", "setup.py", "setup.cfg", "Pipfile"})),
     # A requirements file pinned with `--hash` is the lock of what pip installs from it.
     FileKind(
@@ -195,11 +199,13 @@ _FILES = (
         fixed=requirements_line,
         hashes=_top_copy(requirements_hashes),
     ),
-    FileKind(PIP, LOCK, poetry_lock, frozenset({"poetry.lock"}), fixed=None, hashes=_top_copy(poetry_lock_hashes)),
-    FileKind(PIP, LOCK, pipfile_lock, frozenset({"Pipfile.lock"}), fixed=None, hashes=_top_copy(pipfile_lock_hashes)),
+    FileKind(PIP, LOCK, poetry_lock, frozenset({"poetry.lock"}), fixed=_record, hashes=_top_copy(poetry_lock_hashes)),
+    FileKind(
+        PIP, LOCK, pipfile_lock, frozenset({"Pipfile.lock"}), fixed=_record, hashes=_top_copy(pipfile_lock_hashes)
+    ),
     FileKind(ACTIONS, MANIFEST, workflow_uses, match=_workflow),
     FileKind(DOCKER, MANIFEST, dockerfile_from, match=_dockerfile),
-    FileKind(TERRAFORM, MANIFEST, terraform_lock, frozenset({".terraform.lock.hcl"}), fixed=None),
+    FileKind(TERRAFORM, MANIFEST, terraform_lock, frozenset({".terraform.lock.hcl"}), fixed=_record),
     FileKind(TERRAFORM, MANIFEST, terraform_config, match=_terraform),
     FileKind(CARGO, MANIFEST, None, frozenset({"Cargo.toml"})),
     FileKind(CARGO, LOCK, None, frozenset({"Cargo.lock"})),
@@ -231,30 +237,32 @@ def _first(rules: tuple[_RefRule, ...], old: str, new: str) -> str:
     return next((reason for reason, applies in rules if applies(old, new)), "")
 
 
-def locked(
-    ecosystem: str,
-    directory: str,
-    name: str,
-    version: str,
-    read: Callable[[str], str],
-    changed: tuple[str, ...] = (),
-) -> tuple[str, ...]:
-    """The hash each installed copy of `name` at exact `version` records beside `directory`.
+def hash_sources(ecosystem: Ecosystem, directory: str, hashed: tuple[str, ...]) -> dict[str, FileKind]:
+    """Each file that records the hashes of the installed copies beside `directory`, with its row.
 
-    That is in the locks and checksums there, and in each `changed` path there whose row records hashes, such as a
-    requirements file. Each row's `hashes` reads which entries are installed copies and what they record. "" is a
-    copy with no hash.
+    That is the locks and checksums there, and each `hashed` path there (dependency_manifest_diff.Plan.hashed), such
+    as a requirements file.
+    """
+    sources = dict(item for role in (LOCK, CHECKSUMS) for item in beside(ecosystem, role, directory))
+    for path in hashed:
+        row = file_kind(path)
+        if row and row.ecosystem == ecosystem and str(PurePosixPath(path).parent) == directory:
+            sources[path] = row
+    return sources
+
+
+def locked(
+    ecosystem: str, directory: str, name: str, version: str, read: Callable[[str], str], hashed: tuple[str, ...]
+) -> tuple[str, ...]:
+    """The hash each installed copy of `name` at exact `version` records in the hash_sources beside `directory`.
+
+    Each row's `hashes` reads which entries are installed copies and what they record. "" is a copy with no hash.
     """
     row = _BY_NAME.get(ecosystem)
     if row is None or not version:
         return ()
-    paths = dict(item for role in (LOCK, CHECKSUMS) for item in beside(row, role, directory))
-    for path in changed:
-        kind = file_kind(path)
-        if kind and kind.ecosystem == row and str(PurePosixPath(path).parent) == directory:
-            paths.setdefault(path, kind)
     found: list[str] = []
-    for path, kind in paths.items():
+    for path, kind in hash_sources(row, directory, hashed).items():
         parsed = kind.parse(read(path)) if kind.hashes else None
         for entry in parsed[0] if parsed else ():
             recorded = kind.hashes(entry)

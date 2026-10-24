@@ -164,14 +164,15 @@ class BindTest(unittest.TestCase):
         lock = {"packages": {"node_modules/a": record, "node_modules/b/node_modules/a": nested}}
         yarn = 'a@^1.0.0:\n  version "1.0.1"\n  resolved "https://registry.yarnpkg.com/a/-/a-1.0.1.tgz"\n'
         files = {"web/package-lock.json": json.dumps(lock), "web/yarn.lock": yarn, "package-lock.json": "{}"}
-        found = ecosystems.locked("npm", "web", "a", "1.0.1", lambda path: files.get(path, ""))
+        found = ecosystems.locked("npm", "web", "a", "1.0.1", lambda path: files.get(path, ""), ())
         self.assertEqual(found, ("sha512-x", ""))
         files["web/yarn.lock"] = yarn + "  integrity sha512-y\n"
         self.assertEqual(
-            ecosystems.locked("npm", "web", "a", "1.0.1", lambda path: files.get(path, "")), ("sha512-x", "sha512-y")
+            ecosystems.locked("npm", "web", "a", "1.0.1", lambda path: files.get(path, ""), ()),
+            ("sha512-x", "sha512-y"),
         )
-        self.assertEqual(ecosystems.locked("npm", "web", "a", "1.0.0", lambda path: files.get(path, "")), ())
-        self.assertEqual(ecosystems.locked("docker", "web", "a", "1.0.1", lambda path: files.get(path, "")), ())
+        self.assertEqual(ecosystems.locked("npm", "web", "a", "1.0.0", lambda path: files.get(path, ""), ()), ())
+        self.assertEqual(ecosystems.locked("docker", "web", "a", "1.0.1", lambda path: files.get(path, ""), ()), ())
 
     def test_locked_reads_the_go_sum_tree_hash_for_the_exact_version(self) -> None:
         go_sum = (
@@ -182,9 +183,9 @@ class BindTest(unittest.TestCase):
         def read(path: str) -> str:
             return files.get(path, "")
 
-        self.assertEqual(ecosystems.locked("go", "svc", "github.com/a/b", "1.2.3", read), ("h1:tree=",))
-        self.assertEqual(ecosystems.locked("go", "svc", "github.com/a/b", "1.2.5", read), ())
-        self.assertEqual(ecosystems.locked("go", "svc", "github.com/a/c", "1.2.3", read), ())
+        self.assertEqual(ecosystems.locked("go", "svc", "github.com/a/b", "1.2.3", read, ()), ("h1:tree=",))
+        self.assertEqual(ecosystems.locked("go", "svc", "github.com/a/b", "1.2.5", read, ()), ())
+        self.assertEqual(ecosystems.locked("go", "svc", "github.com/a/c", "1.2.3", read, ()), ())
 
     def test_locked_reads_the_file_hashes_of_each_python_lock_beside_the_change(self) -> None:
         files = {"poetry.lock": poetry_lock_text({"requests": "2.32.0"}), "Pipfile.lock": pipfile_lock_text({})}
@@ -192,13 +193,13 @@ class BindTest(unittest.TestCase):
         def read(path: str) -> str:
             return files.get(path, "")
 
-        (poetry,) = ecosystems.locked("pip", ".", "requests", "2.32.0", read)
+        (poetry,) = ecosystems.locked("pip", ".", "requests", "2.32.0", read, ())
         self.assertEqual(len(poetry.split()), 2)
         files["Pipfile.lock"] = pipfile_lock_text({"requests": "2.32.0"})
-        self.assertEqual(len(ecosystems.locked("pip", ".", "requests", "2.32.0", read)), 2)
-        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.31.0", read), ())
+        self.assertEqual(len(ecosystems.locked("pip", ".", "requests", "2.32.0", read, ())), 2)
+        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.31.0", read, ()), ())
         files = {"poetry.lock": poetry_lock_text({"requests": "2.32.0"}, legacy=True)}
-        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.32.0", read), (poetry,))
+        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.32.0", read, ()), (poetry,))
 
     def test_locked_reads_the_hashes_of_a_changed_requirements_file_beside_the_change(self) -> None:
         sha_a, sha_b = (f"sha256:{digit * 64}" for digit in "ab")
@@ -211,14 +212,14 @@ class BindTest(unittest.TestCase):
         def read(path: str) -> str:
             return files.get(path, "")
 
-        changed = ("app/requirements.txt", "requirements.txt", "app/README.md")
-        found = ecosystems.locked("pip", "app", "requests", "2.32.0", read, changed)
+        hashed = ("app/requirements.txt", "requirements.txt", "app/README.md")
+        found = ecosystems.locked("pip", "app", "requests", "2.32.0", read, hashed)
         self.assertEqual(len(found), 2)
         self.assertIn(f"{sha_a} {sha_b}", found)
-        self.assertEqual(ecosystems.locked("pip", "app", "idna", "3.7", read, changed), ("",))
-        self.assertEqual(ecosystems.locked("pip", "app", "requests", "2.31.0", read, changed), ())
-        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.32.0", read), ())
-        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.32.0", read, changed), (sha_a,))
+        self.assertEqual(ecosystems.locked("pip", "app", "idna", "3.7", read, hashed), ("",))
+        self.assertEqual(ecosystems.locked("pip", "app", "requests", "2.31.0", read, hashed), ())
+        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.32.0", read, ()), ())
+        self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.32.0", read, hashed), (sha_a,))
 
     def test_every_lock_and_checksum_grammar_reads_its_own_hashes(self) -> None:
         """locked() has no per-role case: each row says which entries are installed copies and what they record."""
