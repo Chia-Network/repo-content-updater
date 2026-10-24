@@ -188,7 +188,7 @@ def _source(url: str, trusted: set[str]) -> str | None:
 
 
 class _Requirements:
-    """The requirements files one directory reaches, each read once and resolving its includes in pip's order."""
+    """The requirements files a pip directory reaches and the tracked files that include them, read once in order."""
 
     def __init__(self, configured: Indexes, read: _Read, list_files: _ListFiles, search: _Search) -> None:
         self._configured = configured
