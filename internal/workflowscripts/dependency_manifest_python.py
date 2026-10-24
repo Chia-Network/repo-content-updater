@@ -345,8 +345,8 @@ def requirements_index_options(text: str) -> IndexOptions:
     extra_index_url = False
     for line, original in _pip_lines(text):
         if not line.startswith("-"):
-            # A line pip fills from the environment may be any option.
-            if not line and _ENV_VAR_RE.search(original) and original.lstrip().startswith("-"):
+            # A line pip fills from the environment may be any option; only a plain requirement line is read.
+            if not line and _ENV_VAR_RE.search(original) and not _REQ_RE.match(original.strip()):
                 return IndexOptions(unread=True)
             continue
         try:

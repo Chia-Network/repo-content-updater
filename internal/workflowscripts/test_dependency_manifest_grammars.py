@@ -648,7 +648,15 @@ class RequirementsIndexOptionsTest(unittest.TestCase):
             "-r ../base.txt\n--constraint=c.txt": IndexOptions(includes=("../base.txt", "c.txt")),
             "--trusted-host h --pre\n# -i https://x/\nattrs==1.0 --hash=sha256:aa": IndexOptions(),
         }
-        unread = ("-i", "--index-url ${URL}", "--find-links ./wheels", "-f x", "--no-index", "--extra-index-url 'a")
+        unread = (
+            "-i",
+            "--index-url ${URL}",
+            "${OPT} https://example.com/simple",
+            "--find-links ./wheels",
+            "-f x",
+            "--no-index",
+            "--extra-index-url 'a",
+        )
         for text, expected in cases.items():
             with self.subTest(text=text):
                 self.assertEqual(requirements_index_options(text), expected)
