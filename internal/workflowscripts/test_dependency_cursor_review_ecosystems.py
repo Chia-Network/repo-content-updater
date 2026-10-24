@@ -414,6 +414,17 @@ class UpstreamRepoTest(unittest.TestCase):
                 self.assertEqual(self._follow(answers, zip_url, allowed), want)
                 self.assertEqual(self.requested, [zip_url, target] if want else [zip_url])
 
+    def test_a_redirect_path_with_a_dot_segment_is_not_allowed(self) -> None:
+        follow = binding._GO_REDIRECTS
+        for path in (
+            "/proxy-golang-org-prod/m/../x.zip",
+            "/proxy-golang-org-prod/m/%2e%2e/x.zip",
+            "/proxy-golang-org-prod/m/%2E./x.zip",
+            "/proxy-golang-org-prod/./m.zip",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(upstream._redirect_allowed(f"https://storage.googleapis.com{path}", follow))
+
     def test_a_redirect_loop_is_no_answer(self) -> None:
         url = "https://proxy.golang.org/m/@v/v1.zip"
         self.assertIsNone(self._follow({url: (302, url, b"")}, url, binding._GO_REDIRECTS))

@@ -112,11 +112,24 @@ def _get(url: str, limit: int, accept: str = "application/json") -> tuple[int, s
         connection.close()
 
 
+def _has_dot_segment(path: str) -> bool:
+    """Whether `path` has a `.` or `..` segment, including one written with percent escapes."""
+    return any(segment in {".", ".."} for segment in urllib.parse.unquote(path).split("/"))
+
+
 def _redirect_allowed(url: str, follow: Mapping[str, str] | None) -> bool:
-    """An https URL on a host in `follow`, within that host's required path prefix ("" permits any path)."""
+    """An https URL on a host in `follow`, within that host's required path prefix ("" permits any path).
+
+    A path with a `.` or `..` segment is never allowed.
+    """
     parts = urllib.parse.urlsplit(url)
     prefix = follow.get(parts.hostname) if follow and parts.hostname else None
-    return parts.scheme == "https" and prefix is not None and parts.path.startswith(prefix)
+    return (
+        parts.scheme == "https"
+        and prefix is not None
+        and parts.path.startswith(prefix)
+        and not _has_dot_segment(parts.path)
+    )
 
 
 def _fetch(
