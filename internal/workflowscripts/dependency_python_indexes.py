@@ -24,7 +24,6 @@ _ListFiles = Callable[[str], list[tuple[str, str]] | None]
 
 _REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
 _REGISTRY_FIELD_RE = re.compile(r"""^    (type|url|replaces-base):\s*(["']?)([^"'\s#]+)\2\s*(#.*)?$""")
-_TYPE_FIELD_RE = re.compile(r"^    type\s*:")
 _SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
 _PYPI_INDEXES = frozenset({"https://pypi.org/simple/", "https://pypi.python.org/simple/"})
@@ -73,35 +72,44 @@ def _indexes(
 
 
 def _dependabot_indexes(text: str) -> Indexes:
-    """The python-index registries of one Dependabot config. Only a URL in TRUSTED_PYTHON_INDEXES is trusted."""
+    """The python-index registries of one Dependabot config. Only a URL in TRUSTED_PYTHON_INDEXES is trusted.
+
+    Inside `registries:` every line must be a registry key or a recognised field under one, and every mention of
+    `python-index` must be a parsed type field. Anything else leaves the config unread.
+    """
+    in_registries = False
     fields: dict[str, str] | None = None
     blocks: list[dict[str, str]] = []
     unread = False
+    mentions = 0
     for line in text.splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
+        content = line.split("#", 1)[0]
+        if not content.strip():
             continue
-        if not line.startswith(" "):
-            key, _separator, value = line.partition(":")
-            if key.strip() != "registries":
-                fields = None
-            elif value.split("#", 1)[0].strip():
-                fields = None
-                unread = True
-            else:
+        registry_key = False
+        if not line[0].isspace():
+            key, _separator, value = content.partition(":")
+            header = key.strip() == "registries"
+            in_registries = header and not value.strip()
+            unread = unread or bool(header and value.strip())
+            fields = None
+        elif in_registries:
+            if _REGISTRY_RE.match(line):
                 fields = {}
                 blocks.append(fields)
-        elif fields is not None and _REGISTRY_RE.match(line):
-            fields = {}
-            blocks.append(fields)
-        elif fields is not None and (match := _REGISTRY_FIELD_RE.match(line)):
-            fields[match.group(1)] = match.group(3)
-        elif fields is not None and _TYPE_FIELD_RE.match(line):
-            unread = True
+                registry_key = True
+            elif fields is not None and (match := _REGISTRY_FIELD_RE.match(line)):
+                fields[match.group(1)] = match.group(3)
+            else:
+                unread = True
+        if not registry_key:
+            mentions += content.count("python-index")
     urls = [block.get("url", "") for block in blocks if block.get("type") == "python-index"]
     replaces = any(
         block.get("type") == "python-index" and block.get("replaces-base", "").lower() == "true" for block in blocks
     )
-    return _indexes(urls, unread, replaces)
+    typed = sum(block.get("type") == "python-index" for block in blocks)
+    return _indexes(urls, unread or mentions != typed, replaces)
 
 
 def configured(read: _Read) -> Indexes:

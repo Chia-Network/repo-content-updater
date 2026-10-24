@@ -155,6 +155,44 @@ class PythonIndexesTest(unittest.TestCase):
         text = "registries:\n  r:\n    type:\n    url: https://pypi.chia.net/simple/\n"
         self.assertTrue(indexes._dependabot_indexes(text).other)
 
+    def test_a_flow_mapping_registry_leaves_the_config_unread(self) -> None:
+        text = (
+            "registries:\n"
+            "  chia:\n"
+            "    type: python-index\n"
+            f"    url: {_CHIA}\n"
+            '  private:  {type: python-index, url: "https://example.com/simple", replaces-base: true}\n'
+        )
+        self.assertEqual(indexes._dependabot_indexes(text), indexes.Indexes(other=True))
+
+    def test_a_registry_key_with_an_inline_value_leaves_the_config_unread(self) -> None:
+        text = (
+            "registries:\n"
+            "  chia:\n"
+            "    type: python-index\n"
+            f"    url: {_CHIA}\n"
+            "  private: python-index\n"
+        )
+        self.assertEqual(indexes._dependabot_indexes(text), indexes.Indexes(other=True))
+
+    def test_unknown_registry_indentation_leaves_the_config_unread(self) -> None:
+        for indent in ("\t", " ", "   "):
+            with self.subTest(indent=repr(indent)):
+                text = f"registries:\n{indent}chia:\n{indent}{indent}type: python-index\n"
+                self.assertEqual(indexes._dependabot_indexes(text), indexes.Indexes(other=True))
+
+    def test_python_index_outside_a_parsed_type_field_leaves_the_config_unread(self) -> None:
+        text = (
+            "registries:\n"
+            "  chia:\n"
+            "    type: python-index\n"
+            f"    url: {_CHIA}\n"
+            "updates:\n"
+            "  - package-ecosystem: pip\n"
+            "    python-index: true\n"
+        )
+        self.assertEqual(indexes._dependabot_indexes(text), indexes.Indexes(other=True))
+
     def test_pypi_own_simple_index_is_the_default(self) -> None:
         cases = {
             "index": "-i https://pypi.org/simple\nattrs==23.2.0\n",
