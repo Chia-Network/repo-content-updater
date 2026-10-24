@@ -34,3 +34,45 @@ review agent on Dependabot and Renovate pull requests.
 - **Keep it simple.** Each defense must answer an upstream-content threat.
   Complexity whose only purpose is guarding against the trusted agent should
   be removed, not extended.
+
+## Trusted package indexes
+
+This is a deliberate decision: **packages from the organization's
+configured package indexes are trusted and are not scanned.** The indexes
+are listed only in `TRUSTED_PYTHON_INDEXES` in
+`internal/workflowscripts/dependency_cursor_review_upstream.py`.
+
+- A repository's Dependabot config can select among the listed indexes. It
+  cannot add one. A config naming any other Python index, or one the
+  scripts cannot read, leaves every pip change inconclusive.
+- A requirements file's `--index-url`, `-i` and `--extra-index-url` options
+  select indexes for that file and the files it includes, read in pip's
+  order. The last `--index-url` is its effective index, and any
+  `--extra-index-url` keeps PyPI as a source. A file keeps its replacing
+  trusted index only when every requirements file in its directory that
+  includes it, directly or through other includes, ends with that same index
+  and names no extra source. Any other index, `--find-links`, `--no-index`, an
+  option filled from the environment, or an include outside the repository
+  leaves that file inconclusive.
+- An exact pin in `pyproject.toml`, `setup.py`, `setup.cfg` or `Pipfile` is an
+  unhashed occurrence with no index, because pip installs it from the default
+  index. It never makes a change trusted.
+- A Dependabot `replaces-base` setting describes Dependabot's own resolution.
+  It never makes an index replace PyPI for pip; only a requirements file's
+  effective index does.
+- pip configuration outside the repository, such as `pip.conf` or
+  `PIP_INDEX_URL`, is out of scope: the review reads only the pull request's
+  tree.
+- A pip change is trusted only when a listed, configured index serves that
+  exact version and either every file hash its lock records matches a file
+  downloaded from that index's own links, or every unhashed occurrence is in
+  a requirements file whose effective index is a listed index that names no
+  other source, so that index replaces PyPI for that install. Otherwise it is
+  looked up and scanned as usual.
+- Each package check has its own time and byte limits for reading the index
+  page and its files. A grouped update runs one check per package, so it can
+  take up to N times those limits.
+- Trusted changes are disclosed in the review summary. They never block,
+  and they are not counted as scanned.
+- Do not "fix" this by scanning or blocking these packages. Changing the
+  list or this rule needs the maintainers' explicit sign-off.

@@ -55,6 +55,16 @@ class ReleaseTagTest(_TagRepo):
                 )
                 _git(self.repo, "tag", "-d", *tags)
 
+    def test_a_go_incompatible_version_reads_its_release_tag(self) -> None:
+        self._tag("v2.0.0")
+        self.assertEqual(
+            versions.release_tag(str(self.repo), "v2.0.0+incompatible", "go"),
+            versions.ReleaseTag(versions.TagStatus.FOUND, self.commits[0], "v2.0.0"),
+        )
+        self._tag("v3.0.0+incompatible", 1)
+        absent = versions.ReleaseTag(versions.TagStatus.ABSENT)
+        self.assertEqual(versions.release_tag(str(self.repo), "v3.0.0+incompatible", "go"), absent)
+
     def test_annotated_tag_peels_to_its_commit(self) -> None:
         _git(self.repo, "tag", "-a", "-m", "release", "1.0.0", self.commits[1])
         found = versions.release_tag(str(self.repo), "1.0.0")
@@ -98,12 +108,12 @@ class ReleaseTagTest(_TagRepo):
 
 
 class CommitRefTest(_TagRepo):
-    """An action's commit SHA is its own release when a branch or tag of the repository contains it."""
+    """An action's commit SHA is its own untagged release when a branch or tag of the repository contains it."""
 
     def _found(self, sha: str) -> versions.ReleaseTag:
-        return versions.ReleaseTag(versions.TagStatus.FOUND, sha, sha)
+        return versions.ReleaseTag(versions.TagStatus.FOUND, sha, "")
 
-    def test_a_commit_on_a_branch_or_tag_names_itself_in_either_case(self) -> None:
+    def test_a_commit_on_a_branch_or_tag_is_its_own_untagged_release_in_either_case(self) -> None:
         for version in (self.commits[0], self.commits[1], self.commits[0].upper()):
             with self.subTest(version=version):
                 found = versions.release_tag(str(self.repo), version, "github-actions")
@@ -132,7 +142,7 @@ class CommitRefTest(_TagRepo):
 
     def test_the_command_line_takes_the_mode(self) -> None:
         found = _cli("release-tag", str(self.repo), self.commits[0], "github-actions")
-        self.assertEqual((found.returncode, found.stdout), (0, f"{self.commits[0]}\t{self.commits[0]}\n"), found.stderr)
+        self.assertEqual((found.returncode, found.stdout), (0, f"{self.commits[0]}\t\n"), found.stderr)
         self.assertEqual(_cli("release-tag", str(self.repo), self.commits[0]).returncode, 3)
 
 
@@ -225,6 +235,33 @@ class ExactVersionTest(unittest.TestCase):
             for mode in ("pip", "npm", "go", "github-actions"):
                 with self.subTest(version=digits, mode=mode):
                     self.assertEqual(versions.exact_body(digits, mode=mode), "")
+
+
+class Pep440KeyTest(unittest.TestCase):
+    def test_canonical_spellings_share_one_key(self) -> None:
+        groups = (
+            ("2.0.4", "v2.0.4", "V2.0.4", "2.0.4.0", "0!2.0.4"),
+            ("1.0rc1", "1.0.RC1", "1.0-rc-1", "1.0c1", "1.0preview1"),
+            ("1.0.post1", "1.0-1", "1.0-r1", "1.0rev1", "1.0.POST1"),
+            ("1.0.dev1", "1.0-dev1", "1.0.DEV1"),
+            ("1.0+Ubuntu.01", "1.0+ubuntu.1"),
+        )
+        for spellings in groups:
+            with self.subTest(spellings=spellings):
+                keys = {versions.pep440_key(value) for value in spellings}
+                self.assertEqual(len(keys), 1)
+                self.assertNotEqual(keys.pop(), "")
+
+    def test_release_suffixes_stay_distinct(self) -> None:
+        base = versions.pep440_key("2.0.4")
+        for value in ("2.0.4.post0", "2.0.4.post1", "2.0.4rc1", "2.0.4.dev0", "2.0.4+local"):
+            with self.subTest(value=value):
+                self.assertNotEqual(versions.pep440_key(value), base)
+
+    def test_unparseable_versions_have_no_key(self) -> None:
+        for value in ("", "v", "latest", "2.0..4", "2.0.4-", "2.0.4+", "1.0.0+bad..local", "1.0.0+local-"):
+            with self.subTest(value=value):
+                self.assertEqual(versions.pep440_key(value), "")
 
 
 class MovingRefTest(unittest.TestCase):

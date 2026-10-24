@@ -57,6 +57,19 @@ _SEMVER_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+" + _SUFFIX)
 _RELEASE_RE = re.compile(r"(?P<release>[0-9]+(?:\.[0-9]+)+)" + _SUFFIX)
 # A full commit SHA, in either case, pins an action ref without being a release tag.
 _COMMIT_RE = re.compile(r"[0-9a-fA-F]{40}")
+# One PEP 440 version split into the parts its canonical form keeps: an epoch, a release, then pre, post, dev and
+# local labels. The alternatives are longest first, so `preview` is not read as `pre`.
+_PEP440_PARTS_RE = re.compile(
+    r"^v?"
+    r"(?:(?P<epoch>[0-9]+)!)?"
+    r"(?P<release>[0-9]+(?:\.[0-9]+)*)"
+    r"(?:[-_.]?(?P<pre_l>alpha|beta|preview|pre|rc|a|b|c)[-_.]?(?P<pre_n>[0-9]*))?"
+    r"(?:-(?P<post_n1>[0-9]+)|[-_.]?(?P<post_l>post|rev|r)[-_.]?(?P<post_n2>[0-9]*))?"
+    r"(?:[-_.]?dev[-_.]?(?P<dev_n>[0-9]*))?"
+    r"(?:\+(?P<local>[a-z0-9]+(?:[-_.][a-z0-9]+)*))?$",
+    re.IGNORECASE,
+)
+_PRE_LABELS = {"alpha": "a", "a": "a", "beta": "b", "b": "b", "c": "rc", "pre": "rc", "preview": "rc", "rc": "rc"}
 
 # Keyed by the ecosystem a token comes from: pip drops `==`, `===`, `v` or `V`;
 # the others drop only `v`/`V`. npm and github-actions need three numeric parts,
@@ -85,6 +98,33 @@ def exact_body(value: str, *, mode: str) -> str:
     prefix, pattern = _MODES[mode]
     match = pattern.fullmatch(_version_body(value, prefix))
     return match.group(0) if match else ""
+
+
+def _local_part(part: str) -> str:
+    """One local version segment: numbers compare as numbers, words compare lower-case."""
+    return str(int(part)) if part.isdigit() else part
+
+
+def pep440_key(value: str) -> str:
+    """The canonical PEP 440 form of an exact version, or "" when `value` is not one."""
+    match = _PEP440_PARTS_RE.fullmatch(value.strip())
+    if not match:
+        return ""
+    epoch = int(match.group("epoch") or 0)
+    release = [int(part) for part in match.group("release").split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    key = (f"{epoch}!" if epoch else "") + ".".join(map(str, release))
+    if match.group("pre_l") is not None:
+        key += _PRE_LABELS[match.group("pre_l").lower()] + str(int(match.group("pre_n") or 0))
+    if match.group("post_l") is not None or match.group("post_n1") is not None:
+        key += ".post" + str(int(match.group("post_n1") or match.group("post_n2") or 0))
+    if match.group("dev_n") is not None:
+        key += ".dev" + str(int(match.group("dev_n") or 0))
+    if match.group("local") is not None:
+        local = re.split(r"[-_.]", match.group("local").lower())
+        key += "+" + ".".join(_local_part(part) for part in local)
+    return key
 
 
 def commit_ref(ref: str) -> bool:
@@ -142,7 +182,7 @@ def _tag(repo: str, name: str) -> str:
 
 
 def _commit(repo: str, sha: str) -> ReleaseTag:
-    """A commit SHA names itself when a branch or tag of `repo` contains it.
+    """A commit SHA is its own release, with no tag name, when a branch or tag of `repo` contains it.
 
     GitHub serves a commit that only a fork of the repository has under the
     repository's name, so a commit off every branch and tag is ABSENT.
@@ -165,13 +205,15 @@ def _commit(repo: str, sha: str) -> ReleaseTag:
         text=True,
         check=False,
     )
-    return ReleaseTag(TagStatus.FOUND, sha, sha) if proc.returncode == 0 and proc.stdout.strip() else _ABSENT
+    return ReleaseTag(TagStatus.FOUND, sha, "") if proc.returncode == 0 and proc.stdout.strip() else _ABSENT
 
 
 def release_tag(repo: str, version: str, mode: str = "") -> ReleaseTag:
     """The commit and tag name of the release tag for `version` in `repo`.
 
-    In github-actions mode a commit SHA is its own release: its commit and name are the SHA.
+    In github-actions mode a commit SHA is its own release: its commit is the
+    SHA and its name is empty, because a SHA is not a tag. In go mode the
+    `+incompatible` build suffix is not part of the tag.
 
     One leading `v` or `V` is noted. Every existing spelling of the bare
     version (`<bare>`, `v<bare>`, `V<bare>`) must peel to the same commit.
@@ -182,6 +224,8 @@ def release_tag(repo: str, version: str, mode: str = "") -> ReleaseTag:
     """
     if mode == "github-actions" and commit_ref(version):
         return _commit(repo, version.lower())
+    if mode == "go":
+        version = version.removesuffix("+incompatible")
     lead = version[:1] if version[:1] in {"v", "V"} else ""
     bare = version[len(lead) :]
     if not bare or not _tag_name_ok(bare):

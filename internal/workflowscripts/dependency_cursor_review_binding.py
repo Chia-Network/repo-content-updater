@@ -61,6 +61,9 @@ REASONS = frozenset(
 
 _SLSA_V1 = "https://slsa.dev/provenance/v1"
 _GO_PROXY = "https://proxy.golang.org"
+# The proxy serves a module zip itself or redirects to this bucket's module path. The downloaded zip is used only
+# after its hash matches the go.sum entry (go() below).
+_GO_REDIRECTS = {"proxy.golang.org": "", "storage.googleapis.com": "/proxy-golang-org-prod/"}
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
@@ -154,14 +157,16 @@ def npm(subject: Subject) -> Binding:
         digest = base64.b64decode(integrity.removeprefix("sha512-"), validate=True).hex()
     except binascii.Error:
         return _unbound(NO_LOCK_HASH)
+    name = upstream.npm_path(subject.name)
+    if not name:
+        return _UNAVAILABLE
     version = urllib.parse.quote(subject.version, safe="")
-    registered = _dig(upstream.fetch_json(f"https://registry.npmjs.org/{subject.name}/{version}"), "dist", "integrity")
+    registered = _dig(upstream.fetch_json(f"https://registry.npmjs.org/{name}/{version}"), "dist", "integrity")
     if not isinstance(registered, str) or not registered:
         return _UNAVAILABLE
     if registered != integrity:
         return _unbound(HASH_MISMATCH)
-    escaped = urllib.parse.quote(subject.name, safe="@")
-    found = upstream.fetch_json(f"https://registry.npmjs.org/-/npm/v1/attestations/{escaped}@{version}")
+    found = upstream.fetch_json(f"https://registry.npmjs.org/-/npm/v1/attestations/{name}@{version}")
     if found is None:
         return _UNAVAILABLE
     bundles = [
@@ -189,14 +194,16 @@ def _go_escaped(text: str) -> str:
 def go(subject: Subject) -> Binding:
     """The proxy's module zip hashes to the go.sum entry, and the proxy built that zip from the scanned commit.
 
-    The go command installs a module only when its zip hashes to the go.sum entry, so that zip is the one checked.
+    The go command installs a module only when its zip hashes to the go.sum entry, so that zip is the one checked. A
+    proxy redirect may reach only its storage bucket's module path, and the downloaded zip is used only after that
+    hash check.
     """
     sums = set(subject.locked) - {""}
     want = sums.pop() if len(sums) == 1 else ""
     if not want.startswith("h1:"):
         return _unbound(NO_LOCK_HASH)
     base = f"{_GO_PROXY}/{_go_escaped(subject.name)}/@v/{_go_escaped('v' + subject.version)}"
-    archive = upstream.fetch_archive(base + ".zip", GO_ZIP_LIMIT)
+    archive = upstream.fetch_archive(base + ".zip", GO_ZIP_LIMIT, _GO_REDIRECTS)
     found = go_zip_hash(archive) if archive else ""
     if not found:
         return _UNAVAILABLE

@@ -45,6 +45,7 @@ from dependency_manifest_lines import (
     workflow_uses,
 )
 from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
+from dependency_manifest_pnpm import pnpm_lock, pnpm_lock_integrity, pnpm_lock_unsupported_version
 from dependency_manifest_python import (
     pipfile_lock,
     pipfile_lock_hashes,
@@ -56,12 +57,14 @@ from dependency_manifest_python import (
 )
 
 # Why a change is not scanned. Docker images and Terraform providers have no
-# source tree to read; a moving tag can resolve to another commit after the review;
+# source tree this scan reads; a moving tag can resolve to another commit after the review;
 # a bump from one commit to another whose commits no branch or tag of the action's repository contains.
 UNSCANNABLE_ECOSYSTEM = "unscannable_ecosystem"
 MOVING_REF = "moving_ref"
 UNRESOLVED_SHA = "unresolved_sha"
-WARN_REASONS = frozenset({UNSCANNABLE_ECOSYSTEM, MOVING_REF, UNRESOLVED_SHA})
+# Why a file of an ecosystem this review has no grammar for cannot be read at all.
+UNREAD_ECOSYSTEM = "unread_ecosystem"
+WARN_REASONS = frozenset({UNSCANNABLE_ECOSYSTEM, UNREAD_ECOSYSTEM, MOVING_REF, UNRESOLVED_SHA})
 
 MANIFEST, LOCK, CHECKSUMS = "manifest", "lock", "checksums"
 # The scan's not_scanned_reason for a ref the cloned repository does not resolve (upstream_malware_scan.sh).
@@ -138,6 +141,8 @@ class FileKind(NamedTuple):
     fixed: Callable[[Entry], str] = _line  # the part of an entry's text no version change may change
     # The artifact hash an installed copy's entry records, "" for none; None for an entry that is no installed copy.
     hashes: Callable[[Entry], str | None] | None = None
+    # The format version a lock declares when its grammar does not read that version, or "".
+    unsupported: Callable[[str], str] | None = None
 
 
 NPM = Ecosystem("npm", repo=upstream.npm, bind=binding.npm)
@@ -152,9 +157,9 @@ ACTIONS = Ecosystem(
 )
 DOCKER = Ecosystem("docker", warn=UNSCANNABLE_ECOSYSTEM)
 TERRAFORM = Ecosystem("terraform", warn=UNSCANNABLE_ECOSYSTEM)
-# Ecosystems with no grammar: a manifest change is a gap, and so is a lock change without a primary change beside it.
+# Ecosystems with no grammar: every manifest or lock change is a gap named by the warn reason.
 CARGO, BUNDLER, COMPOSER, SWIFT, NUGET = (
-    Ecosystem(name) for name in ("cargo", "bundler", "composer", "swift", "nuget")
+    Ecosystem(name, warn=UNREAD_ECOSYSTEM) for name in ("cargo", "bundler", "composer", "swift", "nuget")
 )
 
 
@@ -202,7 +207,15 @@ _FILES = (
         hashes=_top_copy(package_lock_integrity),
     ),
     FileKind(NPM, LOCK, yarn_lock, frozenset({"yarn.lock"}), fixed=_record, hashes=_top_copy(yarn_lock_integrity)),
-    FileKind(NPM, LOCK, None, frozenset({"pnpm-lock.yaml"})),
+    FileKind(
+        NPM,
+        LOCK,
+        pnpm_lock,
+        frozenset({"pnpm-lock.yaml"}),
+        fixed=_record,
+        hashes=_top_copy(pnpm_lock_integrity),
+        unsupported=pnpm_lock_unsupported_version,
+    ),
     FileKind(GO, MANIFEST, go_mod, frozenset({"go.mod"})),
     FileKind(GO, CHECKSUMS, go_sum, frozenset({"go.sum"}), fixed=_record, hashes=go_sum_hash),
     FileKind(PIP, MANIFEST, requirements, frozenset({"pyproject.toml", "setup.py", "setup.cfg", "Pipfile"})),
@@ -266,24 +279,32 @@ def hash_sources(ecosystem: Ecosystem, directory: str, hashed: tuple[str, ...]) 
     return sources
 
 
-def locked(
+def locked_occurrences(
     ecosystem: str, directory: str, name: str, version: str, read: Callable[[str], str], hashed: tuple[str, ...]
-) -> tuple[str, ...]:
-    """The hash each installed copy of `name` at exact `version` records in the hash_sources beside `directory`.
+) -> tuple[tuple[str, str], ...]:
+    """Each (path, recorded hash) of an installed copy of `name` at exact `version` in the hash_sources beside
+    `directory`.
 
     Each row's `hashes` reads which entries are installed copies and what they record. "" is a copy with no hash.
     """
     row = _BY_NAME.get(ecosystem)
     if row is None or not version:
         return ()
-    found: list[str] = []
+    found: list[tuple[str, str]] = []
     for path, kind in hash_sources(row, directory, hashed).items():
         parsed = kind.parse(read(path)) if kind.hashes else None
         for entry in parsed[0] if parsed else ():
             recorded = kind.hashes(entry)
             if recorded is not None and entry[0] == name and exact_body(entry[1], mode=ecosystem) == version:
-                found.append(recorded)
+                found.append((path, recorded))
     return tuple(found)
+
+
+def locked(
+    ecosystem: str, directory: str, name: str, version: str, read: Callable[[str], str], hashed: tuple[str, ...]
+) -> tuple[str, ...]:
+    """The hash each installed copy of `name` at exact `version` records in the hash_sources beside `directory`."""
+    return tuple(recorded for _path, recorded in locked_occurrences(ecosystem, directory, name, version, read, hashed))
 
 
 def warn_reason(ecosystem: str, old: str, new: str) -> str:

@@ -174,14 +174,27 @@ class NpmTest(_Registry):
         found = self.bind(binding.npm, subject, self._answers(_fixture("npm-sigstore-3.0.0.json")))
         self.assertEqual(found, binding.Binding(binding.PROVENANCE))
 
-    def test_a_scoped_name_is_escaped_in_the_attestation_url(self) -> None:
+    def test_a_scoped_name_is_escaped_in_the_registry_and_attestation_urls(self) -> None:
         subject = _NPM._replace(name="@scope/pkg")
         self.bind(
             binding.npm,
             subject,
-            {"https://registry.npmjs.org/@scope/pkg/3.0.0": {"dist": {"integrity": _NPM_INTEGRITY}}},
+            {"https://registry.npmjs.org/@scope%2Fpkg/3.0.0": {"dist": {"integrity": _NPM_INTEGRITY}}},
         )
-        self.assertEqual(self.urls[-1], "https://registry.npmjs.org/-/npm/v1/attestations/@scope%2Fpkg@3.0.0")
+        self.assertEqual(
+            self.urls,
+            [
+                "https://registry.npmjs.org/@scope%2Fpkg/3.0.0",
+                "https://registry.npmjs.org/-/npm/v1/attestations/@scope%2Fpkg@3.0.0",
+            ],
+        )
+
+    def test_a_name_that_is_not_an_npm_package_name_is_unavailable_and_reads_nothing(self) -> None:
+        for name in ("", "@scope", "scope/name", "../name", "a b"):
+            with self.subTest(name=name):
+                found = self.bind(binding.npm, _NPM._replace(name=name), self._answers(None))
+                self.assertEqual(found, binding.Binding(_UNBOUND, binding.REGISTRY_UNAVAILABLE))
+                self.assertEqual(self.urls, [])
 
 
 class ExactCommitTest(_Registry):
@@ -332,6 +345,28 @@ class GoTest(_Registry):
     def test_a_proxy_zip_hashing_to_go_sum_built_from_the_scanned_commit_is_checksum_bound(self) -> None:
         self.assertEqual(self.bind(binding.go, _GO, self._answers()), binding.Binding(binding.CHECKSUM))
         self.assertEqual(self.urls, [_GO_ZIP, _GO_INFO])
+
+    def test_a_proxy_zip_served_from_its_storage_path_is_checksum_bound(self) -> None:
+        stored = "https://storage.googleapis.com/proxy-golang-org-prod/github.com/dimchansky/utfbom/@v/v1.1.1.zip"
+        answers = {
+            _GO_ZIP: (302, stored, b""),
+            stored: (200, "", _UTFBOM),
+            _GO_INFO: (200, "", json.dumps(_origin(_GO_COMMIT)).encode()),
+        }
+        with patch.object(upstream, "_get", lambda url, _limit, _accept, _budget=None: answers[url]):
+            self.assertEqual(binding.go(_GO), binding.Binding(binding.CHECKSUM))
+
+    def test_a_proxy_zip_redirect_outside_the_storage_path_is_not_read(self) -> None:
+        for stored in (
+            "https://storage.googleapis.com/other/utfbom.zip",
+            "https://storage.googleapis.com/proxy-golang-org-prod-other/utfbom.zip",
+            "https://storage.googleapis.com/proxy-golang-org-prod",
+        ):
+            with self.subTest(stored=stored):
+                answers = {_GO_ZIP: (302, stored, b""), stored: (200, "", _UTFBOM)}
+                with patch.object(upstream, "_get", lambda url, _limit, _accept, _budget=None, answers=answers: answers[url]):
+                    found = binding.go(_GO)
+                self.assertEqual(found, binding.Binding(binding.UNBOUND, binding.REGISTRY_UNAVAILABLE))
 
     def test_a_proxy_zip_that_does_not_hash_to_go_sum_is_a_hash_mismatch(self) -> None:
         for name, subject, answers in (

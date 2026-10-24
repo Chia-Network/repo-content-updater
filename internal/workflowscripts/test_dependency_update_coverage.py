@@ -84,13 +84,20 @@ def _found(slug: str) -> upstream.Repo:
     return upstream.Repo(slug, upstream.IDENTITY) if slug else upstream.Repo()
 
 
-def _plan(*primary: tuple[str, ...], unchecked: tuple = (), gaps: tuple = (), unparsed_locks: tuple = ()) -> diff.Plan:
+def _plan(
+    *primary: tuple[str, ...],
+    unchecked: tuple = (),
+    gaps: tuple = (),
+    unparsed_locks: tuple = (),
+    hashed: tuple[str, ...] = (),
+) -> diff.Plan:
     """A Plan of (ecosystem, dir, name, old, new) changes."""
     return diff.Plan(
         tuple(diff.Change(*change) for change in primary),
         tuple(diff.Change(*change) for change in unchecked),
         tuple(gaps),
         tuple(unparsed_locks),
+        hashed,
     )
 
 
@@ -100,8 +107,10 @@ def _run_main(
     scan: Callable[..., dict] | None = None,
     repo: Callable[[str, str, str], upstream.Repo] = lambda _ecosystem, name, _version: _found(f"upstream/{name}"),
     clone: Callable[[str, Path], bool] = lambda *_args: False,
+    files: Callable[[str], list[str] | None] = lambda _directory: [],
 ) -> tuple[dict, str, str]:
-    """coverage.main() over `plan`: (report, summary, GITHUB_OUTPUT text). `scan` replaces _scan_one."""
+    """coverage.main() over `plan`: (report, summary, GITHUB_OUTPUT text). `scan` replaces _scan_one, and `files`
+    lists a directory at HEAD."""
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         output = root / "github_output.txt"
@@ -111,6 +120,7 @@ def _run_main(
             stack.enter_context(patch.object(coverage, "_plan", return_value=plan))
             stack.enter_context(patch.object(coverage._ecosystems, "upstream_repo", repo))
             stack.enter_context(patch.object(coverage, "_clone", clone))
+            stack.enter_context(patch.object(coverage, "_git_files", files))
             if scan is not None:
                 stack.enter_context(patch.object(coverage, "_scan_one", scan))
             coverage.main()
@@ -157,8 +167,8 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
 
     def test_single_update_summary_reflects_coverage_not_the_child_summary(self) -> None:
         child = _clean("lodash", "lodash/lodash")
-        child["from_tag"] = ""
-        child["to_tag"] = ""
+        child["resolved_from"] = ""
+        child["resolved_to"] = ""
         child["scan_conclusive"] = False
 
         def scan_and_publish(_update: coverage.Target, dest: Path, _script: Path, _ecosystem: str) -> dict:
@@ -405,12 +415,9 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             self.assertIn(f"resolved_to={'c' * 40}", emitted)
             self.assertIn("scan_conclusive=false", emitted)
 
-    def test_conclusive_without_tags_is_not_covered(self) -> None:
+    def test_conclusive_without_resolved_releases_is_not_covered(self) -> None:
         report = _clean("lodash", "lodash/lodash")
-        report["from_tag"] = ""
-        report["to_tag"] = ""
-        report["resolved_from"] = "a" * 40
-        report["resolved_to"] = "a" * 40
+        report["resolved_from"] = ""
         report["materialized_count"] = 0
         aggregated = coverage.aggregate([report])
         self.assertIs(aggregated["scan_conclusive"], False)
@@ -419,11 +426,19 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         self.assertIsNone(coverage.agent_target([report]))
         self.assertIsNone(aggregated["agent_target"])
 
+    def test_a_conclusive_untagged_commit_range_is_covered(self) -> None:
+        report = _clean("actions/checkout", "actions/checkout")
+        report["from_tag"] = ""
+        report["to_tag"] = ""
+        aggregated = coverage.aggregate([report])
+        self.assertIs(aggregated["scan_conclusive"], True)
+        self.assertEqual(coverage.agent_target([report]), ("actions/checkout", "actions/checkout", "b" * 40))
+
     def test_grouped_incomplete_review_cites_unread_and_is_not_benign(self) -> None:
         covered = _clean("lodash", "lodash/lodash")
         partial = _clean("minimist", "minimistjs/minimist")
-        partial["from_tag"] = ""
-        partial["to_tag"] = ""
+        partial["resolved_from"] = ""
+        partial["resolved_to"] = ""
         partial["scan_conclusive"] = False
         partial["status"] = "not_scanned"
         partial["not_scanned_reason"] = "incomplete_coverage"
@@ -457,8 +472,8 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
     def test_uncovered_finding_status_is_kept(self) -> None:
         for status in ("fail", "warn"):
             report = _clean("lodash", "lodash/lodash")
-            report["from_tag"] = ""
-            report["to_tag"] = ""
+            report["resolved_from"] = ""
+            report["resolved_to"] = ""
             report["status"] = status
             report["findings"]["ioc"] = [{"path": "pkg/index.js", "line": 1}]
             aggregated = coverage.aggregate([report])
@@ -468,8 +483,8 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
 
     def test_uncovered_fail_returns_after_writing_the_report(self) -> None:
         child = _clean("lodash", "lodash/lodash")
-        child["from_tag"] = ""
-        child["to_tag"] = ""
+        child["resolved_from"] = ""
+        child["resolved_to"] = ""
         child["status"] = "fail"
         child["findings"]["ioc"] = [{"path": "pkg/index.js", "line": 1, "kind": "ioc", "match": "x"}]
         report, summary, output = _run_main(
@@ -615,6 +630,21 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             report, "MALWARE_REVIEW_VERDICT: benign\n\nNo issues.\n", "COMPATIBILITY_RECOMMENDATION: Merge\n"
         )
         self.assertEqual(published["check"], "fail")
+
+    def test_git_files_lists_one_directory_at_head(self) -> None:
+        with TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            _git_repo(repo)
+            _commit(repo, "requirements.txt", "attrs==1.0\n", "root")
+            _commit(repo, "app/requirements.txt", "six==1.0\n", "app")
+            _commit(repo, "app/deep/requirements.txt", "six==1.0\n", "deep")
+            with contextlib.chdir(repo):
+                self.assertEqual(coverage._git_files("."), [("app", "040000"), ("requirements.txt", "100644")])
+                self.assertEqual(
+                    coverage._git_files("app"), [("app/deep", "040000"), ("app/requirements.txt", "100644")]
+                )
+            with contextlib.chdir(tmp):
+                self.assertIsNone(coverage._git_files("."))
 
     def test_unreadable_diff_is_one_unresolved_gap(self) -> None:
         report, summary, _output = _run_main(None)

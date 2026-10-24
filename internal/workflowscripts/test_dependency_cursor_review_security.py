@@ -25,6 +25,7 @@ _BUNDLE_STEMS = (
     "dependency_cursor_review_binding.py",
     "dependency_cursor_review_certificate.py",
     "dependency_cursor_review_upstream.py",
+    "dependency_cursor_review_versions.py",
     "dependency_manifest_go.py",
     "dependency_manifest_lines.py",
 )
@@ -38,7 +39,7 @@ _INCONCLUSIVE_REPORT = {
 _CONCLUSIVE_BYTES = (
     b'{"status":"clean","scan_conclusive":true,"verdict_token_in_tree":false,'
     b'"findings":{"ioc":[],"unicode":[],"confusable":[],"heuristic":[]},'
-    b'"policy_warnings":[],"unchecked_upgrades":[],"unparsed_locks":[],'
+    b'"policy_warnings":[],"unchecked_upgrades":[],"unparsed_locks":[],"trusted_packages":[],'
     b'"binding":{"kind":"intrinsic","reason":""},"repo_source":"identity"}\n'
 )
 

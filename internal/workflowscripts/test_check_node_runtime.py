@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -37,15 +38,7 @@ def _workflow(*uses: str) -> str:
         steps = "\n".join(f"      - uses: {use}" for use in uses)
     else:
         steps = "      - run: echo ok"
-    return (
-        "name: fixture\n"
-        "on: push\n"
-        "jobs:\n"
-        "  test:\n"
-        "    runs-on: ubuntu-latest\n"
-        "    steps:\n"
-        f"{steps}\n"
-    )
+    return f"name: fixture\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n{steps}\n"
 
 
 @unittest.skipUnless(shutil.which("yq"), "yq not on PATH")
@@ -92,8 +85,7 @@ class CheckNodeRuntimeTest(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertIn(
-            "::error file=.github/workflows/x.yml::"
-            "Action acme/action@v1 uses unsupported Node runtime node20",
+            "::error file=.github/workflows/x.yml::Action acme/action@v1 uses unsupported Node runtime node20",
             proc.stdout,
         )
 
@@ -189,8 +181,7 @@ class CheckNodeRuntimeTest(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertIn(
-            "::error file=.github/workflows/my flow.yml::"
-            "Action acme/action@v1 uses unsupported Node runtime node20",
+            "::error file=.github/workflows/my flow.yml::Action acme/action@v1 uses unsupported Node runtime node20",
             proc.stdout,
         )
 
@@ -225,3 +216,54 @@ class CheckNodeRuntimeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InstallYqStepTest(unittest.TestCase):
+    """The workflow installs a pinned yq and refuses a download whose checksum differs."""
+
+    _WORKFLOW = Path(__file__).resolve().parents[2] / "templates" / "check-node-runtime.yml"
+
+    def _step(self) -> str:
+        workflow = self._WORKFLOW.read_text(encoding="utf-8")
+        self.assertLess(workflow.index("- name: Install yq\n"), workflow.index("- name: Check action Node runtime\n"))
+        block = workflow.split("- name: Install yq\n", 1)[1].split("\n      - name: ", 1)[0]
+        return textwrap.dedent(block.split("        run: |\n", 1)[1])
+
+    def _run(self, arch: str, payload: str, fake_sum: bool = False) -> tuple[int, str, Path]:
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        bin_dir = tmp / "fake-bin"
+        bin_dir.mkdir()
+        (bin_dir / "curl").write_text(
+            f'#!/bin/bash\nwhile [ "$1" != -o ]; do shift; done\nprintf %s {payload!r} >"$2"\n', encoding="utf-8"
+        )
+        if fake_sum:
+            (bin_dir / "sha256sum").write_text("#!/bin/bash\ncat >/dev/null\n", encoding="utf-8")
+        for tool in bin_dir.iterdir():
+            tool.chmod(0o755)
+        github_path = tmp / "github_path"
+        github_path.write_text("", encoding="utf-8")
+        env = {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "RUNNER_ARCH": arch,
+            "RUNNER_TEMP": str(tmp),
+            "GITHUB_PATH": str(github_path),
+        }
+        proc = subprocess.run(["bash", "-c", self._step()], env=env, capture_output=True, text=True, check=False)
+        return proc.returncode, github_path.read_text(encoding="utf-8"), tmp
+
+    def test_a_download_with_another_checksum_is_refused(self) -> None:
+        for arch in ("X64", "ARM64"):
+            with self.subTest(arch=arch):
+                status, github_path, _tmp = self._run(arch, "tampered")
+                self.assertNotEqual(status, 0)
+                self.assertEqual(github_path, "")
+
+    def test_an_architecture_with_no_pinned_build_is_refused(self) -> None:
+        status, github_path, _tmp = self._run("X86", "", fake_sum=True)
+        self.assertNotEqual(status, 0)
+        self.assertEqual(github_path, "")
+
+    def test_a_verified_download_is_put_on_the_path(self) -> None:
+        status, github_path, tmp = self._run("X64", "yq", fake_sum=True)
+        self.assertEqual((status, github_path), (0, f"{tmp / 'yq-bin'}\n"))
+        self.assertTrue(os.access(tmp / "yq-bin" / "yq", os.X_OK))

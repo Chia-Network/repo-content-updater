@@ -234,8 +234,20 @@ class PolicyTest(_Diff):
             {".github/workflows/ci.yml": _WORKFLOW.format("v5"), "Cargo.toml": '[dependencies]\nserde = "1.0.2"\n'},
         )
         self.assertIs(report["scan_conclusive"], False)
+        self.assertIn("not covered (unread_ecosystem)", _summary)
         published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=True)
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
+
+    def test_a_grammarless_ecosystem_is_unread_with_its_own_reason_and_sentence(self) -> None:
+        report, summary = self.run_main(
+            {"Cargo.toml": '[dependencies]\nserde = "1.0.1"\n'},
+            {"Cargo.toml": '[dependencies]\nserde = "1.0.2"\n'},
+        )
+        self.assertEqual(report["policy_warnings"], [])
+        self.assertIn("not covered (unread_ecosystem)", summary)
+        self.assertIn(formatter.reason_note("unread_ecosystem"), summary)
+        self.assertIn("Cargo", formatter._POLICY_WARNINGS["unread_ecosystem"])
+        self.assertNotIn("unscannable_ecosystem", summary)
 
 
 class UncheckedUpgradeTest(_Diff):
@@ -295,11 +307,13 @@ class UncheckedUpgradeTest(_Diff):
 
     def test_an_unparsed_lock_beside_a_clean_scan_is_inconclusive_not_benign(self) -> None:
         report, summary = self._lodash(
-            {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n"},
-            {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n#\n"},
+            {"pnpm-lock.yaml": "lockfileVersion: '5.4'\n"},
+            {"pnpm-lock.yaml": "lockfileVersion: '5.4'\n#\n"},
         )
-        self.assertEqual(report["unparsed_locks"], ["pnpm-lock.yaml"])
+        self.assertEqual(report["unparsed_locks"], [["pnpm-lock.yaml", "unsupported_lockfile_version", "5.4"]])
         self.assertIn("- These lockfiles were not parsed, so the packages they changed were not checked:", summary)
+        self.assertIn("  - `pnpm-lock.yaml` (unsupported_lockfile_version 5.4)", summary)
+        self.assertIn(formatter.reason_note("unsupported_lockfile_version", "5.4"), summary)
         published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
         self.assertNotIn("**Verdict: benign**", published["malware_text"])

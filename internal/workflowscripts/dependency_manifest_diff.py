@@ -9,15 +9,19 @@ version move ends up in one of:
   beside it only says which names are declared, and the lock supplies the
   versions; a name the manifest moved must also move in that lock. A primary
   is scanned, or reported by its ecosystem's policy.
-- unchecked: every other package whose version moved, such as an undeclared
+- unchecked: every other package whose version moved, such as a removed
+  dependency, an undeclared
   or nested lock copy, a go.mod `// indirect` require, or a go.sum version
   that no version move beside it accounts for. Disclosed, not scanned.
-- gaps: (path, reason) for a path that is not a dependency file, was deleted
+- gaps: (path, reason) for a file of an ecosystem the scan cannot read (its
+  warn reason), and for a path that is not a dependency file, was deleted
   or changed type, does not parse, or changed in a way its versions do not
   account for: residue outside the entries, an entry whose text changed at an
   unchanged version, or a line entry whose text outside the version changed.
-- unparsed_locks: a lockfile with no grammar beside a primary change. With no
-  primary change beside it, it is a gap.
+- unparsed_locks: a record for a lockfile with no grammar, or one its
+  grammar does not read, beside or above a primary change. The reason is a
+  code, and the lockfile version the grammar does not read is a separate field.
+  With no such primary change, it is a gap.
 
 hashed lists each changed file read whose row records artifact hashes, such as
 a requirements file, for the binding to read the hashes beside a change from.
@@ -49,11 +53,19 @@ class Change(NamedTuple):
     new: str
 
 
+class UnparsedLock(NamedTuple):
+    """A lockfile the diff did not parse: its path, a reason code, and the format version when one names it."""
+
+    path: str
+    reason: str
+    version: str = ""
+
+
 class Plan(NamedTuple):
     primary: tuple[Change, ...] = ()
     unchecked: tuple[Change, ...] = ()
     gaps: tuple[tuple[str, str], ...] = ()
-    unparsed_locks: tuple[str, ...] = ()
+    unparsed_locks: tuple[UnparsedLock, ...] = ()
     hashed: tuple[str, ...] = ()  # each changed path read whose row records artifact hashes (ecosystems.locked)
 
 
@@ -64,8 +76,10 @@ Moves = list[tuple[Change, bool]]
 # What one changed file contributes. VERSIONS: its moves are changes. NAMES: a
 # manifest beside a lock, whose moved names must move in that lock. CHECKSUMS:
 # every version it adds or drops must be one a change beside it adds or drops.
-# OPAQUE: a lock with no grammar. GAP: the file is a gap on its own.
+# OPAQUE: a lock with no grammar, or one its grammar does not read. GAP: the file is a gap on its own.
 _VERSIONS, _NAMES, _CHECKSUMS, _OPAQUE, _GAP = "versions", "names", "checksums", "opaque", "gap"
+# A lockfile whose grammar does not read the format version it declares.
+UNSUPPORTED_LOCKFILE_VERSION = "unsupported_lockfile_version"
 
 
 class _File(NamedTuple):
@@ -75,6 +89,7 @@ class _File(NamedTuple):
     reason: str = "unresolved"  # why a GAP file is a gap
     moves: tuple[tuple[Change, bool], ...] = ()  # (change, whether it is primary)
     hashed: bool = False  # whether its row records artifact hashes (Plan.hashed)
+    version: str = ""  # the lockfile format version when `reason` names one
 
 
 def _fixed(fixed: Callable[[Entry], str], entries: dict[str, set[Entry]]) -> set[str]:
@@ -103,14 +118,6 @@ def _moves(row: ecosystems.FileKind, directory: str, before: list[Entry], after:
     return moved
 
 
-def _file_moves(row: ecosystems.FileKind, old_path: str, path: str, read: Read, base: str) -> Moves | None:
-    """The moves of one changed file with a grammar, or None when a side does not parse or its residue changed."""
-    before, after = row.parse(read(base, old_path)), row.parse(read("HEAD", path))
-    if before is None or after is None or before[1] != after[1]:
-        return None
-    return _moves(row, str(PurePosixPath(path).parent), before[0], after[0])
-
-
 def _declared(ecosystem: Ecosystem, directory: str, read: Read, base: str) -> set[str] | None:
     """Names the manifests beside a lock declare at base or HEAD, or None when none is there or one does not parse."""
     names: set[str] = set()
@@ -129,7 +136,11 @@ def _declared(ecosystem: Ecosystem, directory: str, read: Read, base: str) -> se
 
 
 def _has_lock(ecosystem: Ecosystem, directory: str, read: Read) -> bool:
-    return any(read("HEAD", path) for path, _row in ecosystems.beside(ecosystem, LOCK, directory))
+    """Whether a lock is beside `directory` at HEAD, unless it names a lockfile version its grammar does not read."""
+    return any(
+        (text := read("HEAD", path)) and not (row.unsupported and row.unsupported(text))
+        for path, row in ecosystems.beside(ecosystem, LOCK, directory)
+    )
 
 
 def _read(old_path: str, path: str, status: str, read: Read, base: str) -> list[_File]:
@@ -139,9 +150,18 @@ def _read(old_path: str, path: str, status: str, read: Read, base: str) -> list[
     if status in {"D", "T"} or row is None:
         return [_File(label, ("", directory), _GAP) for label in dict.fromkeys((old_path, path))]
     group = (row.ecosystem.name, directory)
+    if row.parse is None and row.ecosystem.warn:
+        return [_File(path, group, _GAP, row.ecosystem.warn)]
     if row.parse is None:
         return [_File(path, group, _GAP, "unparsed_manifest") if row.role == MANIFEST else _File(path, group, _OPAQUE)]
-    moves = _file_moves(row, old_path, path, read, base)
+    before, after = row.parse(read(base, old_path)), row.parse(read("HEAD", path))
+    if before is None or after is None:
+        # A lock that names a lockfile version its grammar does not read is opaque; every other parse failure is a gap.
+        version = row.unsupported(read("HEAD", path)) if row.unsupported and after is None else ""
+        if version:
+            return [_File(path, group, _OPAQUE, UNSUPPORTED_LOCKFILE_VERSION, version=version)]
+        return [_File(path, group, _GAP)]
+    moves = _moves(row, directory, before[0], after[0]) if before[1] == after[1] else None
     declared = _declared(row.ecosystem, directory, read, base) if row.role == LOCK else None
     if moves is None or (row.role == LOCK and declared is None):
         return [_File(path, group, _GAP)]
@@ -168,13 +188,19 @@ def _accounts_for(change: Change, checksum: Change) -> bool:
     )
 
 
+def _under(change: Change, group: tuple[str, str]) -> bool:
+    ecosystem, directory = group
+    return change.ecosystem == ecosystem and (directory in {".", change.dir} or change.dir.startswith(directory + "/"))
+
+
 def _resolve(file: _File, changes: list[tuple[Change, bool]]) -> Plan:
     """What one file adds to the Plan, given every (change, primary) the VERSIONS files of the diff moved."""
     beside = [(change, primary) for change, primary in changes if (change.ecosystem, change.dir) == file.group]
     if file.kind == _VERSIONS:
+        # A removed dependency installs nothing to scan, so it is disclosed with the other upgrades.
         return Plan(
-            primary=tuple(change for change, primary in file.moves if primary),
-            unchecked=tuple(change for change, primary in file.moves if not primary),
+            primary=tuple(change for change, primary in file.moves if primary and change.new),
+            unchecked=tuple(change for change, primary in file.moves if not (primary and change.new)),
         )
     if file.kind == _NAMES:
         locked = {change.name for change, primary in beside if primary}
@@ -189,8 +215,9 @@ def _resolve(file: _File, changes: list[tuple[Change, bool]]) -> Plan:
                 if not any(_accounts_for(change, checksum) for change, _primary in beside)
             )
         )
-    if file.kind == _OPAQUE and any(primary for _change, primary in beside):
-        return Plan(unparsed_locks=(file.path,))
+    # A workspace lock (pnpm-lock.yaml, yarn.lock) at a root covers the manifests below it.
+    if file.kind == _OPAQUE and any(primary and _under(change, file.group) for change, primary in changes):
+        return Plan(unparsed_locks=(UnparsedLock(file.path, file.reason, file.version),))
     return Plan(gaps=((file.path, file.reason),))
 
 

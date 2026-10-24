@@ -2,7 +2,7 @@
 
 The manifest diff (dependency_manifest_diff.plan) is the update list. A
 primary change is scanned unless its ecosystem's policy warns; a dependency is
-covered only when its scan is conclusive and both from_tag and to_tag are set.
+covered only when its scan is conclusive and both release commits resolved.
 Anything else makes the group inconclusive. Each covered scan carries the
 binding of the scanned commit to the installed artifact, and where the
 scanned repository's name came from. Policy warnings,
@@ -32,7 +32,8 @@ import dependency_cursor_review_ecosystems as _ecosystems
 import dependency_cursor_review_upstream as _upstream
 import dependency_cursor_review_versions as _versions
 import dependency_manifest_diff as _diff
-from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN
+import dependency_python_indexes as _python_indexes
+from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN, reason_note
 
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
 # Registry lookups and bindings run at once; each waits on the network, not on the others.
@@ -54,7 +55,8 @@ class Disclosure(NamedTuple):
 
     policy_warnings: tuple[dict, ...] = ()
     unchecked_upgrades: tuple[dict, ...] = ()
-    unparsed_locks: tuple[str, ...] = ()
+    unparsed_locks: tuple[_diff.UnparsedLock, ...] = ()
+    trusted_packages: tuple[dict, ...] = ()  # served by a configured trusted index: change fields and its "index"
 
 
 _NONE_DISCLOSED = Disclosure()
@@ -102,13 +104,16 @@ def _tag(target: Target, report: dict) -> dict:
     return tagged
 
 
-def _tagged(report: dict) -> bool:
-    return bool(str(report.get("from_tag") or "").strip()) and bool(str(report.get("to_tag") or "").strip())
+def _resolved(report: dict) -> bool:
+    return bool(str(report.get("resolved_from") or "").strip()) and bool(str(report.get("resolved_to") or "").strip())
 
 
 def _covered(report: dict) -> bool:
-    """Conclusive tag-to-tag scan. A branch or HEAD does not count; an action's commit SHA is its own tag."""
-    return report.get("scan_conclusive") is True and _tagged(report)
+    """Conclusive release-to-release scan.
+
+    A branch or HEAD does not count; an action's commit SHA is its own release.
+    """
+    return report.get("scan_conclusive") is True and _resolved(report)
 
 
 def _apply_coverage(report: dict) -> dict:
@@ -340,7 +345,14 @@ def _disclosure(report: dict) -> list[str]:
     locks = report.get("unparsed_locks") or []
     if locks:
         lines.append("- These lockfiles were not parsed, so the packages they changed were not checked:")
-        lines.extend(f"  - {_code(path)}" for path in locks)
+        for path, reason, *extra in locks:
+            version = str(extra[0]) if extra else ""
+            found = f" {version}" if version else ""
+            lines.append(f"  - {_code(path)} ({reason}{found}){reason_note(reason, version)}")
+    trusted = report.get("trusted_packages") or []
+    if trusted:
+        lines.append("- Packages from the organization's configured package indexes are trusted and were not scanned:")
+        lines.extend(f"  - {_change(item)} from {_code(item.get('index'))}" for item in trusted)
     return lines
 
 
@@ -365,7 +377,7 @@ def render_summary(report: dict, records: list[dict]) -> str:
             lines.append(f"- {label} ({repo}): covered, artifact not bound (`{reason}`){named}")
         else:
             reason = record.get("not_scanned_reason") or "not_conclusive"
-            lines.append(f"- {label} ({repo}): not covered ({reason})")
+            lines.append(f"- {label} ({repo}): not covered ({reason}){reason_note(reason)}")
     lines.extend(_disclosure(report))
     if not any_read(report):
         lines.append("- No release tree was read. This is not evidence the package is benign.")
@@ -377,6 +389,26 @@ def any_read(report: dict) -> bool:
 
 
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
+
+
+def _git_files(directory: str) -> list[tuple[str, str]] | None:
+    """The (path, mode) of each entry directly in `directory` at HEAD, or None when git cannot list them."""
+    prefix = "" if directory in {"", "."} else f"{directory}/"
+    proc = subprocess.run(
+        ["git", "ls-tree", "-z", "HEAD", "--", prefix or "."],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    entries: list[tuple[str, str]] = []
+    for record in proc.stdout.split("\0"):
+        if not record:
+            continue
+        meta, _separator, path = record.partition("\t")
+        entries.append((path, meta.split(" ", 1)[0]))
+    return entries
 
 
 def _git_text(rev: str, path: str) -> str:
@@ -541,33 +573,98 @@ def _clone(repo: str, dest: Path) -> bool:
     return proc.returncode == 0 and dest.is_dir()
 
 
-def _exact(change: _diff.Change) -> tuple[Target, str]:
-    """The Target of one primary change, and "unresolved" unless both versions are exact in its ecosystem's grammar.
+class Exact(NamedTuple):
+    """One change's Target, why it is not scanned, and the configured index that serves it."""
+
+    change: _diff.Change
+    target: Target
+    why: str = ""  # "" when it is scanned or trusted
+    index: str = ""  # the host of the trusted index that serves it, or ""
+
+
+def _index_occurrences(change: _diff.Change, new: str, hashed: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """Each (path, recorded hash) of an installed copy that constrains the trusted index.
+
+    A lock entry records a file hash and a requirements file records one when it pins one. An exact pin in
+    pyproject.toml, setup.py, setup.cfg or Pipfile records no hash and names no index: pip installs it from the
+    default index, so it is an unhashed occurrence with no replacing index.
+    """
+    found = list(
+        _ecosystems.locked_occurrences(
+            change.ecosystem, change.dir, change.name, new, lambda path: _git_text("HEAD", path), hashed
+        )
+    )
+    for path, kind in _ecosystems.beside(_ecosystems.PIP, _ecosystems.MANIFEST, change.dir):
+        parsed = kind.parse(_git_text("HEAD", path)) if kind.parse else None
+        if parsed and any(
+            name == change.name and _versions.exact_body(token, mode=change.ecosystem) == new
+            for name, token, _top, _text in parsed[0]
+        ):
+            found.append((path, ""))
+    return tuple(found)
+
+
+def _exact(
+    change: _diff.Change,
+    indexes: dict[str, _python_indexes.DirectoryIndexes],
+    configured: _python_indexes.Indexes,
+    hashed: tuple[str, ...],
+) -> Exact:
+    """The Target of one primary change, why it is not scanned, and any trusted index that serves it.
 
     An empty from version stays inconclusive. A range, wildcard, tag name, operator or moving major could resolve to a
-    tree other than the one installed, so it is never scanned.
+    tree other than the one installed, so it is never scanned. A pip change is "configured_index" when a file that
+    pins it names a Python package index that is not trusted: the lookups read PyPI, which may not be where pip
+    installs it. Packages from the organization's configured package indexes are trusted and not scanned (AGENTS.md).
     """
     old = _versions.exact_body(change.old, mode=change.ecosystem)
     new = _versions.exact_body(change.new, mode=change.ecosystem)
     target = Target(package=change.name, old=old or change.old, new=new or change.new)
-    return target, "" if new and (old or not change.old) else "unresolved"
+    if not (new and (old or not change.old)):
+        return Exact(change, target, "unresolved")
+    if change.ecosystem != "pip":
+        return Exact(change, target)
+    found = indexes.get(change.dir, _python_indexes.DirectoryIndexes(configured))
+    if found.configured.other:
+        return Exact(change, target, "configured_index")
+    occurrences = _index_occurrences(change, new, hashed)
+    if not occurrences:
+        why = "configured_index" if any(fact.other for _path, fact in found.files) else ""
+        return Exact(change, target, why)
+    facts = tuple(found.for_path(path) for path, _recorded in occurrences)
+    if any(fact.other for fact in facts):
+        return Exact(change, target, "configured_index")
+    trusted = frozenset().union(*(fact.trusted for fact in facts))
+    locked = tuple(_upstream.Locked(recorded, fact.index) for (_path, recorded), fact in zip(occurrences, facts))
+    host = _upstream.trusted_python_index(change.name, new, locked, trusted)
+    return Exact(change, target, index=host)
 
 
-def _targets(changes: list[_diff.Change]) -> list[tuple[_diff.Change, Target, str]]:
+def _exact_all(
+    changes: list[_diff.Change],
+    indexes: dict[str, _python_indexes.DirectoryIndexes],
+    configured: _python_indexes.Indexes,
+    hashed: tuple[str, ...],
+) -> list[Exact]:
+    """`_exact` for each change; the index lookups run concurrently."""
+    with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
+        return list(pool.map(lambda change: _exact(change, indexes, configured, hashed), changes))
+
+
+def _targets(exact: list[Exact]) -> list[tuple[_diff.Change, Target, str]]:
     """Each change as (change, Target with its repository, why it is not scanned or "").
 
     Each distinct (ecosystem, name, version) is looked up once, and the lookups run concurrently.
     """
-    exact = [(change, *_exact(change)) for change in changes]
-    keys = [(change.ecosystem, change.name, target.new) for change, target, _why in exact]
-    wanted = list(dict.fromkeys(key for key, (_change, _target, why) in zip(keys, exact) if not why))
+    keys = [(item.change.ecosystem, item.change.name, item.target.new) for item in exact]
+    wanted = list(dict.fromkeys(key for key, item in zip(keys, exact) if not item.why))
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
         repos = dict(zip(wanted, pool.map(lambda key: _ecosystems.upstream_repo(*key), wanted)))
     resolved: list[tuple[_diff.Change, Target, str]] = []
-    for key, (change, target, why) in zip(keys, exact):
-        repo = _upstream.Repo() if why else repos[key]
-        found = target._replace(repo=repo)
-        resolved.append((change, found, why or ("" if repo.slug else "no_upstream_link")))
+    for key, item in zip(keys, exact):
+        repo = _upstream.Repo() if item.why else repos[key]
+        found = item.target._replace(repo=repo)
+        resolved.append((item.change, found, item.why or ("" if repo.slug else "no_upstream_link")))
     return resolved
 
 
@@ -683,7 +780,7 @@ def _keep_checkout(records: list[dict], scans: list[tuple[dict, Path]]) -> None:
 
 
 def _scan_all(
-    changes: list[_diff.Change], work: Path, scan_script: Path, hashed: tuple[str, ...]
+    exact: list[Exact], work: Path, scan_script: Path, hashed: tuple[str, ...]
 ) -> tuple[list[dict], list[tuple[dict, Path]], tuple[dict, ...]]:
     """(records, (record, scan directory) per scan, policy warnings the scans found) for the changes to scan.
 
@@ -693,7 +790,7 @@ def _scan_all(
     scans: list[tuple[dict, Path]] = []
     warnings: list[dict] = []
     covered: list[tuple[_diff.Change, Target, dict]] = []
-    for index, (change, target, why) in enumerate(_targets(changes)):
+    for index, (change, target, why) in enumerate(_targets(exact)):
         if why:
             records.append(uncovered(target, why))
             continue
@@ -723,14 +820,22 @@ def main() -> None:
     gaps = plan.gaps if plan else (("pull request diff", "unresolved"),)
     plan = plan or _diff.Plan()
     changes, warnings = _split(plan)
+    configured = _python_indexes.configured(_git_text)
+    pip_dirs = sorted({change.dir for change in changes if change.ecosystem == "pip"})
+    indexes = {
+        directory: _python_indexes.for_directory(directory, configured, _git_text, _git_files) for directory in pip_dirs
+    }
+    exact = _exact_all(changes, indexes, configured, plan.hashed)
+    trusted = tuple({**item.change._asdict(), "index": item.index} for item in exact if item.index)
+    exact = [item for item in exact if not item.index]
     work = Path(".dcr-dependency-scans")
     remove_entry(work)
     work.mkdir()
     try:
-        scanned, scans, found = _scan_all(changes, work, scan_script, plan.hashed)
+        scanned, scans, found = _scan_all(exact, work, scan_script, plan.hashed)
         records = [uncovered(Target(path=path), reason) for path, reason in gaps] + scanned
         unchecked = tuple(change._asdict() for change in plan.unchecked)
-        report = aggregate(records, Disclosure(warnings + found, unchecked, plan.unparsed_locks))
+        report = aggregate(records, Disclosure(warnings + found, unchecked, plan.unparsed_locks, trusted))
         summary = render_summary(report, records)
         _write_report(out, report, summary)
         _keep_checkout(records, scans)
