@@ -315,9 +315,16 @@ class IndexOptions(NamedTuple):
     extra_index_url: bool = False  # whether an --extra-index-url is given
 
 
-def _option(word: str, words: list[str]) -> tuple[str, str | None]:
-    """(pip's option, its value or None when it is missing) for one option word; ("", "") for an unknown word, and
-    ("", None) for an abbreviation that may name an option this reads."""
+class _Option(NamedTuple):
+    """One option word: its pip name, its value, and whether the word may name another package source."""
+
+    name: str | None  # pip's option name, None when the word names no option this reads
+    value: str | None = None  # its value, None when it is missing
+    unread: bool = False  # whether an abbreviation may name an option this does not read
+
+
+def _option(word: str, words: list[str]) -> _Option:
+    """The pip option one word names, consuming its value from `words` when it is a separate word."""
     if word.startswith("--"):
         name, equals, value = word.partition("=")
         names = (
@@ -325,16 +332,16 @@ def _option(word: str, words: list[str]) -> tuple[str, str | None]:
         )
         if len(names) != 1:
             read = _PIP_INDEXES | _PIP_INCLUDES | _PIP_OTHER_SOURCES
-            return ("", None) if any(option in read for option in names) else ("", "")
+            return _Option(None, unread=any(option in read for option in names))
         option = names[0]
     elif word[:2] in _PIP_SHORT_OPTIONS:
         option, value = _PIP_SHORT_OPTIONS[word[:2]], word[2:]
         equals = value
     else:
-        return "", ""
+        return _Option(None)
     if _PIP_FILE_OPTIONS[option] and not equals:
         value = words.pop(0) if words else None
-    return option, value
+    return _Option(option, value)
 
 
 def requirements_index_options(text: str) -> IndexOptions:
@@ -354,13 +361,17 @@ def requirements_index_options(text: str) -> IndexOptions:
         except ValueError:
             return IndexOptions(unread=True)
         while words:
-            option, value = _option(words.pop(0), words)
-            if value is None or option in _PIP_OTHER_SOURCES:
+            option = _option(words.pop(0), words)
+            if option.name is None:
+                if option.unread:
+                    return IndexOptions(unread=True)
+                continue
+            if option.value is None or option.name in _PIP_OTHER_SOURCES:
                 return IndexOptions(unread=True)
-            if option in _PIP_INDEXES:
-                urls.append(value)
-                index_url = index_url or option == "--index-url"
-                extra_index_url = extra_index_url or option == "--extra-index-url"
-            elif option in _PIP_INCLUDES:
-                includes.append(value)
+            if option.name in _PIP_INDEXES:
+                urls.append(option.value)
+                index_url = index_url or option.name == "--index-url"
+                extra_index_url = extra_index_url or option.name == "--extra-index-url"
+            elif option.name in _PIP_INCLUDES:
+                includes.append(option.value)
     return IndexOptions(tuple(urls), tuple(includes), False, index_url and not extra_index_url, extra_index_url)
