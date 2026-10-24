@@ -57,6 +57,19 @@ _SEMVER_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+" + _SUFFIX)
 _RELEASE_RE = re.compile(r"(?P<release>[0-9]+(?:\.[0-9]+)+)" + _SUFFIX)
 # A full commit SHA, in either case, pins an action ref without being a release tag.
 _COMMIT_RE = re.compile(r"[0-9a-fA-F]{40}")
+# One PEP 440 version split into the parts its canonical form keeps: an epoch, a release, then pre, post, dev and
+# local labels. The alternatives are longest first, so `preview` is not read as `pre`.
+_PEP440_PARTS_RE = re.compile(
+    r"^v?"
+    r"(?:(?P<epoch>[0-9]+)!)?"
+    r"(?P<release>[0-9]+(?:\.[0-9]+)*)"
+    r"(?:[-_.]?(?P<pre_l>alpha|beta|preview|pre|rc|a|b|c)[-_.]?(?P<pre_n>[0-9]*))?"
+    r"(?:-(?P<post_n1>[0-9]+)|[-_.]?(?P<post_l>post|rev|r)[-_.]?(?P<post_n2>[0-9]*))?"
+    r"(?:[-_.]?dev[-_.]?(?P<dev_n>[0-9]*))?"
+    r"(?:\+(?P<local>[a-z0-9]+(?:[-_.][a-z0-9]+)*))?$",
+    re.IGNORECASE,
+)
+_PRE_LABELS = {"alpha": "a", "a": "a", "beta": "b", "b": "b", "c": "rc", "pre": "rc", "preview": "rc", "rc": "rc"}
 
 # Keyed by the ecosystem a token comes from: pip drops `==`, `===`, `v` or `V`;
 # the others drop only `v`/`V`. npm and github-actions need three numeric parts,
@@ -85,6 +98,33 @@ def exact_body(value: str, *, mode: str) -> str:
     prefix, pattern = _MODES[mode]
     match = pattern.fullmatch(_version_body(value, prefix))
     return match.group(0) if match else ""
+
+
+def _local_part(part: str) -> str:
+    """One local version segment: numbers compare as numbers, words compare lower-case."""
+    return str(int(part)) if part.isdigit() else part
+
+
+def pep440_key(value: str) -> str:
+    """The canonical PEP 440 form of an exact version, or "" when `value` is not one."""
+    match = _PEP440_PARTS_RE.fullmatch(value.strip())
+    if not match:
+        return ""
+    epoch = int(match.group("epoch") or 0)
+    release = [int(part) for part in match.group("release").split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    key = (f"{epoch}!" if epoch else "") + ".".join(map(str, release))
+    if match.group("pre_l") is not None:
+        key += _PRE_LABELS[match.group("pre_l").lower()] + str(int(match.group("pre_n") or 0))
+    if match.group("post_l") is not None or match.group("post_n1") is not None:
+        key += ".post" + str(int(match.group("post_n1") or match.group("post_n2") or 0))
+    if match.group("dev_n") is not None:
+        key += ".dev" + str(int(match.group("dev_n") or 0))
+    if match.group("local") is not None:
+        local = re.split(r"[-_.]", match.group("local").lower())
+        key += "+" + ".".join(_local_part(part) for part in local)
+    return key
 
 
 def commit_ref(ref: str) -> bool:

@@ -24,6 +24,7 @@ import urllib.parse
 from collections.abc import Mapping
 from typing import NamedTuple
 
+import dependency_cursor_review_versions as versions
 
 _PART = r"[A-Za-z0-9_.-]+"
 _GITHUB_URL_RE = re.compile(
@@ -301,19 +302,24 @@ def _release(filename: str) -> tuple[str, str]:
 def _index_files(index: str, name: str, version: str) -> tuple[str, ...] | None:
     """The urls of the files a simple index page lists for `name` at `version`, or None.
 
-    Each url is resolved against the page and must be https on the index host. A page with no file for the version,
-    or with more than _MAX_INDEX_FILES of them, has none.
+    Versions are compared in their canonical PEP 440 form. The page is read with a bounded regex scan, following
+    redirects only to the index host over https. A page that cannot be read, lists no file for the version, or lists
+    more than _MAX_INDEX_FILES of them, leaves the package untrusted.
     """
+    wanted = versions.pep440_key(version)
+    if not wanted:
+        return None
     page_url = f"{index}{_canonical(name)}/"
-    body = _fetch(page_url, accept="text/html")
+    host = urllib.parse.urlsplit(index).hostname
+    body = _fetch(page_url, accept="text/html", follow={host: ""} if host else None)
     if not body:
         return None
-    host = urllib.parse.urlsplit(index).hostname
     files: list[str] = []
     for href in _INDEX_LINK_RE.findall(body.decode("utf-8", errors="replace")):
         url = urllib.parse.urljoin(page_url, href.replace("&amp;", "&"))
         parts = urllib.parse.urlsplit(url)
-        if _release(urllib.parse.unquote(parts.path.rsplit("/", 1)[-1])) != (_canonical(name), version):
+        found_name, found_version = _release(urllib.parse.unquote(parts.path.rsplit("/", 1)[-1]))
+        if found_name != _canonical(name) or versions.pep440_key(found_version) != wanted:
             continue
         if parts.scheme != "https" or not host or parts.hostname != host:
             return None

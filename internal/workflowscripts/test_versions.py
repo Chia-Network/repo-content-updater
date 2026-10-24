@@ -237,6 +237,33 @@ class ExactVersionTest(unittest.TestCase):
                     self.assertEqual(versions.exact_body(digits, mode=mode), "")
 
 
+class Pep440KeyTest(unittest.TestCase):
+    def test_canonical_spellings_share_one_key(self) -> None:
+        groups = (
+            ("2.0.4", "v2.0.4", "V2.0.4", "2.0.4.0", "0!2.0.4"),
+            ("1.0rc1", "1.0.RC1", "1.0-rc-1", "1.0c1", "1.0preview1"),
+            ("1.0.post1", "1.0-1", "1.0-r1", "1.0rev1", "1.0.POST1"),
+            ("1.0.dev1", "1.0-dev1", "1.0.DEV1"),
+            ("1.0+Ubuntu.01", "1.0+ubuntu.1"),
+        )
+        for spellings in groups:
+            with self.subTest(spellings=spellings):
+                keys = {versions.pep440_key(value) for value in spellings}
+                self.assertEqual(len(keys), 1)
+                self.assertNotEqual(keys.pop(), "")
+
+    def test_release_suffixes_stay_distinct(self) -> None:
+        base = versions.pep440_key("2.0.4")
+        for value in ("2.0.4.post0", "2.0.4.post1", "2.0.4rc1", "2.0.4.dev0", "2.0.4+local"):
+            with self.subTest(value=value):
+                self.assertNotEqual(versions.pep440_key(value), base)
+
+    def test_unparseable_versions_have_no_key(self) -> None:
+        for value in ("", "v", "latest", "2.0..4", "2.0.4-", "2.0.4+", "1.0.0+bad..local", "1.0.0+local-"):
+            with self.subTest(value=value):
+                self.assertEqual(versions.pep440_key(value), "")
+
+
 class MovingRefTest(unittest.TestCase):
     def test_a_major_or_major_minor_tag_or_a_branch_moves(self) -> None:
         for ref in ("v4", "v4.1", "4", "4.1", "main", "releases/v1", "V5.0"):

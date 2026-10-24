@@ -469,6 +469,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
         pages: dict[str, bytes] | None = None,
         downloads: dict[str, bytes | None] | None = None,
         replaces_pypi: bool = False,
+        name: str = "ChiaPos",
     ) -> str:
         urls: list[str] = []
         fetched = {f"{_CHIA}chiapos/": _PAGE} if pages is None else pages
@@ -485,7 +486,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
             return _sha(body) if isinstance(body, bytes) and host == _HOST else None
 
         with patch.object(upstream, "_fetch", fetch), patch.object(upstream, "_sha256_download", download):
-            found = upstream.trusted_python_index("ChiaPos", version, locked, configured, replaces_pypi)
+            found = upstream.trusted_python_index(name, version, locked, configured, replaces_pypi)
         self.urls = urls
         self.downloaded = downloaded
         return found
@@ -537,6 +538,61 @@ class TrustedPythonIndexTest(unittest.TestCase):
         self.assertEqual(self.urls, [])
         self.assertEqual(self.trusted("2.0.4", configured=frozenset(), replaces_pypi=True), "")
         self.assertEqual(self.urls, [])
+
+    def test_versions_compare_in_canonical_pep440_form(self) -> None:
+        for filename_name, page_version, name, version in (
+            ("chiapos", "2.0.4", "ChiaPos", "2.0.4"),
+            ("Chia_Pos", "2.0.4", "chia.pos", "v2.0.4"),
+            ("chiapos", "2.0.4", "chiapos", "2.0.4.0"),
+        ):
+            file_url = f"https://{_HOST}/files/{filename_name}-{page_version}.tar.gz"
+            page = f'<a href="../../files/{filename_name}-{page_version}.tar.gz">s</a>\n'.encode()
+            page_url = f"{_CHIA}{upstream._canonical(name)}/"
+            with self.subTest(name=name, version=version):
+                found = self.trusted(
+                    version,
+                    (f"sha256:{_sha(_SDIST)}",),
+                    pages={page_url: page},
+                    downloads={file_url: _SDIST},
+                    name=name,
+                )
+                self.assertEqual(found, _HOST)
+
+    def test_a_post_release_does_not_match_the_plain_version(self) -> None:
+        page = b'<a href="../../files/chiapos-2.0.4.post0.tar.gz">s</a>\n'
+        page_url = f"{_CHIA}chiapos/"
+        self.assertEqual(self.trusted("2.0.4", replaces_pypi=True, pages={page_url: page}), "")
+        self.assertEqual(self.trusted("2.0.4.post0", replaces_pypi=True, pages={page_url: page}), _HOST)
+
+    def _redirect_result(self, answers: dict[str, tuple[int, str, bytes]], version: str) -> str:
+        requested: list[str] = []
+
+        def get(url: str, _limit: int, _accept: str) -> tuple[int, str, bytes]:
+            requested.append(url)
+            return answers[url]
+
+        with (
+            patch.object(upstream, "_get", get),
+            patch.object(upstream, "_sha256_download", lambda _url, _host: _sha(_SDIST)),
+        ):
+            found = upstream.trusted_python_index(
+                "ChiaPos", version, (f"sha256:{_sha(_SDIST)}",), frozenset({_CHIA})
+            )
+        self.requested = requested
+        return found
+
+    def test_the_index_page_follows_a_same_host_redirect(self) -> None:
+        page_url = f"{_CHIA}chiapos/"
+        moved = f"{_CHIA}files/chiapos/"
+        answers = {page_url: (302, moved, b""), moved: (200, "", _PAGE)}
+        self.assertEqual(self._redirect_result(answers, "2.0.4"), _HOST)
+        self.assertEqual(self.requested, [page_url, moved])
+
+    def test_the_index_page_does_not_follow_a_redirect_to_another_host(self) -> None:
+        page_url = f"{_CHIA}chiapos/"
+        moved = "https://example.com/chiapos/"
+        self.assertEqual(self._redirect_result({page_url: (302, moved, b"")}, "2.0.4"), "")
+        self.assertEqual(self.requested, [page_url])
 
     def test_release_reads_wheel_and_sdist_names(self) -> None:
         self.assertEqual(upstream._release("Chia_Pos-2.0.4-cp312-cp312-linux_x86_64.whl"), ("chia-pos", "2.0.4"))
