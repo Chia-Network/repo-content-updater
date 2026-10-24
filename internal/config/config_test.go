@@ -274,6 +274,33 @@ files:
 	})
 }
 
+func TestResolveManagedFileNameMatchesNonCanonicalRepoPath(t *testing.T) {
+	cfg := loadSelectionTestConfig(t, `
+default_files:
+  - first
+files:
+  - name: first
+    template_name: first.yml
+    repo_path: .github//first.yml
+    adoption_marker: test:first
+`)
+
+	for _, entry := range []string{".github//first.yml", ".github/first.yml", ".github/./first.yml"} {
+		t.Run(entry, func(t *testing.T) {
+			canonical, ok := cfg.ResolveManagedFileName(entry)
+			assert.True(t, ok)
+			assert.Equal(t, "first", canonical)
+
+			selection := cfg.ResolveManagedFileSelection("repo", []string{entry})
+			assert.Len(t, selection.Explicit, 1)
+
+			selection = cfg.ResolveManagedFileSelection("repo", []string{"!" + entry})
+			assert.Empty(t, selection.Explicit)
+			assert.Empty(t, selection.Defaults)
+		})
+	}
+}
+
 func defaultNames(selection config.ManagedFileSelection) []string {
 	var names []string
 	for _, bundle := range selection.Defaults {

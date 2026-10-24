@@ -332,8 +332,10 @@ func (c *Config) ResolveManagedFileName(entry string) (string, bool) {
 	if entry == "" || strings.HasPrefix(entry, "group:") {
 		return entry, entry != ""
 	}
-	if canonical, ok := c.managedFileLookup[normalizeManagedFileKey(entry)]; ok {
-		return canonical, true
+	for _, key := range []string{managedPathKey(entry), normalizeManagedFileKey(entry)} {
+		if canonical, ok := c.managedFileLookup[key]; ok && key != "" {
+			return canonical, true
+		}
 	}
 	if c.GetFileInfo(entry) != nil {
 		return entry, true
