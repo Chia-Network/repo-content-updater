@@ -43,6 +43,11 @@ def _masked(line: str, match: re.Match[str], group: int, keep: str = "") -> str:
 
 
 def workflow_uses(text: str) -> Parsed:
+    """Each `uses:` line's repository, ref, and masked text.
+
+    A version comment beside the ref is masked with the ref, so it may change with it. The review does not verify
+    that the comment's version names the commit the ref resolves to.
+    """
     entries: list[Entry] = []
     residue: list[str] = []
     for line in text.splitlines(keepends=True):
