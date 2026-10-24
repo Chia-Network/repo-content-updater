@@ -155,6 +155,14 @@ class PnpmLockTest(unittest.TestCase):
     def test_a_dependency_reference_to_a_version_with_no_stanza_is_not_parsed(self) -> None:
         self.assertIsNone(pnpm_lock(_stanza_lock("3.0.0")))
 
+    def test_a_changed_dependency_reference_with_no_stanza_is_a_gap(self) -> None:
+        package = _package(dependencies={"foo": "^1.0.0"})
+        base = {"package.json": package, "pnpm-lock.yaml": _stanza_lock("3.0.0")}
+        head = {"package.json": package, "pnpm-lock.yaml": _stanza_lock("4.0.0")}
+        plan = _plan(base, head)
+        self.assertEqual((plan.primary, plan.unchecked), ((), ()))
+        self.assertEqual(plan.gaps, (("pnpm-lock.yaml", "unresolved"),))
+
     def test_a_dependency_value_change_between_shared_versions_is_a_gap(self) -> None:
         base = {"pnpm-lock.yaml": _shared_stanza_lock("1.0.0")}
         head = {"pnpm-lock.yaml": _shared_stanza_lock("2.0.0")}
