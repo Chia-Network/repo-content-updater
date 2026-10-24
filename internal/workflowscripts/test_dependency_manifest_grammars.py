@@ -22,7 +22,6 @@ from dependency_manifest_python import (
     poetry_lock_hashes,
     requirements,
     requirements_hashes,
-    requirements_line,
     requirements_txt,
 )
 
@@ -310,11 +309,11 @@ _A, _B = (f"sha256:{digit * 64}" for digit in "ab")
 
 
 def _pins(parsed: tuple[list, str] | None) -> list[tuple[str, str, str, str]] | None:
-    """(name, version, requirements_line, requirements_hashes) of each entry, or None when the file does not parse."""
+    """(name, version, Pin fixed part, requirements_hashes) of each entry, or None when the file does not parse."""
     if parsed is None:
         return None
     assert all(isinstance(entry[3], Pin) for entry in parsed[0])
-    return [(entry[0], entry[1], requirements_line(entry[3]), requirements_hashes(entry)) for entry in parsed[0]]
+    return [(entry[0], entry[1], entry[3].fixed, requirements_hashes(entry)) for entry in parsed[0]]
 
 
 class RequirementsTxtGrammarTest(unittest.TestCase):
@@ -416,6 +415,7 @@ class RequirementsTxtGrammarTest(unittest.TestCase):
             f"sigstore==3.6.1\t--hash={_A} --hash={_B}",
             f"sigstore.==1.0 --hash={_A}",
             f"sigstore===3.6.1,foo --hash={_A}",
+            f"sigstore~=1 --hash={_A}",
             f"sigstore==3.6.1 ; {'(' * 600}os_name == 'nt'{')' * 600}",
             "sigstore==",
             "sigstore (==3.6.1",

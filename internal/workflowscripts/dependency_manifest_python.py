@@ -7,7 +7,7 @@ each of its version tokens masked, so the rest of the line cannot change unseen.
 requirements_txt reads a requirements file with its own grammar, the way pip
 reads it: no TOML tables and no quoted strings. It joins continued lines, drops
 comments, and splits each line into its requirement and its options as pip
-does. That one split makes an entry's text, a Pin: requirements_line, the requirement
+does. That one split makes an entry's text, a Pin: its fixed part, the requirement
 with its version masked and any option that is not a `--hash`, which may not
 change with the version; and requirements_hashes, the `--hash` values, which
 are the version's files and so change with it. An option the review does not
@@ -35,7 +35,7 @@ import shlex
 from collections.abc import Iterator
 
 import tomllib
-from dependency_manifest_lines import Entry, EntryText, Parsed, Pin
+from dependency_manifest_lines import Entry, Parsed, Pin
 from dependency_pep508 import parse as parse_requirement
 
 _REQ_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*((?:===|==|~=|!=|>=|<=|>|<)\s*[^\s#;,]+)")
@@ -179,17 +179,11 @@ def requirements_txt(text: str) -> Parsed | None:
     return entries, "".join(residue)
 
 
-def requirements_line(text: EntryText) -> str:
-    """A requirements_txt entry's requirement, with its version masked and every option but its `--hash`es."""
-    assert isinstance(text, Pin)
-    return text.fixed
-
-
 def requirements_hashes(entry: Entry) -> str:
-    """The `--hash` values of a requirements_txt entry, or "" when it has none or an option the review does not
-    read. Every requirements_txt entry is an installed copy."""
-    assert isinstance(entry[3], Pin)
-    return entry[3].hashes
+    """The `--hash` values of a requirements_txt entry, or "" when it has none, an option the review does not
+    read, or is no Pin. Every requirements_txt entry is an installed copy."""
+    text = entry[3]
+    return text.hashes if isinstance(text, Pin) else ""
 
 
 def _record(where: str, record: dict) -> str:

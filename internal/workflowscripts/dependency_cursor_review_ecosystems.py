@@ -37,8 +37,8 @@ from dependency_cursor_review_versions import commit_ref, exact_body, moving_ref
 from dependency_manifest_go import go_mod, go_sum, go_sum_hash
 from dependency_manifest_lines import (
     Entry,
-    EntryText,
     Parsed,
+    Pin,
     dockerfile_from,
     terraform_config,
     terraform_lock,
@@ -52,7 +52,6 @@ from dependency_manifest_python import (
     poetry_lock_hashes,
     requirements,
     requirements_hashes,
-    requirements_line,
     requirements_txt,
 )
 
@@ -120,12 +119,13 @@ class Ecosystem(NamedTuple):
     bind: Callable[[binding.Subject], binding.Binding] = binding.unsupported
 
 
-def _line(text: EntryText) -> str:
-    assert isinstance(text, str)
-    return text
+def _line(entry: Entry) -> str:
+    """A line entry's text, or a requirements Pin's fixed part."""
+    text = entry[3]
+    return text.fixed if isinstance(text, Pin) else text
 
 
-def _record(_text: EntryText) -> str:
+def _record(_entry: Entry) -> str:
     return ""
 
 
@@ -135,7 +135,7 @@ class FileKind(NamedTuple):
     parse: Callable[[str], Parsed | None] | None
     names: frozenset[str] = frozenset()  # exact file names
     match: Callable[[PurePosixPath], bool] | None = None  # any other path shape
-    fixed: Callable[[EntryText], str] = _line  # the part of an entry's text no version change may change
+    fixed: Callable[[Entry], str] = _line  # the part of an entry's text no version change may change
     # The artifact hash an installed copy's entry records, "" for none; None for an entry that is no installed copy.
     hashes: Callable[[Entry], str | None] | None = None
 
@@ -162,8 +162,10 @@ def _top_copy(read: Callable[[str], str]) -> Callable[[Entry], str | None]:
     """A lock installs the top entry for a name; a nested entry is the copy another dependency installs."""
 
     def top(entry: Entry) -> str | None:
-        assert isinstance(entry[3], str)
-        return read(entry[3]) if entry[2] else None
+        text = entry[3]
+        if not entry[2]:
+            return None
+        return read(text) if isinstance(text, str) else ""
 
     return top
 
@@ -210,7 +212,6 @@ _FILES = (
         MANIFEST,
         requirements_txt,
         match=_requirements,
-        fixed=requirements_line,
         hashes=requirements_hashes,
     ),
     FileKind(PIP, LOCK, poetry_lock, frozenset({"poetry.lock"}), fixed=_record, hashes=_top_copy(poetry_lock_hashes)),

@@ -414,6 +414,10 @@ class PythonTest(unittest.TestCase):
                 f"{base}sigstore===1.0,foo --hash=sha256:{'2' * 64}\n",
                 f"{head}sigstore===1.0,foo --hash=sha256:{'2' * 64}\n",
             ),
+            "an unchanged single-part compatible release": (
+                f"{base}idna~=3 --hash=sha256:{'2' * 64}\n",
+                f"{head}idna~=3 --hash=sha256:{'2' * 64}\n",
+            ),
             "an unchanged deeply nested marker": (
                 f"{base}idna==3.7 ; {'(' * 600}os_name == 'nt'{')' * 600}\n",
                 f"{head}idna==3.7 ; {'(' * 600}os_name == 'nt'{')' * 600}\n",

@@ -10,16 +10,16 @@ from __future__ import annotations
 import re
 from typing import NamedTuple
 
-from dependency_cursor_review_versions import PEP440_LOCAL, PEP440_VERSION
+from dependency_cursor_review_versions import PEP440_COMPATIBLE_VERSION, PEP440_LOCAL, PEP440_VERSION
 
 _WS = r"[ \t]*"
 _NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
 # Each operator with the versions it takes: `===` any string up to the next specifier;
-# `==` and `!=` a wildcard or a local version.
+# `==` and `!=` a wildcard or a local version; `~=` two release parts; the ranges neither.
 _SPEC = (
     rf"(?:===[ \t]*[^\s;),]+"
     rf"|(?:==|!=)[ \t]*{PEP440_VERSION}(?:\.\*|(?:{PEP440_LOCAL})?)"
-    rf"|~=[ \t]*{PEP440_VERSION}"
+    rf"|~=[ \t]*{PEP440_COMPATIBLE_VERSION}"
     rf"|(?:<=|>=|<|>)[ \t]*{PEP440_VERSION})"
 )
 _HEAD_RE = re.compile(

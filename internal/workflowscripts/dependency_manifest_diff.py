@@ -35,7 +35,7 @@ from typing import NamedTuple
 
 import dependency_cursor_review_ecosystems as ecosystems
 from dependency_cursor_review_ecosystems import CHECKSUMS, LOCK, MANIFEST, Ecosystem
-from dependency_manifest_lines import Entry, EntryText
+from dependency_manifest_lines import Entry
 
 # (revision, path) -> the file's text, "" when it is absent.
 Read = Callable[[str, str], str]
@@ -77,8 +77,8 @@ class _File(NamedTuple):
     hashed: bool = False  # whether its row records artifact hashes (Plan.hashed)
 
 
-def _fixed(fixed: Callable[[EntryText], str], texts: dict[str, set[EntryText]]) -> set[str]:
-    return {fixed(text) for each in texts.values() for text in each}
+def _fixed(fixed: Callable[[Entry], str], entries: dict[str, set[Entry]]) -> set[str]:
+    return {fixed(entry) for each in entries.values() for entry in each}
 
 
 def _moves(row: ecosystems.FileKind, directory: str, before: list[Entry], after: list[Entry]) -> Moves | None:
@@ -86,10 +86,11 @@ def _moves(row: ecosystems.FileKind, directory: str, before: list[Entry], after:
 
     None when an entry changed in a way its versions do not account for.
     """
-    sides: dict[tuple[str, bool], tuple[dict[str, set[str]], dict[str, set[str]]]] = {}
+    sides: dict[tuple[str, bool], tuple[dict[str, set[Entry]], dict[str, set[Entry]]]] = {}
     for side, entries in enumerate((before, after)):
-        for name, version, top, text in entries:
-            sides.setdefault((name, top), ({}, {}))[side].setdefault(version, set()).add(text)
+        for entry in entries:
+            name, version, top, _text = entry
+            sides.setdefault((name, top), ({}, {}))[side].setdefault(version, set()).add(entry)
     moved: Moves = []
     for (name, top), (old, new) in sorted(sides.items()):
         if any(old[version] != new[version] for version in old.keys() & new.keys()):

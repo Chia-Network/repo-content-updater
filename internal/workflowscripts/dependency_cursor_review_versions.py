@@ -24,12 +24,14 @@ from dataclasses import dataclass
 
 # A PEP 440 version, the one grammar pip versions are read with: an optional epoch, a release, then a pre, post and
 # dev release in any of the spellings pip accepts (alternatives longest first, so `alpha` is not read as `a`).
-PEP440_VERSION = (
-    r"v?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*"
+_PEP440_RELEASES = (
     r"(?:[-_.]?(?:alpha|beta|preview|pre|rc|a|b|c)[-_.]?[0-9]*)?"
     r"(?:-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?"
     r"(?:[-_.]?dev[-_.]?[0-9]*)?"
 )
+PEP440_VERSION = r"v?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*" + _PEP440_RELEASES
+# `~=` takes a version with at least two release parts: `~=1.4` is `>=1.4, ==1.*`, and `~=1` means nothing.
+PEP440_COMPATIBLE_VERSION = r"v?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)+" + _PEP440_RELEASES
 # A PEP 440 local version label (`+ubuntu.1`).
 PEP440_LOCAL = r"\+[a-z0-9]+(?:[-_.][a-z0-9]+)*"
 # Outside pip, an npm, Go or action version may end in a pre/post/dev release (`1.2.3rc1`, `1.2.3.post1`) or a

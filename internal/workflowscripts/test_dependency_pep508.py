@@ -1,6 +1,6 @@
 """The strict requirement parser: limits that keep upstream text from stalling or crashing the review."""
 
-import time
+import timeit
 import unittest
 
 from dependency_pep508 import parse
@@ -14,12 +14,25 @@ class MarkerLimitsTest(unittest.TestCase):
             with self.subTest(depth=depth), self.assertRaises(ValueError):
                 parse(nested.format("(" * depth, ")" * depth))
 
-    def test_a_long_marker_parses_in_linear_time(self) -> None:
-        """A 1.5 MB marker took tens of seconds when each token re-sliced the rest of the line."""
-        marker = " or ".join(["os_name == 'nt'"] * 100_000)
-        started = time.monotonic()
-        parse(f"sigstore==3.6.1 ; {marker}")
-        self.assertLess(time.monotonic() - started, 5)
+    def test_marker_parse_time_grows_linearly_with_its_length(self) -> None:
+        """Ten times the marker takes about ten times as long; re-slicing the line per token took a hundred."""
+
+        def seconds(clauses: int) -> float:
+            text = "sigstore==3.6.1 ; " + " or ".join(["os_name == 'nt'"] * clauses)
+            return min(timeit.repeat(lambda: parse(text), number=1, repeat=3))
+
+        self.assertLess(seconds(100_000) / seconds(10_000), 30)
+
+
+class SpecifierTest(unittest.TestCase):
+    def test_each_operator_takes_the_versions_pip_takes(self) -> None:
+        """Checked against pip 26.2.2: `~=` needs two release parts, and only `==`/`!=` take a wildcard or local."""
+        for spec in ("~=1.0", "~=1.0.0rc1", "==1.*", "!=1.*", "==1.0+loc", "!=1.0+loc", ">=1", "<1", "===1"):
+            with self.subTest(spec=spec):
+                parse(f"sigstore{spec}")
+        for spec in ("~=1", "~=1.*", "~=1.0+loc", ">=1.*", "<1.*", "<1.0+loc", ">1.0+loc", "<=1.0+loc", ">=1.0+loc"):
+            with self.subTest(spec=spec), self.assertRaises(ValueError):
+                parse(f"sigstore{spec}")
 
 
 class ArbitraryEqualityTest(unittest.TestCase):
