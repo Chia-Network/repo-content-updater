@@ -262,6 +262,7 @@ func TestTemplateUsesPinsAreVisible(t *testing.T) {
 		"actions/github-script@v9",
 		"actions/upload-artifact@v7",
 		"actions/download-artifact@v8",
+		"actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
 	} {
 		if !found[want] {
 			t.Errorf("parsed uses missing %s", want)
@@ -549,6 +550,8 @@ func actionUsesLines(src string) []string {
 		if uses == "" || strings.HasPrefix(uses, "#") {
 			continue
 		}
+		// A SHA pin carries its tag as a trailing comment, which YAML does not parse.
+		uses, _, _ = strings.Cut(uses, " #")
 		found = append(found, uses)
 	}
 	return found

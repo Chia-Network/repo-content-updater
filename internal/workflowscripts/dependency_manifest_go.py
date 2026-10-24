@@ -8,13 +8,25 @@ directive, stay in residue.
 go_sum returns one entry per checksum line: (module, version, False, line).
 The version keeps a `/go.mod` suffix, so the hash of a module's go.mod and the
 hash of its tree are separate entries. Any other line is residue.
+go_sum_hash reads the `h1:` hash an entry records.
+
+go_zip_hash computes that `h1:` hash of a module zip, as the go command does
+before it installs the zip.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import io
 import re
+import zipfile
+import zlib
 
 from dependency_manifest_lines import Entry, Parsed
+
+# golang.org/x/mod/zip.MaxZipFile: the go command reads no module zip, and extracts no content, larger than this.
+GO_ZIP_LIMIT = 500 << 20
 
 _GO_MOD_RE = re.compile(r"^\s*(?:require\s+)?([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)\s+(v\S+)")
 _INDIRECT_RE = re.compile(r"\s*indirect\s*(?:;|$)")
@@ -68,3 +80,35 @@ def go_sum(text: str) -> Parsed:
         else:
             residue.append(line)
     return entries, "".join(residue)
+
+
+def go_sum_hash(entry: Entry) -> str:
+    """The `h1:` hash a go_sum entry records. Every line hashes a version the go command may install."""
+    return entry[3].rsplit(" ", 1)[-1]
+
+
+def go_zip_hash(archive: bytes) -> str:
+    """Go's dirhash.Hash1 of a module zip, as go.sum records it, or "" when it is not a zip the go command reads.
+
+    Hash1 is the sha256 of one `<sha256 hex>  <name>` line per file, in byte order of the names the zip stores.
+    """
+    lines: dict[bytes, bytes] = {}
+    total = 0
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+            for info in zipped.infolist():
+                name = info.orig_filename.encode("utf-8" if info.flag_bits & 0x800 else "cp437")
+                if b"\n" in name or name in lines:
+                    return ""
+                digest = hashlib.sha256()
+                with zipped.open(info) as handle:
+                    while chunk := handle.read(1 << 20):
+                        total += len(chunk)
+                        if total > GO_ZIP_LIMIT:
+                            return ""
+                        digest.update(chunk)
+                lines[name] = digest.hexdigest().encode() + b"  " + name + b"\n"
+    except (zipfile.BadZipFile, NotImplementedError, RuntimeError, EOFError, OSError, ValueError, zlib.error):
+        return ""
+    summary = hashlib.sha256(b"".join(lines[name] for name in sorted(lines)))
+    return "h1:" + base64.b64encode(summary.digest()).decode()

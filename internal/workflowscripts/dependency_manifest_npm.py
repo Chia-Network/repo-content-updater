@@ -6,7 +6,8 @@ so it is top, and its text is its section. In a lock, top marks the copy a
 declaration installs, which is the top-level `node_modules/<name>` path, a
 lockfile v1 top-level record, or any Yarn stanza; a nested or workspace copy
 is not top. A lock entry's text is its whole record, or its whole stanza with
-the descriptor header. A lock restates each root declaration as an entry at
+the descriptor header; package_lock_integrity and yarn_lock_integrity read the
+integrity it records. A lock restates each root declaration as an entry at
 the version its top copy installs, so a declaration in a lock can change only
 with that version. Residue is the document left once the entries are taken out.
 
@@ -27,6 +28,7 @@ _YARN_DESCRIPTOR_RE = re.compile(r'(@?[^@"\s]+)@')
 _LOCK_PREFIX = "node_modules/"
 _YARN_VERSION_RE = re.compile(r'^  version "([^"]+)"')
 _YARN_RESOLVED_RE = re.compile(r'^  resolved "([^"]+)"')
+_YARN_INTEGRITY_RE = re.compile(r"^  integrity (\S+)$")
 _REGISTRIES = ("https://registry.npmjs.org/", "https://registry.yarnpkg.com/")
 _SECTIONS = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
 
@@ -159,6 +161,13 @@ def _record(where: str, record: dict) -> str:
     return json.dumps([where, record], sort_keys=True, separators=(",", ":"))
 
 
+def package_lock_integrity(text: str) -> str:
+    """The `integrity` of a package_lock entry's text, or "" when its record has none."""
+    record = json.loads(text)[1]
+    integrity = record.get("integrity") if isinstance(record, dict) else None
+    return integrity if isinstance(integrity, str) else ""
+
+
 def package_json(text: str) -> Parsed | None:
     return _json_entries(text, lock=False)
 
@@ -209,3 +218,9 @@ def yarn_lock(text: str) -> Parsed | None:
         resolved = located.group(1) if located else resolved
     flush()
     return (entries, "".join(residue)) if complete else None
+
+
+def yarn_lock_integrity(text: str) -> str:
+    """The `integrity` of a yarn_lock entry's stanza, or "" when it has none or several."""
+    found = {match.group(1) for line in text.splitlines() if (match := _YARN_INTEGRITY_RE.match(line))}
+    return found.pop() if len(found) == 1 else ""

@@ -7,8 +7,9 @@ moving major such as an action's `v4` is never an exact version in any mode.
 
 The shell calls the command line. Python itself exits 1 or 2 when the
 script fails, so every answer other than success uses its own code above 2:
-  dependency_cursor_review_versions.py release-tag REPO VERSION
-      prints "<sha>\\t<tag>"; exit 3 when no spelling peels, 4 when spellings disagree
+  dependency_cursor_review_versions.py release-tag REPO VERSION [MODE]
+      prints "<sha>\\t<tag>", or "<sha>\\t<sha>" for an action's commit SHA;
+      exit 3 when no spelling peels, 4 when spellings disagree
   dependency_cursor_review_versions.py jump FROM TO
       exit 0 when the bump is a version-jump anomaly, 3 when it is not
 """
@@ -42,11 +43,12 @@ _EXACT_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*" + _SUFFIX)
 _SEMVER_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+" + _SUFFIX)
 # A release such as 1.2.3, 2024.2 or 1.2.3.4 is exact; a bare `1` or `v4` is a moving major.
 _RELEASE_RE = re.compile(r"(?P<release>[0-9]+(?:\.[0-9]+)+)" + _SUFFIX)
-# A full commit SHA pins an action ref without being a release tag.
-_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+# A full commit SHA, in either case, pins an action ref without being a release tag.
+_COMMIT_RE = re.compile(r"[0-9a-fA-F]{40}")
 
 # Keyed by the ecosystem a token comes from: pip drops `==`, `===`, `v` or `V`;
-# the others drop only `v`/`V`. npm and github-actions need three numeric parts.
+# the others drop only `v`/`V`. npm and github-actions need three numeric parts,
+# and an action's commit SHA is exact too.
 _MODES: dict[str, tuple[re.Pattern[str], re.Pattern[str]]] = {
     "pip": (_PIN_PREFIX_RE, _EXACT_VERSION_RE),
     "npm": (_V_PREFIX_RE, _SEMVER_RE),
@@ -62,23 +64,25 @@ def _version_body(value: str, prefix: re.Pattern[str]) -> str:
     return value[match.end() :].strip() if match else value
 
 
-def _exact_body(value: str, *, mode: str) -> str:
+def exact_body(value: str, *, mode: str) -> str:
     """The exact version a token pins in ecosystem `mode`, or "" for a range, wildcard, empty token or unknown mode."""
     if mode not in _MODES:
         return ""
+    if mode == "github-actions" and commit_ref(value.strip()):
+        return value.strip().lower()
     prefix, pattern = _MODES[mode]
     match = pattern.fullmatch(_version_body(value, prefix))
     return match.group(0) if match else ""
 
 
 def commit_ref(ref: str) -> bool:
-    """True for a GitHub Actions ref that is a full lowercase commit SHA."""
+    """True for a GitHub Actions ref that is a full commit SHA."""
     return bool(_COMMIT_RE.fullmatch(ref))
 
 
 def moving_ref(ref: str) -> bool:
     """True for a GitHub Actions ref that is neither a full release tag nor a commit SHA: `v4`, `v4.1`, a branch."""
-    return not commit_ref(ref) and not _exact_body(ref, mode="github-actions")
+    return not commit_ref(ref) and not exact_body(ref, mode="github-actions")
 
 
 class TagStatus(enum.IntEnum):
@@ -109,12 +113,10 @@ def _tag_name_ok(name: str) -> bool:
     return proc.returncode == 0
 
 
-def _peel(repo: str, name: str) -> str:
-    """The commit `refs/tags/<name>` peels to, or "" when it is not a valid, existing tag."""
-    if not _tag_name_ok(name):
-        return ""
+def _peel(repo: str, rev: str) -> str:
+    """The commit `rev` peels to in `repo`, or "" when there is none."""
     proc = subprocess.run(
-        ["git", "-C", repo, "rev-parse", "--verify", "--quiet", "--end-of-options", f"refs/tags/{name}" + "^{commit}"],
+        ["git", "-C", repo, "rev-parse", "--verify", "--quiet", "--end-of-options", rev + "^{commit}"],
         capture_output=True,
         text=True,
         check=False,
@@ -122,8 +124,42 @@ def _peel(repo: str, name: str) -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def release_tag(repo: str, version: str) -> ReleaseTag:
+def _tag(repo: str, name: str) -> str:
+    """The commit `refs/tags/<name>` peels to, or "" when it is not a valid, existing tag."""
+    return _peel(repo, f"refs/tags/{name}") if _tag_name_ok(name) else ""
+
+
+def _commit(repo: str, sha: str) -> ReleaseTag:
+    """A commit SHA names itself when a branch or tag of `repo` contains it.
+
+    GitHub serves a commit that only a fork of the repository has under the
+    repository's name, so a commit off every branch and tag is ABSENT.
+    """
+    if _peel(repo, sha) != sha:
+        return _ABSENT
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            repo,
+            "for-each-ref",
+            "--count=1",
+            f"--contains={sha}",
+            "refs/heads",
+            "refs/remotes",
+            "refs/tags",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return ReleaseTag(TagStatus.FOUND, sha, sha) if proc.returncode == 0 and proc.stdout.strip() else _ABSENT
+
+
+def release_tag(repo: str, version: str, mode: str = "") -> ReleaseTag:
     """The commit and tag name of the release tag for `version` in `repo`.
+
+    In github-actions mode a commit SHA is its own release: its commit and name are the SHA.
 
     One leading `v` or `V` is noted. Every existing spelling of the bare
     version (`<bare>`, `v<bare>`, `V<bare>`) must peel to the same commit.
@@ -132,11 +168,13 @@ def release_tag(repo: str, version: str) -> ReleaseTag:
     or a prefixed version would be satisfied only by the other case. ABSENT
     means no accepted spelling peels; branches and raw revisions are not tags.
     """
+    if mode == "github-actions" and commit_ref(version):
+        return _commit(repo, version.lower())
     lead = version[:1] if version[:1] in {"v", "V"} else ""
     bare = version[len(lead) :]
     if not bare or not _tag_name_ok(bare):
         return _ABSENT
-    found = {name: _peel(repo, name) for name in (bare, f"v{bare}", f"V{bare}")}
+    found = {name: _tag(repo, name) for name in (bare, f"v{bare}", f"V{bare}")}
     if len({commit for commit in found.values() if commit}) > 1:
         return _DISAGREE
     for name in (f"V{bare}",) if lead == "V" else (bare, f"v{bare}"):
@@ -168,14 +206,14 @@ def version_jump(frm: str, to: str) -> bool:
 
 def main(argv: list[str]) -> int:
     command, args = argv[:1], argv[1:]
-    if command == ["release-tag"] and len(args) == 2:
+    if command == ["release-tag"] and len(args) in {2, 3}:
         found = release_tag(*args)
         if found.status is TagStatus.FOUND:
             print(f"{found.commit}\t{found.name}")
         return found.status.value
     if command == ["jump"] and len(args) == 2:
         return 0 if version_jump(*args) else NO_JUMP
-    print("usage: dependency_cursor_review_versions.py release-tag REPO VERSION | jump FROM TO", file=sys.stderr)
+    print("usage: dependency_cursor_review_versions.py release-tag REPO VERSION [MODE] | jump FROM TO", file=sys.stderr)
     return 64
 
 

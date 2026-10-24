@@ -156,7 +156,7 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         child["to_tag"] = ""
         child["scan_conclusive"] = False
 
-        def scan_and_publish(_update: coverage.Target, dest: Path, _script: Path) -> dict:
+        def scan_and_publish(_update: coverage.Target, dest: Path, _script: Path, _ecosystem: str) -> dict:
             (dest / "malware_scan_summary.md").write_text(
                 "## Malware Scan Summary\n\n- Status: **clean**\n- Scan coverage: **conclusive**.\n",
                 encoding="utf-8",

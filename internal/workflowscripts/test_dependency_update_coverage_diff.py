@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import dependency_update_coverage as coverage
 import malware_verdict_formatter as formatter
+from test_dependency_cursor_review_binding import _GO, _GO_INFO, _GO_ZIP, _UTFBOM, _UTFBOM_H1, _origin
 from test_dependency_update_coverage import _clean, _commit, _git, _git_repo
 
 _SCRIPTS = Path(__file__).resolve().parent
@@ -74,7 +75,7 @@ class _Diff(unittest.TestCase):
         with (
             contextlib.chdir(self.root),
             patch.dict(os.environ, variables),
-            patch.object(coverage._ecosystems.upstream, "_fetch", lambda url: answers.get(url, b"")),
+            patch.object(coverage._ecosystems.upstream, "_fetch", lambda url, *_limit: answers.get(url, b"")),
             patch.object(coverage, "_scan_one", scan or clean_scan),
         ):
             os.environ.pop("GITHUB_BASE_REF", None)
@@ -109,39 +110,90 @@ class PolicyTest(_Diff):
     def test_a_major_minor_action_tag_is_a_moving_ref_too(self) -> None:
         self._not_scanned("v4.1", "v4.2", "moving_ref")
 
-    def test_a_commit_to_commit_action_bump_is_inconclusive_with_a_named_warning_and_passes(self) -> None:
-        self._not_scanned(_SHA, _SHA[::-1], "unresolved_sha")
+    def test_a_bump_from_a_full_tag_to_a_branch_is_a_moving_ref(self) -> None:
+        self._not_scanned("v4.1.0", "main", "moving_ref")
 
-    def test_a_bump_between_a_commit_and_a_release_tag_is_unresolved_and_fails(self) -> None:
-        """Commit -> tag and tag -> commit are not policy rows: the commit is not an exact version, so it is a gap."""
+    def _action(self, old: str, new: str, scan: Callable[..., dict] | None = None) -> tuple[dict, str]:
+        return self.run_main(
+            {".github/workflows/ci.yml": _WORKFLOW.format(old)},
+            {".github/workflows/ci.yml": _WORKFLOW.format(new)},
+            scan=scan,
+        )
+
+    def test_commit_pinned_action_bumps_scan_the_commit_range_and_are_intrinsically_bound(self) -> None:
+        """Commit -> commit, commit -> tag and tag -> commit are scanned; the case of a SHA is not part of it."""
+        target = coverage.Target(package="actions/checkout", repo="actions/checkout")
+        for old, new, scanned in (
+            (_SHA, _SHA[::-1].upper(), target._replace(old=_SHA, new=_SHA[::-1])),
+            ("v4.1.0", _SHA, target._replace(old="4.1.0", new=_SHA)),
+        ):
+            with self.subTest(old=old, new=new):
+                self.setUp()
+                report, summary = self._action(old, new)
+                self.assertEqual(self.scanned, [scanned])
+                self.assertEqual((report["policy_warnings"], report["scan_conclusive"]), ([], True))
+                self.assertEqual(report["binding"], {"kind": "intrinsic", "reason": ""})
+                self.assertIn("covered, artifact binding `intrinsic`", summary)
+                published = formatter.compose_published_review(report, _BENIGN, _MERGE)
+                self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+
+    def _unresolved(self, update: coverage.Target, *_args: object) -> dict:
+        self.scanned.append(update)
+        return coverage.uncovered(update._replace(repo="actions/checkout"), "to_ref_unresolved")
+
+    def test_a_commit_to_commit_bump_the_scan_cannot_resolve_is_unresolved_sha(self) -> None:
+        report, summary = self._action(_SHA, _SHA[::-1], scan=self._unresolved)
+        self.assertEqual(len(self.scanned), 1)
+        self.assertEqual(report["not_scanned_reason"], coverage.NOTHING_TO_SCAN)
+        change = {"ecosystem": "github-actions", "dir": ".github/workflows", "name": "actions/checkout"}
+        self.assertEqual(
+            report["policy_warnings"], [{**change, "old": _SHA, "new": _SHA[::-1], "reason": "unresolved_sha"}]
+        )
+        self.assertIn("(`unresolved_sha`)", summary)
+        for warn_only in (True, False):
+            published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
+            self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+            self.assertIn(formatter._POLICY_WARNINGS["unresolved_sha"], published["malware_text"])
+
+    def test_a_commit_to_commit_bump_whose_clone_fails_is_a_gap_not_unresolved_sha(self) -> None:
+        def clone_failed(update: coverage.Target, *_args: object) -> dict:
+            self.scanned.append(update)
+            return coverage.uncovered(update, "unresolved")
+
+        report, summary = self._action(_SHA, _SHA[::-1], scan=clone_failed)
+        self.assertEqual(report["policy_warnings"], [])
+        self.assertIs(report["scan_conclusive"], False)
+        self.assertIn("not covered (unresolved)", summary)
+        for warn_only in (True, False):
+            published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
+            self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
+
+    def test_a_bump_between_a_commit_and_a_tag_the_scan_cannot_resolve_is_a_gap(self) -> None:
         for old, new in ((_SHA, "v4.2.0"), ("v4.1.0", _SHA)):
             with self.subTest(old=old, new=new):
                 self.setUp()
-                report, summary = self.run_main(
-                    {".github/workflows/ci.yml": _WORKFLOW.format(old)},
-                    {".github/workflows/ci.yml": _WORKFLOW.format(new)},
-                )
-                self.assertEqual(self.scanned, [])
+                report, summary = self._action(old, new, scan=self._unresolved)
                 self.assertEqual(report["policy_warnings"], [])
                 self.assertIs(report["scan_conclusive"], False)
-                self.assertIn("not covered (unresolved)", summary)
+                self.assertIn("not covered (to_ref_unresolved)", summary)
                 for warn_only in (True, False):
                     published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
                     self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
 
-    def test_a_full_action_tag_is_scanned_from_the_action_repository(self) -> None:
-        report, _summary = self.run_main(
-            {".github/workflows/ci.yml": _WORKFLOW.format("v4.1.0")},
-            {".github/workflows/ci.yml": _WORKFLOW.format("v4.2.0")},
-        )
+    def test_a_full_action_tag_bump_is_scanned_bound_and_can_be_benign(self) -> None:
+        """The scan resolves each full tag to its commit in the action's own repository: that range is what runs."""
+        report, summary = self._action("v4.1.0", "v4.2.0")
         self.assertEqual(
             self.scanned,
             [coverage.Target(package="actions/checkout", old="4.1.0", new="4.2.0", repo="actions/checkout")],
         )
-        self.assertEqual(report["policy_warnings"], [])
-        self.assertIs(report["scan_conclusive"], True)
-        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
-        self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+        self.assertEqual((report["policy_warnings"], report["scan_conclusive"]), ([], True))
+        self.assertEqual(report["binding"], {"kind": "intrinsic", "reason": ""})
+        self.assertIn("covered, artifact binding `intrinsic`", summary)
+        for warn_only in (True, False):
+            published = formatter.compose_published_review(report, _BENIGN, _MERGE, warn_only=warn_only)
+            self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+            self.assertNotIn("artifact_unbound", published["malware_text"])
 
     def test_docker_and_terraform_beside_a_clean_scan_are_never_benign(self) -> None:
         lock = 'provider "registry.terraform.io/hashicorp/aws" {{\n  version = "{}"\n}}\n'
@@ -210,14 +262,16 @@ class UncheckedUpgradeTest(_Diff):
         self.assertIs(report["scan_conclusive"], True)
         return report, summary
 
-    def test_a_clean_scan_of_every_changed_package_is_benign(self) -> None:
+    def test_a_clean_scan_of_every_changed_package_without_a_lock_hash_is_inconclusive(self) -> None:
         report, _summary = self._lodash(
             {"package-lock.json": _lock({"lodash": "4.17.20", "qs": "6.5.2"})},
             {"package-lock.json": _lock({"lodash": "4.17.21", "qs": "6.5.2"})},
         )
         self.assertEqual((report["unchecked_upgrades"], report["unparsed_locks"]), ([], []))
+        self.assertEqual(report["binding"], {"kind": "unbound", "reason": "no_lock_hash"})
         published = formatter.compose_published_review(report, _BENIGN, _MERGE)
-        self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
+        self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
+        self.assertIn("artifact_unbound(no_lock_hash)", published["malware_text"])
 
     def test_unchecked_upgrades_beside_a_clean_scan_are_inconclusive_not_benign(self) -> None:
         report, summary = self._lodash(
@@ -278,30 +332,43 @@ class UncheckedUpgradeTest(_Diff):
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
 
 
-class GoSumTest(_Diff):
-    _MOD = "module example.com/app\n\ngo 1.22\n\nrequire github.com/spf13/cobra {}\n"
-    _SUM = "github.com/spf13/cobra {0} h1:tree-{0}=\ngithub.com/spf13/cobra {0}/go.mod h1:mod-{0}=\n"
+class GoBump(_Diff):
+    _MOD = "module example.com/app\n\ngo 1.22\n\nrequire github.com/dimchansky/utfbom {}\n"
+    _SUM = "github.com/dimchansky/utfbom {0} {1}\ngithub.com/dimchansky/utfbom {0}/go.mod h1:mod-{0}=\n"
+    BASE_SUM = _SUM.format("v1.1.0", "h1:tree-v1.1.0=")
+    HEAD_SUM = _SUM.format("v1.1.1", _UTFBOM_H1)
 
-    def _bump(self, head_sum: str) -> dict:
-        """The published review of cobra v1.8.0 -> v1.8.1 in go.mod, beside go.sum moving to `head_sum`."""
-        report, _summary = self.run_main(
-            {"go.mod": self._MOD.format("v1.8.0"), "go.sum": self._SUM.format("v1.8.0")},
-            {"go.mod": self._MOD.format("v1.8.1"), "go.sum": head_sum},
+    def bump(self, head_sum: str, origin: str = "b" * 40) -> tuple[dict, str]:
+        """(report, summary) of utfbom v1.1.0 -> v1.1.1 in go.mod, beside go.sum moving to `head_sum`.
+
+        The proxy serves the real v1.1.1 module zip and names `origin` as its commit; the scan is of "b" * 40.
+        """
+        report, summary = self.run_main(
+            {"go.mod": self._MOD.format("v1.1.0"), "go.sum": self.BASE_SUM},
+            {"go.mod": self._MOD.format("v1.1.1"), "go.sum": head_sum},
+            fetch={_GO_ZIP: _UTFBOM, _GO_INFO: json.dumps(_origin(origin)).encode()},
         )
-        self.assertEqual([(u.package, u.repo) for u in self.scanned], [("github.com/spf13/cobra", "spf13/cobra")])
-        return formatter.compose_published_review(report, _BENIGN, _MERGE)
+        self.assertEqual([(u.package, u.repo) for u in self.scanned], [(_GO.name, _GO.repo)])
+        return report, summary
 
+
+class GoSumTest(GoBump):
     def test_go_sum_lines_for_the_go_mod_move_are_accounted_for(self) -> None:
-        published = self._bump(self._SUM.format("v1.8.1"))
+        report, summary = self.bump(self.HEAD_SUM)
+        self.assertEqual(report["binding"], {"kind": "checksum", "reason": ""})
+        self.assertIn("covered, artifact binding `checksum`", summary)
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("benign", "pass"))
 
     def test_a_go_sum_version_no_go_mod_move_accounts_for_is_inconclusive(self) -> None:
-        published = self._bump(self._SUM.format("v1.8.1") + "github.com/other/mod v0.2.0/go.mod h1:x=\n")
+        report, _summary = self.bump(self.HEAD_SUM + "github.com/other/mod v0.2.0/go.mod h1:x=\n")
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "pass"))
 
     def test_a_go_sum_hash_rewrite_is_inconclusive_and_blocks(self) -> None:
-        rewritten = self._SUM.format("v1.8.0").replace("h1:tree-v1.8.0=", "h1:other=")
-        published = self._bump(rewritten + self._SUM.format("v1.8.1"))
+        rewritten = self.BASE_SUM.replace("h1:tree-v1.1.0=", "h1:other=")
+        report, _summary = self.bump(rewritten + self.HEAD_SUM)
+        published = formatter.compose_published_review(report, _BENIGN, _MERGE)
         self.assertEqual((published["verdict"], published["check"]), ("inconclusive", "fail"))
 
 

@@ -36,6 +36,25 @@ def _assert_not_benign(test: UpstreamScanCase, report: dict) -> None:
 
 
 class ReleaseResolutionTest(UpstreamScanCase):
+    def test_an_action_commit_range_is_scanned_conclusively(self) -> None:
+        with self._workspace() as (work, repo):
+            _commit_file(repo, "action.js", "module.exports = 1;\n", "from")
+            old = _git(repo, "rev-parse", "HEAD")
+            _commit_file(repo, "action.js", "const marker = 'COMMIT_RANGE_MARKER';\n", "to")
+            new = _git(repo, "rev-parse", "HEAD")
+            report = self._scan(
+                work,
+                repo,
+                FROM_VERSION=old,
+                TO_VERSION=new,
+                DEPENDENCY_ECOSYSTEM="github-actions",
+                MALWARE_IOC_PATTERNS='["COMMIT_RANGE_MARKER"]',
+            )
+            self.assertTrue(report["scan_conclusive"], msg=report)
+            self.assertEqual((report["from_tag"], report["to_tag"]), (old, new))
+            self.assertEqual(report["resolved_range"], f"{old}..{new}")
+            self.assertEqual([item["file"] for item in report["findings"]["ioc"]], ["action.js"])
+
     def test_from_side_spellings_disagree(self) -> None:
         with self._workspace() as (work, repo):
             _commit_file(repo, "pkg/index.js", "module.exports = 1;\n", "bare from")
