@@ -18,7 +18,8 @@ version move ends up in one of:
   or changed type, does not parse, or changed in a way its versions do not
   account for: residue outside the entries, an entry whose text changed at an
   unchanged version, or a line entry whose text outside the version changed.
-- unparsed_locks: a lockfile with no grammar beside or above a primary change.
+- unparsed_locks: a lockfile with no grammar, or one its grammar does not read,
+  beside or above a primary change.
   With no such primary change, it is a gap.
 
 hashed lists each changed file read whose row records artifact hashes, such as
@@ -66,7 +67,7 @@ Moves = list[tuple[Change, bool]]
 # What one changed file contributes. VERSIONS: its moves are changes. NAMES: a
 # manifest beside a lock, whose moved names must move in that lock. CHECKSUMS:
 # every version it adds or drops must be one a change beside it adds or drops.
-# OPAQUE: a lock with no grammar. GAP: the file is a gap on its own.
+# OPAQUE: a lock with no grammar, or one its grammar does not read. GAP: the file is a gap on its own.
 _VERSIONS, _NAMES, _CHECKSUMS, _OPAQUE, _GAP = "versions", "names", "checksums", "opaque", "gap"
 
 
@@ -105,14 +106,6 @@ def _moves(row: ecosystems.FileKind, directory: str, before: list[Entry], after:
     return moved
 
 
-def _file_moves(row: ecosystems.FileKind, old_path: str, path: str, read: Read, base: str) -> Moves | None:
-    """The moves of one changed file with a grammar, or None when a side does not parse or its residue changed."""
-    before, after = row.parse(read(base, old_path)), row.parse(read("HEAD", path))
-    if before is None or after is None or before[1] != after[1]:
-        return None
-    return _moves(row, str(PurePosixPath(path).parent), before[0], after[0])
-
-
 def _declared(ecosystem: Ecosystem, directory: str, read: Read, base: str) -> set[str] | None:
     """Names the manifests beside a lock declare at base or HEAD, or None when none is there or one does not parse."""
     names: set[str] = set()
@@ -131,7 +124,11 @@ def _declared(ecosystem: Ecosystem, directory: str, read: Read, base: str) -> se
 
 
 def _has_lock(ecosystem: Ecosystem, directory: str, read: Read) -> bool:
-    return any(read("HEAD", path) for path, _row in ecosystems.beside(ecosystem, LOCK, directory))
+    """Whether a lock its grammar reads is beside `directory` at HEAD."""
+    return any(
+        (text := read("HEAD", path)) and row.parse(text) is not None
+        for path, row in ecosystems.beside(ecosystem, LOCK, directory)
+    )
 
 
 def _read(old_path: str, path: str, status: str, read: Read, base: str) -> list[_File]:
@@ -145,7 +142,11 @@ def _read(old_path: str, path: str, status: str, read: Read, base: str) -> list[
         return [_File(path, group, _GAP, row.ecosystem.warn)]
     if row.parse is None:
         return [_File(path, group, _GAP, "unparsed_manifest") if row.role == MANIFEST else _File(path, group, _OPAQUE)]
-    moves = _file_moves(row, old_path, path, read, base)
+    before, after = row.parse(read(base, old_path)), row.parse(read("HEAD", path))
+    if before is None or after is None:
+        # A lock its grammar does not read, such as a pnpm lock of another lockfile version, is opaque.
+        return [_File(path, group, _OPAQUE if row.role == LOCK else _GAP)]
+    moves = _moves(row, directory, before[0], after[0]) if before[1] == after[1] else None
     declared = _declared(row.ecosystem, directory, read, base) if row.role == LOCK else None
     if moves is None or (row.role == LOCK and declared is None):
         return [_File(path, group, _GAP)]

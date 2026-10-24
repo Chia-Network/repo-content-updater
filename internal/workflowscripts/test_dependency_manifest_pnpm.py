@@ -1,0 +1,99 @@
+"""Tests for the pnpm lock grammar, through the dependency review plan."""
+
+from __future__ import annotations
+
+import unittest
+
+from dependency_manifest_diff import Change
+from dependency_manifest_pnpm import pnpm_lock, pnpm_lock_integrity
+from test_dependency_manifest_diff import _package, _plan
+
+_PACKAGE = _package(dependencies={"zod": "^3.22.0"}, devDependencies={"react-dom": "18.2.0"})
+
+
+def _lock(
+    zod: str = "3.25.76", integrity: str = "{integrity: sha512-zod}", peer: str = "react@18.3.1", extra: str = ""
+) -> str:
+    return f"""lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+
+importers:
+
+  .:
+    dependencies:
+      zod:
+        specifier: ^3.22.0
+        version: {zod}
+    devDependencies:
+      react-dom:
+        specifier: 18.2.0
+        version: 18.2.0({peer})
+
+packages:
+
+  react-dom@18.2.0:
+    resolution: {{integrity: sha512-rd}}
+    peerDependencies:
+      react: ^18.2.0
+
+  zod@{zod}:
+    resolution: {integrity}{extra}
+
+snapshots:
+
+  react-dom@18.2.0({peer}):
+    dependencies:
+      react: {peer.split("@")[1]}
+
+  zod@{zod}: {{}}
+"""
+
+
+def _files(lock: str) -> dict[str, str]:
+    return {"package.json": _PACKAGE, "pnpm-lock.yaml": lock}
+
+
+class PnpmLockTest(unittest.TestCase):
+    def test_a_lockfile_only_bump_is_a_primary_change(self) -> None:
+        plan = _plan(_files(_lock()), _files(_lock(zod="3.25.77", integrity="{integrity: sha512-new}")))
+        self.assertEqual(plan.primary, (Change("npm", ".", "zod", "3.25.76", "3.25.77"),))
+        self.assertEqual((plan.gaps, plan.unparsed_locks), ((), ()))
+
+    def test_a_manifest_bump_beside_the_lock_is_a_primary_change(self) -> None:
+        bumped = _package(dependencies={"zod": "^3.25.77"}, devDependencies={"react-dom": "18.2.0"})
+        head = {"package.json": bumped, "pnpm-lock.yaml": _lock(zod="3.25.77").replace("^3.22.0", "^3.25.77")}
+        plan = _plan(_files(_lock()), head)
+        self.assertEqual(plan.primary, (Change("npm", ".", "zod", "3.25.76", "3.25.77"),))
+        self.assertEqual(plan.gaps, ())
+
+    def test_a_changed_integrity_at_one_version_is_a_gap(self) -> None:
+        plan = _plan(_files(_lock()), _files(_lock(integrity="{integrity: sha512-other}")))
+        self.assertEqual((plan.primary, plan.gaps), ((), (("pnpm-lock.yaml", "unresolved"),)))
+
+    def test_a_peer_suffix_that_moves_is_not_a_gap_of_its_dependent(self) -> None:
+        plan = _plan(_files(_lock()), _files(_lock(peer="react@18.3.2")))
+        self.assertEqual((plan.primary, plan.unchecked, plan.gaps), ((), (), ()))
+
+    def test_a_lockfile_version_it_does_not_read_is_not_parsed(self) -> None:
+        old = _lock().replace("'9.0'", "'5.4'")
+        self.assertIsNone(pnpm_lock(old))
+        self.assertIsNotNone(pnpm_lock(_lock()))
+        self.assertIsNone(pnpm_lock(_lock() + "\n  zod@3.25.76: {}\n"))
+
+    def test_only_a_registry_resolution_is_an_exact_version(self) -> None:
+        def zod(lock: str) -> list[str]:
+            return sorted(version for name, version, _top, _text in pnpm_lock(lock)[0] if name == "zod")
+
+        tarball = zod(_lock(integrity="{tarball: https://example.com/zod.tgz}"))
+        self.assertEqual(tarball, ["3.25.76", "3.25.76", "3.25.76 ({tarball: https://example.com/zod.tgz})"])
+        self.assertEqual(zod(_lock()), ["3.25.76"] * 3)
+
+    def test_the_integrity_is_read_from_a_registry_stanza(self) -> None:
+        texts = [text for name, _v, _t, text in pnpm_lock(_lock(integrity="{integrity: sha512-x}"))[0] if name == "zod"]
+        self.assertEqual(sorted(pnpm_lock_integrity(text) for text in texts), ["", "", "sha512-x"])
+
+
+if __name__ == "__main__":
+    unittest.main()

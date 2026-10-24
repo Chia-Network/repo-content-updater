@@ -20,7 +20,7 @@ class FileKindTest(unittest.TestCase):
             "package.json": ("npm", ecosystems.MANIFEST, True),
             "web/npm-shrinkwrap.json": ("npm", ecosystems.LOCK, True),
             "yarn.lock": ("npm", ecosystems.LOCK, True),
-            "pnpm-lock.yaml": ("npm", ecosystems.LOCK, False),
+            "pnpm-lock.yaml": ("npm", ecosystems.LOCK, True),
             "go.mod": ("go", ecosystems.MANIFEST, True),
             "go.sum": ("go", ecosystems.CHECKSUMS, True),
             "requirements-dev.txt": ("pip", ecosystems.MANIFEST, True),

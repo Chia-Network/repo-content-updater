@@ -296,8 +296,8 @@ class UncheckedUpgradeTest(_Diff):
 
     def test_an_unparsed_lock_beside_a_clean_scan_is_inconclusive_not_benign(self) -> None:
         report, summary = self._lodash(
-            {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n"},
-            {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n#\n"},
+            {"pnpm-lock.yaml": "lockfileVersion: '5.4'\n"},
+            {"pnpm-lock.yaml": "lockfileVersion: '5.4'\n#\n"},
         )
         self.assertEqual(report["unparsed_locks"], ["pnpm-lock.yaml"])
         self.assertIn("- These lockfiles were not parsed, so the packages they changed were not checked:", summary)

@@ -185,6 +185,15 @@ class NpmTest(unittest.TestCase):
         self.assertEqual((plan.primary, plan.unchecked), ((), ()))
         self.assertEqual(plan.gaps, (("package-lock.json", "unresolved"),))
 
+    def test_a_flag_that_only_moves_a_record_between_installs_is_not_a_gap(self) -> None:
+        primary = (Change("npm", ".", "lodash", "4.17.20", "4.17.21"),)
+        for flag in ("dev", "optional", "peer", "devOptional"):
+            with self.subTest(flag=flag):
+                plan = self._swap("node_modules/minimist", **{flag: True})
+                self.assertEqual((plan.primary, plan.gaps), (primary, ()))
+        plan = self._swap("node_modules/minimist", dev=True, integrity="sha512-other")
+        self.assertEqual(plan.gaps, (("package-lock.json", "unresolved"),))
+
     def test_a_copy_installed_from_another_source_is_never_an_exact_registry_version(self) -> None:
         evil = "https://evil.example/minimist.tgz"
         plan = self._swap("node_modules/minimist", resolved=evil)
@@ -289,17 +298,17 @@ class NpmTest(unittest.TestCase):
         self.assertEqual(plan.gaps, (("yarn.lock", "unresolved"),))
 
     def test_an_unparsed_lock_beside_a_primary_change_is_disclosed(self) -> None:
-        base = {"package.json": _package(dependencies={"zod": "3.22.0"}), "pnpm-lock.yaml": "lockfileVersion: '9.0'\n"}
+        base = {"package.json": _package(dependencies={"zod": "3.22.0"}), "pnpm-lock.yaml": "lockfileVersion: '5.4'\n"}
         head = {
             "package.json": _package(dependencies={"zod": "3.22.4"}),
-            "pnpm-lock.yaml": "lockfileVersion: '9.0'\n#\n",
+            "pnpm-lock.yaml": "lockfileVersion: '5.4'\n#\n",
         }
         plan = _plan(base, head)
         self.assertEqual(plan.primary, (Change("npm", ".", "zod", "3.22.0", "3.22.4"),))
         self.assertEqual((plan.gaps, plan.unparsed_locks), ((), ("pnpm-lock.yaml",)))
 
     def test_a_root_workspace_lock_covers_a_primary_change_below_it(self) -> None:
-        lock = "lockfileVersion: '9.0'\n"
+        lock = "lockfileVersion: '5.4'\n"
         base = {"packages/web/package.json": _package(dependencies={"zod": "3.22.0"}), "pnpm-lock.yaml": lock}
         head = {"packages/web/package.json": _package(dependencies={"zod": "3.22.4"}), "pnpm-lock.yaml": lock + "#\n"}
         plan = _plan(base, head)

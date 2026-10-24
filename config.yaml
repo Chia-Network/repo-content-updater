@@ -79,6 +79,7 @@ files:
       - dependency-cursor-review-certificate
       - dependency-manifest-go
       - dependency-manifest-npm
+      - dependency-manifest-pnpm
       - dependency-manifest-python
       - dependency-manifest-lines
       - dependency-manifest-pep508
@@ -157,6 +158,10 @@ files:
   - name: dependency-manifest-npm
     template_name: dependency-cursor-review-manifest-npm.py
     repo_path: .github/scripts/dependency_manifest_npm.py
+
+  - name: dependency-manifest-pnpm
+    template_name: dependency-cursor-review-manifest-pnpm.py
+    repo_path: .github/scripts/dependency_manifest_pnpm.py
 
   - name: dependency-manifest-python
     template_name: dependency-cursor-review-manifest-python.py

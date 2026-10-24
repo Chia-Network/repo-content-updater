@@ -33,6 +33,9 @@ _REGISTRIES = ("https://registry.npmjs.org/", "https://registry.yarnpkg.com/")
 _SECTIONS = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
 
 
+_SCOPE_FLAGS = frozenset({"dev", "optional", "peer", "devOptional"})
+
+
 def _direct_lock_name(key: str) -> str:
     """Leaf package name of a lockfile path, or "" when the path is not a package.
 
@@ -131,11 +134,11 @@ def _json_entries(text: str, *, lock: bool) -> Parsed | None:
         top = next((_installed(name, meta) for path, meta in locks if path == _LOCK_PREFIX + name), "")
         for section, spec in blob.get("specs") or ():
             if isinstance(spec, dict):
-                entries.append((name, _installed(name, spec), ">" not in section, _record(section, spec)))
+                entries.append((name, _installed(name, spec), ">" not in section, _record(section, _unscoped(spec))))
             else:
                 entries.append((name, top, True, _record(section, spec)) if lock else (name, spec, True, section))
         for path, meta in locks:
-            entries.append((name, _installed(name, meta), path == _LOCK_PREFIX + name, _record(path, meta)))
+            entries.append((name, _installed(name, meta), path == _LOCK_PREFIX + name, _record(path, _unscoped(meta))))
     return entries, json.dumps(doc, sort_keys=True, separators=(",", ":"))
 
 
@@ -159,6 +162,11 @@ def _installed(name: str, record: dict) -> str:
     if alias != name:
         return f"{version} (alias of {alias})"
     return _registry_version(name, version, resolved if isinstance(resolved, str) else "")
+
+
+def _unscoped(record: dict) -> dict:
+    """A lock record without the flags that say which installs include it; they never change what is installed."""
+    return {key: value for key, value in record.items() if key not in _SCOPE_FLAGS}
 
 
 def _record(where: str, record: dict) -> str:
