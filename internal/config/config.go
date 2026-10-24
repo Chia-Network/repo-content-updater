@@ -171,7 +171,11 @@ func (c *Config) validatePaths() error {
 			return err
 		}
 		for _, retired := range file.RetiredPaths {
-			if owners := c.managedPathOwners[normalizeManagedFileKey(retired)]; len(owners) > 0 {
+			key := strings.ReplaceAll(strings.TrimSpace(retired), "\\", "/")
+			if strings.HasSuffix(key, "/") || path.Clean(key) == "." {
+				return fmt.Errorf("file %q retired_paths entry %q must name a file", file.Name, retired)
+			}
+			if owners := c.managedPathOwners[normalizeManagedFileKey(path.Clean(key))]; len(owners) > 0 {
 				return fmt.Errorf("file %q retired_paths entry %q is still a managed path", file.Name, retired)
 			}
 		}

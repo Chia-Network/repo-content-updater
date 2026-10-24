@@ -432,6 +432,12 @@ func TestLoadConfigRejectsInvalidRetiredPaths(t *testing.T) {
 		{name: "its own path", retired: ".github/first.yml", wantErr: "is still a managed path"},
 		{name: "its own alternate path", retired: ".github/first.yaml", wantErr: "is still a managed path"},
 		{name: "another file's path", retired: "./.GitHub/second.yml", wantErr: "is still a managed path"},
+		{name: "a dot segment", retired: ".github/./second.yml", wantErr: "is still a managed path"},
+		{name: "a doubled slash", retired: ".github//second.yml", wantErr: "is still a managed path"},
+		{name: "a backslash", retired: `.github\\second.yml`, wantErr: "is still a managed path"},
+		{name: "a trailing slash", retired: ".github/second.yml/", wantErr: "must name a file"},
+		{name: "the repo root", retired: "./", wantErr: "must name a file"},
+		{name: "a lone dot", retired: ".", wantErr: "must name a file"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
