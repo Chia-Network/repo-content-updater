@@ -191,6 +191,9 @@ class ExactVersionTest(unittest.TestCase):
                 "1.2.3rc1": "1.2.3rc1",
                 "1.2.3.post1": "1.2.3.post1",
                 "1.2.3.dev0": "1.2.3.dev0",
+                "==1.0alpha1": "1.0alpha1",
+                "==1.0preview1": "1.0preview1",
+                "==1!2.0.post1+local.1": "1!2.0.post1+local.1",
                 "V1.2": "1.2",
                 "1": "1",
             },
@@ -205,7 +208,7 @@ class ExactVersionTest(unittest.TestCase):
 
     def test_ranges_wildcards_and_moving_majors_are_never_exact(self) -> None:
         cases = {
-            "pip": (">=2.31", "~=2.31", "!=1.0", "1.*", "1.x", "latest", ""),
+            "pip": (">=2.31", "~=2.31", "!=1.0", "1.*", "1.x", "latest", "", "1.0-foo"),
             "npm": ("^1.2.3", "~1.2.3", "1.2", "1", "1.x", "1.2.3.4", "==1.2.3", ">=1.0.0", "*", ""),
             "go": ("v1", "1", "latest", ""),
             "github-actions": ("v4", "v4.1", "main", "4", "", "v" + "a" * 40, "a" * 39, "g" * 40),

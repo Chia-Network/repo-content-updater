@@ -409,6 +409,15 @@ class PythonTest(unittest.TestCase):
                 head.replace(" --hash", " ; os_name == --hash"),
             ),
             "a tab before a hash": (base.replace(" --hash", "\t--hash"), head.replace(" --hash", "\t--hash")),
+            # An unchanged line pip cannot build makes pip refuse the whole file, whatever moves beside it.
+            "an unchanged invalid arbitrary equality": (
+                f"{base}sigstore===1.0,foo --hash=sha256:{'2' * 64}\n",
+                f"{head}sigstore===1.0,foo --hash=sha256:{'2' * 64}\n",
+            ),
+            "an unchanged deeply nested marker": (
+                f"{base}idna==3.7 ; {'(' * 600}os_name == 'nt'{')' * 600}\n",
+                f"{head}idna==3.7 ; {'(' * 600}os_name == 'nt'{')' * 600}\n",
+            ),
         }
         for extra in ("!={}", ">{}", "<2"):
             cases[f"=={{}},{extra}"] = tuple(

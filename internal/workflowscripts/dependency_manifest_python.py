@@ -35,7 +35,7 @@ import shlex
 from collections.abc import Iterator
 
 import tomllib
-from dependency_manifest_lines import Entry, Parsed, Pin
+from dependency_manifest_lines import Entry, EntryText, Parsed, Pin
 from dependency_pep508 import parse as parse_requirement
 
 _REQ_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*((?:===|==|~=|!=|>=|<=|>|<)\s*[^\s#;,]+)")
@@ -179,15 +179,17 @@ def requirements_txt(text: str) -> Parsed | None:
     return entries, "".join(residue)
 
 
-def requirements_line(pin: Pin) -> str:
+def requirements_line(text: EntryText) -> str:
     """A requirements_txt entry's requirement, with its version masked and every option but its `--hash`es."""
-    return pin.fixed
+    assert isinstance(text, Pin)
+    return text.fixed
 
 
-def requirements_hashes(pin: Pin) -> str:
+def requirements_hashes(entry: Entry) -> str:
     """The `--hash` values of a requirements_txt entry, or "" when it has none or an option the review does not
-    read."""
-    return pin.hashes
+    read. Every requirements_txt entry is an installed copy."""
+    assert isinstance(entry[3], Pin)
+    return entry[3].hashes
 
 
 def _record(where: str, record: dict) -> str:

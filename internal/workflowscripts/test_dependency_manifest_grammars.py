@@ -314,9 +314,7 @@ def _pins(parsed: tuple[list, str] | None) -> list[tuple[str, str, str, str]] | 
     if parsed is None:
         return None
     assert all(isinstance(entry[3], Pin) for entry in parsed[0])
-    return [
-        (name, version, requirements_line(text), requirements_hashes(text)) for name, version, _top, text in parsed[0]
-    ]
+    return [(entry[0], entry[1], requirements_line(entry[3]), requirements_hashes(entry)) for entry in parsed[0]]
 
 
 class RequirementsTxtGrammarTest(unittest.TestCase):
@@ -359,6 +357,10 @@ class RequirementsTxtGrammarTest(unittest.TestCase):
                 [("sigstore", "==3.6.1", "sigstore\0", _A), ("sigstore", "==3.6.1", "sigstore\0", "")],
             ),
         )
+        # Every pre-release spelling pip accepts is a version.
+        for version in ("1.0a1", "1.0alpha1", "1.0b1", "1.0beta1", "1.0c1", "1.0rc1", "1.0pre1", "1.0preview1"):
+            line = f"sigstore=={version} --hash={_A}\n"
+            cases += ((version, line, [("sigstore", f"=={version}", "sigstore\0", _A)]),)
         # Values pip reads as hashes, or rejects, are read as written; the binding takes only lowercase sha256.
         for value in ("md5:" + "a" * 32, "sha384:" + "a" * 96, "sha512:" + "a" * 128, "SHA256:" + "A" * 64):
             cases += ((value, f"sigstore==3.6.1 --hash={value}\n", [("sigstore", "==3.6.1", "sigstore\0", value)]),)
@@ -413,6 +415,8 @@ class RequirementsTxtGrammarTest(unittest.TestCase):
             f"sigstore==3.6.1 ; platform_machine == --hash={_A}",
             f"sigstore==3.6.1\t--hash={_A} --hash={_B}",
             f"sigstore.==1.0 --hash={_A}",
+            f"sigstore===3.6.1,foo --hash={_A}",
+            f"sigstore==3.6.1 ; {'(' * 600}os_name == 'nt'{')' * 600}",
             "sigstore==",
             "sigstore (==3.6.1",
             "sigstore==3.6.1 ; unknown_variable == 'a'",

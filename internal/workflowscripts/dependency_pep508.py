@@ -10,27 +10,23 @@ from __future__ import annotations
 import re
 from typing import NamedTuple
 
+from dependency_cursor_review_versions import PEP440_LOCAL, PEP440_VERSION
+
 _WS = r"[ \t]*"
 _NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
-_VERSION = (
-    r"v?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*"
-    r"(?:[-_.]?(?:a|b|c|rc|alpha|beta|pre|preview)[-_.]?[0-9]*)?"
-    r"(?:-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?"
-    r"(?:[-_.]?dev[-_.]?[0-9]*)?"
-)
-_LOCAL = r"(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?"
-# Each operator with the versions it takes: `===` any string; `==` and `!=` a wildcard or a local version.
+# Each operator with the versions it takes: `===` any string up to the next specifier;
+# `==` and `!=` a wildcard or a local version.
 _SPEC = (
-    rf"(?:===[ \t]*[^\s;)]+"
-    rf"|(?:==|!=)[ \t]*{_VERSION}(?:\.\*|{_LOCAL})"
-    rf"|~=[ \t]*{_VERSION}"
-    rf"|(?:<=|>=|<|>)[ \t]*{_VERSION})"
+    rf"(?:===[ \t]*[^\s;),]+"
+    rf"|(?:==|!=)[ \t]*{PEP440_VERSION}(?:\.\*|(?:{PEP440_LOCAL})?)"
+    rf"|~=[ \t]*{PEP440_VERSION}"
+    rf"|(?:<=|>=|<|>)[ \t]*{PEP440_VERSION})"
 )
 _HEAD_RE = re.compile(
     rf"{_WS}(?P<name>{_NAME}){_WS}(?:\[{_WS}(?:{_NAME}(?:{_WS},{_WS}{_NAME})*)?{_WS}\])?{_WS}", re.IGNORECASE
 )
 _SPEC_RE = re.compile(rf"{_WS}(?P<spec>{_SPEC}){_WS}", re.IGNORECASE)
-_URL_RE = re.compile(rf"@{_WS}(?P<url>[^\s;]+)(?:[ \t]+|$)")
+_URL_RE = re.compile(rf"@{_WS}[^\s;]+(?:[ \t]+|$)")
 _MARKER_VARIABLES = (
     "python_version",
     "python_full_version",
@@ -61,32 +57,38 @@ _MARKER_TOKEN_RE = re.compile(
 class Requirement(NamedTuple):
     name: str
     specs: tuple[tuple[int, int], ...]  # the span of each specifier, operator included
-    url: str
+
+
+# Deeper groups than any real marker are an error, never a recursion limit.
+_MAX_MARKER_DEPTH = 32
+_MARKER_SPACE_RE = re.compile(r"[ \t]*")
 
 
 def _marker(text: str) -> None:
     """Raise ValueError unless text is one marker: comparisons of a variable or string, joined by and/or, grouped."""
     tokens: list[tuple[str, str]] = []
     at = 0
-    while text[at:].strip(" \t"):
+    while (at := _MARKER_SPACE_RE.match(text, at).end()) < len(text):
         match = _MARKER_TOKEN_RE.match(text, at)
         if not match:
-            raise ValueError(f"invalid marker at {text[at:]!r}")
+            raise ValueError(f"invalid marker at {text[at : at + 40]!r}")
         kind = match.lastgroup or ""
         tokens.append((kind, match.group(kind)))
         at = match.end()
 
-    def expression(index: int) -> int:
-        """The index after one `and`/`or` chain of atoms starting at index."""
-        index = atom(index)
+    def expression(index: int, depth: int) -> int:
+        """The index after one `and`/`or` chain of atoms starting at index, inside depth groups."""
+        index = atom(index, depth)
         while index < len(tokens) and tokens[index][0] == "join":
-            index = atom(index + 1)
+            index = atom(index + 1, depth)
         return index
 
-    def atom(index: int) -> int:
+    def atom(index: int, depth: int) -> int:
         kinds = [kind for kind, _ in tokens[index : index + 3]]
         if kinds[:1] == ["paren"] and tokens[index][1] == "(":
-            index = expression(index + 1)
+            if depth == _MAX_MARKER_DEPTH:
+                raise ValueError("marker groups nested too deeply")
+            index = expression(index + 1, depth + 1)
             if index < len(tokens) and tokens[index] == ("paren", ")"):
                 return index + 1
             raise ValueError("unclosed marker group")
@@ -94,7 +96,7 @@ def _marker(text: str) -> None:
             return index + 3
         raise ValueError("invalid marker comparison")
 
-    if not tokens or expression(0) != len(tokens):
+    if not tokens or expression(0, 0) != len(tokens):
         raise ValueError("invalid marker")
 
 
@@ -103,9 +105,9 @@ def parse(text: str) -> Requirement:
     head = _HEAD_RE.match(text)
     if not head:
         raise ValueError("invalid requirement name")
-    at, specs, url = head.end(), [], ""
-    if url_match := _URL_RE.match(text, at):
-        at, url = url_match.end(), url_match.group("url")
+    at, specs = head.end(), []
+    if url := _URL_RE.match(text, at):
+        at = url.end()
     else:
         grouped = text.startswith("(", at)
         at += grouped
@@ -125,4 +127,4 @@ def parse(text: str) -> Requirement:
         _marker(text[at + 1 :])
     elif text[at:].strip(" \t"):
         raise ValueError(f"unexpected {text[at:]!r}")
-    return Requirement(head.group("name"), tuple(specs), url)
+    return Requirement(head.group("name"), tuple(specs))

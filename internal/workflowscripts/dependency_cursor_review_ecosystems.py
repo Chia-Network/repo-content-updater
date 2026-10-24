@@ -160,7 +160,12 @@ CARGO, BUNDLER, COMPOSER, SWIFT, NUGET = (
 
 def _top_copy(read: Callable[[str], str]) -> Callable[[Entry], str | None]:
     """A lock installs the top entry for a name; a nested entry is the copy another dependency installs."""
-    return lambda entry: read(entry[3]) if entry[2] else None
+
+    def top(entry: Entry) -> str | None:
+        assert isinstance(entry[3], str)
+        return read(entry[3]) if entry[2] else None
+
+    return top
 
 
 def _requirements(path: PurePosixPath) -> bool:
@@ -206,7 +211,7 @@ _FILES = (
         requirements_txt,
         match=_requirements,
         fixed=requirements_line,
-        hashes=_top_copy(requirements_hashes),
+        hashes=requirements_hashes,
     ),
     FileKind(PIP, LOCK, poetry_lock, frozenset({"poetry.lock"}), fixed=_record, hashes=_top_copy(poetry_lock_hashes)),
     FileKind(
