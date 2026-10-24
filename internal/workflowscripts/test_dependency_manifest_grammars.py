@@ -18,6 +18,7 @@ from dependency_manifest_npm import package_json, package_lock, package_lock_int
 from dependency_manifest_python import (
     IndexOption,
     IndexOptions,
+    mentions,
     pipfile_lock,
     pipfile_lock_hashes,
     poetry_lock,
@@ -307,6 +308,12 @@ class PythonGrammarTest(unittest.TestCase):
             'rich = { version = "13.7.0", extras = ["jupyter"] }\n'
         )
         self.assertEqual(_entries(requirements(text)), {("httpx", "==0.27.0", True), ("rich", "13.7.0", True)})
+
+    def test_a_manifest_mention_of_a_name_is_pep503_canonical_and_a_whole_token(self) -> None:
+        self.assertTrue(mentions('dependencies = ["click", "ChiaPos==2.0.4"]\n', "chiapos"))
+        self.assertTrue(mentions("chia_pos>=2.0\n", "chia-pos"))
+        self.assertFalse(mentions("chiapos-extra==1.0\n", "chiapos"))
+        self.assertFalse(mentions("my-chiapos==1.0\n", "chiapos"))
 
 
 _A, _B = (f"sha256:{digit * 64}" for digit in "ab")

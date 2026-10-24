@@ -20,10 +20,10 @@ adversarial.
   index, or trust a package that a listed index does not serve at that
   exact version with matching downloaded file hashes, or, for an unhashed
   occurrence, without a requirements file whose effective index replaces
-  PyPI for the whole install and names no other source. A pin in
-  `pyproject.toml`, `setup.py`, `setup.cfg` or `Pipfile` is unhashed with no
-  index and never makes a change trusted (see "Trusted package indexes" in
-  `AGENTS.md`).
+  PyPI for the whole install and names no other source. Any mention of the
+  package in `pyproject.toml`, `setup.py`, `setup.cfg` or `Pipfile` is
+  unhashed with no index and never makes a change trusted (see "Trusted
+  package indexes" in `AGENTS.md`).
 
 ## Do not raise
 

@@ -64,6 +64,7 @@ class DependencyUpdateCoverageIndexTest(unittest.TestCase):
         }
         with (
             patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path, "")),
+            patch.object(coverage, "_git_grep", lambda _needle: []),
             patch.object(upstream, "trusted_python_index", trusted),
         ):
             report, summary, _output = _run_main(
@@ -228,6 +229,96 @@ class DependencyUpdateCoverageIndexTest(unittest.TestCase):
                 ("requirements.txt",),
                 True,
             ),
+            "includer in a subdirectory adds an extra source": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "requirements/dev.txt": "-r ../requirements.txt\n--extra-index-url https://pypi.org/simple/\n",
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "includer in another directory adds an extra source": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "sub/requirements.txt": "-r ../requirements.txt\n--extra-index-url https://pypi.org/simple/\n",
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "includer with another name adds an extra source": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "dev-requirements.txt": "-r requirements.txt\n--extra-index-url https://pypi.org/simple/\n",
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "constraint adds an extra source": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "constraints.txt": "-c requirements.txt\n--extra-index-url https://pypi.org/simple/\n",
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "includer with a non-txt name adds an extra source": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "requirements-dev.in": "-r requirements.txt\n--extra-index-url https://pypi.org/simple/\n",
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "pyproject list pin has no index": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "pyproject.toml": '[project]\ndependencies = ["click", "chiapos==2.0.4"]\n',
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "pyproject optional dependencies pin has no index": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "pyproject.toml": '[project.optional-dependencies]\ndev = ["click", "chiapos==2.0.4"]\n',
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "setup.py list pin has no index": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "setup.py": 'setup(install_requires=["click", "chiapos==2.0.4"])\n',
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "pyproject pin with a marker has no index": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "pyproject.toml": (
+                        '[project]\ndependencies = ["chiapos==2.0.4; python_version>\'3.8\'", "click"]\n'
+                    ),
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "pyproject pin with a fourth version part has no index": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "pyproject.toml": '[project]\ndependencies = ["chiapos==2.0.4.0"]\n',
+                },
+                ("requirements.txt",),
+                False,
+            ),
+            "pyproject range has no index": (
+                {
+                    "requirements.txt": "-i https://pypi.chia.net/simple/\nchiapos==2.0.4\n",
+                    "pyproject.toml": '[project]\ndependencies = ["chiapos>=2.0"]\n',
+                },
+                ("requirements.txt",),
+                False,
+            ),
         }
 
         class Response:
@@ -276,15 +367,28 @@ class DependencyUpdateCoverageIndexTest(unittest.TestCase):
                 plan = _plan(("pip", ".", "chiapos", "2.0.3", "2.0.4"), hashed=hashed)
                 all_texts = {".github/dependabot.yml": config, **texts}
                 entries = [(path, "100644") for path in texts]
+
+                def files(directory: str, entries: list[tuple[str, str]] = entries) -> list[tuple[str, str]]:
+                    prefix = "" if directory in {"", "."} else f"{directory}/"
+                    return [
+                        (path, mode)
+                        for path, mode in entries
+                        if path.startswith(prefix) and "/" not in path[len(prefix) :]
+                    ]
+
+                def grep(needle: str, texts: dict[str, str] = all_texts) -> list[str]:
+                    return [path for path, text in texts.items() if needle in text]
+
                 with (
                     patch.object(coverage, "_git_text", lambda _rev, path, texts=all_texts: texts.get(path, "")),
+                    patch.object(coverage, "_git_grep", grep),
                     patch.object(upstream, "_get_response", get_response),
                 ):
                     report, _summary, _output = _run_main(
                         plan,
                         repo=repo,
                         scan=lambda target, *_args: _clean(target.package, target.repo.slug),
-                        files=lambda directory, entries=entries: entries if directory in {"", "."} else [],
+                        files=files,
                     )
                 self.assertEqual(looked_up, [] if trusted else ["chiapos"])
                 self.assertEqual(
@@ -302,7 +406,10 @@ class DependencyUpdateCoverageIndexTest(unittest.TestCase):
 
         plan = _plan(("pip", "app", "attrs", "23.1.0", "23.2.0"), ("pip", "tools", "six", "1.15.0", "1.16.0"))
         texts = {"app/requirements.txt": "--index-url https://example.com/simple/\nattrs==23.2.0\n"}
-        with patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path, "")):
+        with (
+            patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path, "")),
+            patch.object(coverage, "_git_grep", lambda _needle: []),
+        ):
             report, summary, _output = _run_main(
                 plan,
                 repo=repo,

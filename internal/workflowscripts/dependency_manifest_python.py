@@ -79,10 +79,18 @@ _PIP_INCLUDES = frozenset({"--requirement", "--constraint"})
 _PIP_OTHER_SOURCES = frozenset({"--find-links", "--no-index"})
 # PEP 503: lowercase, and collapse each run of `-`, `_`, or `.` to one `-`.
 _PEP503_SEPARATORS = re.compile(r"[-_.]+")
+# A requirement name token in a manifest, so a mention is not a substring of a longer name.
+_NAME_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def _requirement_name(name: str) -> str:
     return _PEP503_SEPARATORS.sub("-", name).lower()
+
+
+def mentions(text: str, name: str) -> bool:
+    """Whether `text` names the PEP 503 package `name` as a requirement name token."""
+    wanted = _requirement_name(name)
+    return any(_requirement_name(token) == wanted for token in _NAME_TOKEN_RE.findall(text))
 
 
 def _requirement_specs(line: str, table: str) -> list[tuple[str, str]]:

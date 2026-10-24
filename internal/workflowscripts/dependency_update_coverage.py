@@ -32,6 +32,7 @@ import dependency_cursor_review_ecosystems as _ecosystems
 import dependency_cursor_review_upstream as _upstream
 import dependency_cursor_review_versions as _versions
 import dependency_manifest_diff as _diff
+import dependency_manifest_python as _manifest_python
 import dependency_python_indexes as _python_indexes
 from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN, reason_note
 
@@ -411,6 +412,19 @@ def _git_files(directory: str) -> list[tuple[str, str]] | None:
     return entries
 
 
+def _git_grep(needle: str) -> list[str] | None:
+    """The tracked paths at HEAD whose text contains `needle`, or None when git cannot search them."""
+    proc = subprocess.run(
+        ["git", "grep", "-l", "-F", "-I", "-z", "-e", needle, "HEAD", "--"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode not in {0, 1}:
+        return None
+    return [record.removeprefix("HEAD:") for record in proc.stdout.split("\0") if record]
+
+
 def _git_text(rev: str, path: str) -> str:
     proc = subprocess.run(
         ["git", "show", f"{rev}:{path}"],
@@ -585,21 +599,17 @@ class Exact(NamedTuple):
 def _index_occurrences(change: _diff.Change, new: str, hashed: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
     """Each (path, recorded hash) of an installed copy that constrains the trusted index.
 
-    A lock entry records a file hash and a requirements file records one when it pins one. An exact pin in
-    pyproject.toml, setup.py, setup.cfg or Pipfile records no hash and names no index: pip installs it from the
-    default index, so it is an unhashed occurrence with no replacing index.
+    A lock entry records a file hash and a requirements file records one when it pins one. Any mention of the
+    package in pyproject.toml, setup.py, setup.cfg or Pipfile records no hash and names no index: pip installs it
+    from the default index, so it is an unhashed occurrence with no replacing index.
     """
     found = list(
         _ecosystems.locked_occurrences(
             change.ecosystem, change.dir, change.name, new, lambda path: _git_text("HEAD", path), hashed
         )
     )
-    for path, kind in _ecosystems.beside(_ecosystems.PIP, _ecosystems.MANIFEST, change.dir):
-        parsed = kind.parse(_git_text("HEAD", path)) if kind.parse else None
-        if parsed and any(
-            name == change.name and _versions.exact_body(token, mode=change.ecosystem) == new
-            for name, token, _top, _text in parsed[0]
-        ):
+    for path, _kind in _ecosystems.beside(_ecosystems.PIP, _ecosystems.MANIFEST, change.dir):
+        if _manifest_python.mentions(_git_text("HEAD", path), change.name):
             found.append((path, ""))
     return tuple(found)
 
@@ -823,7 +833,8 @@ def main() -> None:
     configured = _python_indexes.configured(_git_text)
     pip_dirs = sorted({change.dir for change in changes if change.ecosystem == "pip"})
     indexes = {
-        directory: _python_indexes.for_directory(directory, configured, _git_text, _git_files) for directory in pip_dirs
+        directory: _python_indexes.for_directory(directory, configured, _git_text, _git_files, _git_grep)
+        for directory in pip_dirs
     }
     exact = _exact_all(changes, indexes, configured, plan.hashed)
     trusted = tuple({**item.change._asdict(), "index": item.index} for item in exact if item.index)

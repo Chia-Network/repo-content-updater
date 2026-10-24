@@ -3,10 +3,10 @@
 The Dependabot config selects the organization's trusted indexes. A requirements
 file names its effective index with the last --index-url it reads, applying
 included files in place, and any extra source keeps PyPI in play. A trusted
-effective index with no extra source replaces PyPI for that file alone. A
-requirements file or include that is not a blob, an option the review cannot
-read, or a source that is not a trusted index or PyPI leaves that file unread,
-so no change in it is trusted.
+effective index with no extra source replaces PyPI for every install that reads
+the file. A requirements file or include that is not a blob, an option the
+review cannot read, or a source that is not a trusted index or PyPI leaves that
+file unread, so no change in it is trusted.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import dependency_manifest_python as _python
 
 _Read = Callable[[str, str], str]
 _ListFiles = Callable[[str], list[tuple[str, str]] | None]
+_Search = Callable[[str], list[str] | None]
 
 _REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
 _REGISTRY_FIELD_RE = re.compile(r"^    ([A-Za-z0-9_-]+):[ \t]+(.+?)[ \t]*$")
@@ -132,12 +133,20 @@ def configured(read: _Read) -> Indexes:
     return _merge(*(_dependabot_indexes(read("HEAD", path)) for path in _DEPENDABOT_CONFIGS))
 
 
+def _include_text(base: str, item: str) -> str | None:
+    """`item` joined to `base` as a repository path, or None when it is not a plain relative path."""
+    if not item or item.startswith(("/", "~")) or "\\" in item or _SCHEME_RE.match(item):
+        return None
+    return posixpath.normpath(posixpath.join(base, item))
+
+
 def _repo_include(base: str, item: str) -> str | None:
     """`item` joined to `base` as a repository path, or None when it is not a plain relative path inside the tree.
 
     A `..` after any other segment is rejected: normpath would collapse it across a directory that may be a symlink.
     """
-    if not item or item.startswith(("/", "~")) or "\\" in item or _SCHEME_RE.match(item):
+    joined = _include_text(base, item)
+    if joined is None:
         return None
     leading_parents = True
     for segment in item.split("/"):
@@ -146,7 +155,6 @@ def _repo_include(base: str, item: str) -> str | None:
                 return None
         else:
             leading_parents = False
-    joined = posixpath.normpath(posixpath.join(base, item))
     return joined if joined not in {"", ".", ".."} and not joined.startswith("../") else None
 
 
@@ -177,16 +185,19 @@ def _source(url: str, trusted: set[str]) -> str | None:
 class _Requirements:
     """The requirements files one directory reaches, each read once and resolving its includes in pip's order."""
 
-    def __init__(self, configured: Indexes, read: _Read, list_files: _ListFiles) -> None:
+    def __init__(self, configured: Indexes, read: _Read, list_files: _ListFiles, search: _Search) -> None:
         self._configured = configured
         self._read = read
         self._list_files = list_files
+        self._search = search
         self._listings: dict[str, list[tuple[str, str]] | None] = {}
         self._options: dict[str, _python.IndexOptions] = {}
+        self._included: dict[str, tuple[str | None, ...]] = {}
         self._effective: dict[str, _Effective] = {}
         self._parents: dict[str, set[str]] = {}  # each included path and the files that include it
         self._broken: set[str] = set()
         self._loaded: set[str] = set()
+        self._searched: dict[str, list[str] | None] = {}
 
     def _listing(self, directory: str) -> list[tuple[str, str]] | None:
         directory = directory or "."
@@ -194,18 +205,73 @@ class _Requirements:
             self._listings[directory] = self._list_files(directory)
         return self._listings[directory]
 
+    def _mode(self, path: str) -> str | None:
+        entries = self._listing(posixpath.dirname(path))
+        return None if entries is None else next((mode for name, mode in entries if name == path), None)
+
     def _include(self, path: str, item: str) -> str | None:
         """The included path when it is a blob inside the tree, or None."""
         included = _repo_include(posixpath.dirname(path), item)
         if included is None:
             return None
-        entries = self._listing(posixpath.dirname(included))
-        mode = None if entries is None else next((mode for name, mode in entries if name == included), None)
+        mode = self._mode(included)
         return included if mode is not None and _is_blob(mode) else None
 
-    def load(self, root: str) -> bool:
-        """Read every requirements file `root` reaches once, or return False when the directory exceeds the cap."""
-        pending = [root]
+    def _options_for(self, path: str) -> _python.IndexOptions:
+        if path not in self._options:
+            self._options[path] = _python.requirements_index_options(self._read("HEAD", path))
+        return self._options[path]
+
+    def _resolve_includes(self, path: str) -> tuple[str | None, ...]:
+        """The included path of each include option in `path`, in pip's order."""
+        if path not in self._included:
+            self._included[path] = tuple(
+                self._include(path, option.value)
+                for option in self._options_for(path).options
+                if option.kind == _python.INCLUDE
+            )
+        return self._included[path]
+
+    def _candidates(self, path: str) -> list[str] | None:
+        needle = posixpath.basename(path)
+        if needle not in self._searched:
+            self._searched[needle] = self._search(needle)
+        return self._searched[needle]
+
+    def _consider(self, candidate: str, path: str, roots: set[str], pending: list[str]) -> None:
+        """Add `candidate` to `roots` when it includes `path`, or leave `path` unread when that cannot be decided."""
+        if candidate == path:
+            return
+        mode = self._mode(candidate)
+        if mode is None or not _is_blob(mode):
+            self._broken.add(path)
+            return
+        options = self._options_for(candidate)
+        included = self._resolve_includes(candidate)
+        includes = [option for option in options.options if option.kind == _python.INCLUDE]
+        if path in included:
+            if options.unread or any(item is None for item in included):
+                self._broken.add(path)
+            elif candidate not in roots:
+                roots.add(candidate)
+                pending.append(candidate)
+            return
+        if any(
+            target is None and _include_text(posixpath.dirname(candidate), option.value) == path
+            for option, target in zip(includes, included)
+        ):
+            self._broken.add(path)
+            return
+        if options.unread:
+            self._broken.add(path)
+
+    def load(self, roots: set[str]) -> bool:
+        """Read every requirements file `roots` reaches and every tracked file that includes one.
+
+        `roots` gains each tracked file that includes a file it reaches. Return False when the set exceeds
+        `_MAX_REQUIREMENTS_FILES`.
+        """
+        pending = list(roots)
         while pending:
             path = pending.pop()
             if path in self._loaded:
@@ -213,19 +279,20 @@ class _Requirements:
             if len(self._loaded) >= _MAX_REQUIREMENTS_FILES:
                 return False
             self._loaded.add(path)
-            options = _python.requirements_index_options(self._read("HEAD", path))
-            self._options[path] = options
-            if options.unread:
+            if self._options_for(path).unread:
                 self._broken.add(path)
-            for option in options.options:
-                if option.kind != _python.INCLUDE:
-                    continue
-                included = self._include(path, option.value)
+            for included in self._resolve_includes(path):
                 if included is None:
                     self._broken.add(path)
-                    continue
-                self._parents.setdefault(included, set()).add(path)
-                pending.append(included)
+                else:
+                    self._parents.setdefault(included, set()).add(path)
+                    pending.append(included)
+            candidates = self._candidates(path)
+            if candidates is None:
+                self._broken.add(path)
+                continue
+            for candidate in candidates:
+                self._consider(candidate, path, roots, pending)
         return True
 
     def _effective_at(self, path: str, stack: frozenset[str]) -> _Effective:
@@ -236,9 +303,10 @@ class _Requirements:
         index: str | None = None
         extra = False
         trusted = set(self._configured.trusted)
-        for option in self._options[path].options:
+        resolved = iter(self._resolve_includes(path))
+        for option in self._options_for(path).options:
             if option.kind == _python.INCLUDE:
-                included = self._include(path, option.value)
+                included = next(resolved)
                 if included is None:
                     return _Effective(other=True)
                 child = self._effective_at(included, stack | {path})
@@ -279,7 +347,7 @@ class _Requirements:
         """Whether every requirements file in `roots` that includes `path` ends with `index` and no extra source.
 
         An unread file in `roots` may include `path` through a line this cannot read, so it leaves every
-        replacement in the directory unread.
+        replacement unread.
         """
         if any(self.effective(root).other for root in roots):
             return False
@@ -304,15 +372,20 @@ class _Requirements:
         return Indexes(effective.trusted, False, replaces)
 
 
-def for_directory(directory: str, configured: Indexes, read: _Read, list_files: _ListFiles) -> DirectoryIndexes:
-    """The index facts of each requirements file in `directory` at HEAD and each file they include.
+def for_directory(
+    directory: str,
+    configured: Indexes,
+    read: _Read,
+    list_files: _ListFiles,
+    search: _Search,
+) -> DirectoryIndexes:
+    """The index facts of each requirements file in `directory` at HEAD.
 
     A file listing that fails, a requirements file that is not a blob, or a reachable set of requirements files
     larger than `_MAX_REQUIREMENTS_FILES` trusts none in the directory. An include that is not a plain repository
     path, an include cycle, or another package source leaves that file unread, and an unread file leaves every
-    replacement in the directory unread. A file keeps its replacing index only when every requirements file in the
-    directory that includes it, directly or through other includes, ends with that same index and names no extra
-    source.
+    replacement unread. A file keeps its replacing index only when every tracked file in the repository that
+    includes it, directly or through other includes, ends with that same index and names no extra source.
     """
     files = list_files(directory)
     if files is None:
@@ -324,8 +397,9 @@ def for_directory(directory: str, configured: Indexes, read: _Read, list_files: 
             if not _is_blob(mode):
                 return DirectoryIndexes(Indexes(other=True))
             roots.add(path)
-    requirements = _Requirements(configured, read, list_files)
-    if not all(requirements.load(root) for root in roots):
+    requirements = _Requirements(configured, read, list_files, search)
+    constraints = set(roots)
+    if not requirements.load(constraints):
         return DirectoryIndexes(Indexes(other=True))
-    found = {path: requirements.facts(path, roots) for path in roots}
+    found = {path: requirements.facts(path, constraints) for path in roots}
     return DirectoryIndexes(configured, tuple(sorted(found.items())))

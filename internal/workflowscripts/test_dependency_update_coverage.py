@@ -646,6 +646,19 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
             with contextlib.chdir(tmp):
                 self.assertIsNone(coverage._git_files("."))
 
+    def test_git_grep_lists_tracked_files_at_head(self) -> None:
+        with TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            _git_repo(repo)
+            _commit(repo, "requirements.txt", "attrs==1.0\n", "root")
+            _commit(repo, "dev.txt", "-r requirements.txt\n", "dev")
+            _commit(repo, "notes.md", "nothing here\n", "notes")
+            with contextlib.chdir(repo):
+                self.assertEqual(coverage._git_grep("requirements.txt"), ["dev.txt"])
+                self.assertEqual(coverage._git_grep("absent"), [])
+            with contextlib.chdir(tmp):
+                self.assertIsNone(coverage._git_grep("requirements.txt"))
+
     def test_unreadable_diff_is_one_unresolved_gap(self) -> None:
         report, summary, _output = _run_main(None)
         self.assertEqual((report["path"], report["not_scanned_reason"]), ("pull request diff", "unresolved"))
