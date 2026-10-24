@@ -55,6 +55,36 @@ def _files(lock: str) -> dict[str, str]:
     return {"package.json": _PACKAGE, "pnpm-lock.yaml": lock}
 
 
+def _stanza_lock(foo_dependency: str) -> str:
+    return f"""lockfileVersion: '9.0'
+
+importers:
+
+  .:
+    dependencies:
+      foo:
+        specifier: ^1.0.0
+        version: 1.0.0
+
+packages:
+
+  foo@1.0.0:
+    resolution: {{integrity: sha512-foo}}
+  bar@1.0.0:
+    resolution: {{integrity: sha512-bar1}}
+  bar@2.0.0:
+    resolution: {{integrity: sha512-bar2}}
+
+snapshots:
+
+  foo@1.0.0:
+    dependencies:
+      bar: {foo_dependency}
+  bar@1.0.0: {{}}
+  bar@2.0.0: {{}}
+"""
+
+
 class PnpmLockTest(unittest.TestCase):
     def test_a_lockfile_only_bump_is_a_primary_change(self) -> None:
         plan = _plan(_files(_lock()), _files(_lock(zod="3.25.77", integrity="{integrity: sha512-new}")))
@@ -75,6 +105,14 @@ class PnpmLockTest(unittest.TestCase):
     def test_a_peer_suffix_that_moves_is_not_a_gap_of_its_dependent(self) -> None:
         plan = _plan(_files(_lock()), _files(_lock(peer="react@18.3.2")))
         self.assertEqual((plan.primary, plan.unchecked, plan.gaps), ((), (), ()))
+
+    def test_a_dependency_value_change_with_unmoved_stanzas_is_a_gap(self) -> None:
+        package = _package(dependencies={"foo": "^1.0.0"})
+        base = {"package.json": package, "pnpm-lock.yaml": _stanza_lock("1.0.0")}
+        head = {"package.json": package, "pnpm-lock.yaml": _stanza_lock("2.0.0")}
+        plan = _plan(base, head)
+        self.assertEqual((plan.primary, plan.unchecked), ((), ()))
+        self.assertEqual(plan.gaps, (("pnpm-lock.yaml", "unresolved"),))
 
     def test_a_lockfile_version_it_does_not_read_is_not_parsed(self) -> None:
         old = _lock().replace("'9.0'", "'5.4'")

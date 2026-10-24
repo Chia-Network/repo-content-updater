@@ -10,7 +10,10 @@ that resolution beside its version, so it is never an exact registry version.
 
 A stanza's text leaves out what other entries account for: the peer suffix of
 its key, the versions it resolves its own dependencies to, and the flags that
-say which installs include it. Residue is every other line, outside blank lines.
+say which installs include it. A dependency a stanza resolves to a version
+that has a stanza is also an entry at that version, so a resolution change no
+moved stanza accounts for changes that entry. Residue is every other line,
+outside blank lines.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ _STANZAS = frozenset({"packages", "snapshots"})
 _SCOPE_FLAGS = frozenset({"dev", "optional", "peer", "devOptional"})
 _KEY_RE = re.compile(r"""^( *)('[^']+'|"[^"]+"|[^\s'"][^\s]*?):(?: (.*))?$""")
 _REGISTRY_RE = re.compile(r"^\{integrity: (\S+)\}$")
+_REFERENCE = json.dumps(["dependency reference"])
 
 
 class _Line:
@@ -79,11 +83,13 @@ def _importer(where: str, body: list[_Line], indent: int) -> tuple[list[tuple[st
     return deps, residue
 
 
-def _stanza_text(kind: str, key: str, body: list[_Line]) -> tuple[str, str]:
-    """The text of a packages or snapshots stanza, and the resolution its version keeps, "" for the registry."""
+def _stanza_text(kind: str, key: str, body: list[_Line]) -> tuple[str, str, list[tuple[str, str]]]:
+    """The text of a packages or snapshots stanza, the resolution its version keeps ("" for the registry), and
+    each (name, version) its dependencies resolve to."""
     text: list[str] = []
     resolution = ""
     masking = False
+    references: list[tuple[str, str]] = []
     for line in body:
         if line.indent == 4:
             masking = line.key in _SECTIONS and not line.value
@@ -92,13 +98,14 @@ def _stanza_text(kind: str, key: str, body: list[_Line]) -> tuple[str, str]:
             if line.key == "resolution" and not _REGISTRY_RE.match(line.value):
                 resolution = line.value
         elif line.indent == 6 and masking:
+            references.append((line.key, line.value.split("(", 1)[0].strip()))
             text.append(f"      {line.key}: \0")
             continue
         text.append(line.raw)
     if kind == "packages" and not any(line.indent == 4 and line.key == "resolution" for line in body):
         resolution = "no resolution"
     name, version = _name_version(key)
-    return json.dumps([kind, f"{name}@{version}", text]), resolution
+    return json.dumps([kind, f"{name}@{version}", text]), resolution, references
 
 
 def _lockfile_version(lines: list[_Line]) -> str:
@@ -153,13 +160,19 @@ def pnpm_lock(text: str) -> Parsed | None:
     keys = [(kind, stanza.key) for kind, stanza, _lines in stanzas]
     if len(set(keys)) != len(keys):
         return None
+    stanza_versions = {_name_version(stanza.key) for _kind, stanza, _lines in stanzas}
     for kind, stanza, lines in stanzas:
         name, version = _name_version(stanza.key)
         if not name or stanza.value not in {"", "{}"} or (stanza.value and lines):
             return None
-        stanza_text, resolution = _stanza_text(kind, stanza.key, lines)
+        stanza_text, resolution, references = _stanza_text(kind, stanza.key, lines)
         entries.append(
             (name, f"{version} ({resolution})" if resolution else version, (name, version) in top, stanza_text)
+        )
+        entries.extend(
+            (ref_name, ref_version, (ref_name, ref_version) in top, _REFERENCE)
+            for ref_name, ref_version in references
+            if (ref_name, ref_version) in stanza_versions
         )
     return entries, "\n".join(residue)
 
