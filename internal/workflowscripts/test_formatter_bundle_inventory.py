@@ -49,6 +49,9 @@ class FormatterBundleInventoryTest(unittest.TestCase):
             ("upstream_malware_scan_lib.sh", "upstream-malware-scan-lib.sh"),
             ("upstream_malware_scan_findings.sh", "upstream-malware-scan-findings.sh"),
             ("upstream_release_checkout.sh", "upstream-release-checkout.sh"),
+            ("dcr_fetch.py", "dcr-fetch.py"),
+            ("dcr_verdict.py", "dcr-verdict.py"),
+            ("dcr_prompt.md", "dcr-prompt.md"),
         )
         self.assertEqual(sync_canonical_to_template(config), expected)
 

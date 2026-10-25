@@ -18,6 +18,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import tarfile
@@ -29,14 +30,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256, sha512
 from pathlib import Path, PurePosixPath
-from urllib.request import urlopen
+from urllib.request import urlopen as _urlopen
 
 MAX_UPDATES = 10
 MAX_FILES = 5000
 MAX_BYTES = 100 * 1024 * 1024
 MAX_DIFF_BYTES = 2 * 1024 * 1024
 MAX_PYPI_JSON = 5 * 1024 * 1024
-PYPI_DOWNLOAD_HOST = "files.pythonhosted.org"
+PYPI_HOSTS = frozenset({"pypi.org"})
+PYPI_DOWNLOAD_HOSTS = frozenset({"files.pythonhosted.org"})
 
 NPM_NAME = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 NPM_VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+){1,3}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
@@ -52,7 +54,7 @@ GO_SUM = re.compile(r"^h1:[A-Za-z0-9+/]{43}=$")
 ACTION_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 ACTION_SHA = re.compile(r"^[0-9a-f]{40}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
-BIDI_CONTROL = re.compile("[\u202a-\u202e\u2066-\u2069]")
+BIDI_CONTROL = re.compile(r"[\u202a-\u202e\u2066-\u2069]")
 
 
 class FetchError(Exception):
@@ -155,10 +157,13 @@ def _run(
     return proc
 
 
-def _read_url(url: str, limit: int) -> bytes:
-    """Read one URL into memory, refusing anything above the byte cap."""
+def _read_url(url: str, limit: int, hosts: frozenset[str]) -> bytes:
+    """Read one HTTPS URL from an expected host, refusing anything above the byte cap."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname not in hosts:
+        raise FetchError("download URL is not on the expected host")
     try:
-        with urlopen(url, timeout=30) as response:
+        with _urlopen(url, timeout=30) as response:  # ruff: ignore[suspicious-url-open-usage] - scheme and host checked above
             length = response.headers.get("Content-Length")
             if length is not None and int(length) > limit:
                 raise FetchError("download exceeds the size cap")
@@ -195,22 +200,17 @@ def _select_pypi_file(files: object) -> dict[str, object]:
     raise FetchError("PyPI response has no downloadable file")
 
 
-def _pypi_download_allowed(url: str) -> bool:
-    parsed = urllib.parse.urlsplit(url)
-    return parsed.scheme == "https" and parsed.hostname == PYPI_DOWNLOAD_HOST
-
-
 def _fetch_pypi(work: Path, name: str, version: str) -> Fetched:
     endpoint = f"https://pypi.org/pypi/{urllib.parse.quote(name, safe='')}/{urllib.parse.quote(version, safe='')}/json"
     try:
-        payload = json.loads(_read_url(endpoint, MAX_PYPI_JSON))
+        payload = json.loads(_read_url(endpoint, MAX_PYPI_JSON, PYPI_HOSTS))
     except json.JSONDecodeError as exc:
         raise FetchError("PyPI JSON could not be parsed") from exc
     chosen = _select_pypi_file(payload.get("urls") if isinstance(payload, dict) else None)
     url = chosen["url"]
-    if not isinstance(url, str) or not _pypi_download_allowed(url):
-        raise FetchError("PyPI file URL is not on the expected host")
-    data = _read_url(url, MAX_BYTES)
+    if not isinstance(url, str):
+        raise FetchError("PyPI file URL is missing")
+    data = _read_url(url, MAX_BYTES, PYPI_DOWNLOAD_HOSTS)
     digests = chosen.get("digests")
     expected = digests.get("sha256") if isinstance(digests, dict) else None
     actual = sha256(data).hexdigest()
@@ -222,7 +222,15 @@ def _fetch_pypi(work: Path, name: str, version: str) -> Fetched:
 
 
 def _fetch_gomod(work: Path, name: str, version: str) -> Fetched:
-    env = {**os.environ, "GO111MODULE": "on", "GOWORK": "off"}
+    env = {
+        **os.environ,
+        "GO111MODULE": "on",
+        "GOWORK": "off",
+        "GOFLAGS": "",
+        "GONOSUMDB": "",
+        "GOPRIVATE": "",
+        "GOSUMDB": "sum.golang.org",
+    }
     proc = _run(["go", "mod", "download", "-json", f"{name}@{version}"], cwd=work, env=env)
     try:
         payload = json.loads(proc.stdout)
@@ -345,7 +353,7 @@ def _zip_infos_ok(infos: list[zipfile.ZipInfo]) -> None:
     for info in infos:
         name = info.filename
         parts = PurePosixPath(name).parts
-        if name.startswith(("/", "\\")) or "\\" in name or ".." in parts or re.match(r"^[A-Za-z]:", name):
+        if not parts or name.startswith(("/", "\\")) or "\\" in name or ".." in parts or re.match(r"^[A-Za-z]:", name):
             raise FetchError("archive contains an unsafe path")
         if stat.S_ISLNK((info.external_attr >> 16) & 0o170000):
             raise FetchError("archive contains a symlink")
@@ -361,7 +369,14 @@ def _extract_zip(archive: Path, dest: Path) -> None:
         with zipfile.ZipFile(archive) as handle:
             infos = handle.infolist()
             _zip_infos_ok(infos)
-            handle.extractall(dest)
+            for info in infos:
+                target = dest.joinpath(*PurePosixPath(info.filename).parts)
+                if info.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with handle.open(info) as source, target.open("wb") as sink:
+                    shutil.copyfileobj(source, sink)
     except FetchError:
         raise
     except (zipfile.BadZipFile, OSError) as exc:
@@ -396,10 +411,6 @@ def _process_update(
     removed: list[str],
 ) -> UpdateResult:
     result = UpdateResult(update)
-    if not _present(update, added, removed):
-        result.status = "unverified"
-        result.note = "name and version were not found on the expected diff lines"
-        return result
     ecosystem = ECOSYSTEMS.get(update.ecosystem)
     if ecosystem is None:
         result.status = "not_reviewed"
@@ -408,6 +419,10 @@ def _process_update(
     if update.ecosystem == "github_actions" and not ACTION_SHA.fullmatch(update.new_version):
         result.status = "not_reviewed"
         result.note = "moving ref: the new pin is not a 40-hex commit SHA"
+        return result
+    if not _present(update, added, removed):
+        result.status = "unverified"
+        result.note = "name and version were not found on the expected diff lines"
         return result
     try:
         _validate(update, ecosystem)
@@ -443,7 +458,7 @@ def _write_diff(out_dir: Path) -> bool:
         )
     except OSError as exc:
         raise FetchError(f"diff failed: {exc}") from exc
-    if proc.returncode not in (0, 1):
+    if proc.returncode not in {0, 1}:
         detail = proc.stderr if isinstance(proc.stderr, bytes) else proc.stderr.encode()
         raise FetchError(f"diff exited {proc.returncode}: {detail.decode('utf-8', 'replace').strip()[:500]}")
     data = proc.stdout
@@ -456,11 +471,14 @@ def _write_diff(out_dir: Path) -> bool:
 
 def _write_file_list(out_dir: Path) -> list[str]:
     excluded = {"meta.json", "changes.diff", "files.txt"}
-    paths = sorted(
-        path.relative_to(out_dir).as_posix()
-        for path in out_dir.rglob("*")
-        if path.is_file() and path.name not in excluded
-    )
+    paths: list[str] = []
+    for path in out_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(out_dir).as_posix()
+        if relative not in excluded:
+            paths.append(relative)
+    paths.sort()
     (out_dir / "files.txt").write_text("\n".join(paths) + ("\n" if paths else ""), encoding="utf-8")
     return paths
 

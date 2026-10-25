@@ -15,3 +15,6 @@ templates/upstream-malware-scan*.sh
 templates/upstream-release-checkout.sh
 templates/check-node-runtime.sh
 templates/github-scripts-init.py
+templates/dcr-fetch.py
+templates/dcr-verdict.py
+templates/dcr-prompt.md

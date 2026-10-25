@@ -211,7 +211,7 @@ class PypiFetchTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
             with mock.patch.object(
-                dcr_fetch, "urlopen", side_effect=_pypi_urlopen(self._payload(file_bytes, digest), file_bytes)
+                dcr_fetch, "_urlopen", side_effect=_pypi_urlopen(self._payload(file_bytes, digest), file_bytes)
             ):
                 result = _process(
                     update,
@@ -231,7 +231,7 @@ class PypiFetchTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(
                 dcr_fetch,
-                "urlopen",
+                "_urlopen",
                 side_effect=_pypi_urlopen(payload, file_bytes),
             ),
         ):
@@ -248,7 +248,7 @@ class PypiFetchTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(
                 dcr_fetch,
-                "urlopen",
+                "_urlopen",
                 side_effect=_pypi_urlopen(payload, file_bytes),
             ),
         ):
@@ -323,6 +323,19 @@ class ScopeTest(unittest.TestCase):
             self.assertEqual(result.status, "not_reviewed")
             self.assertIn("ecosystem", result.note)
 
+    def test_unknown_ecosystem_is_not_reviewed_without_presence(self) -> None:
+        update = _update("tokio", "cargo", "1.0.0", "1.0.1")
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _process(update, Path(tmp), [], [])
+            self.assertEqual(result.status, "not_reviewed")
+
+    def test_moving_action_ref_is_not_reviewed_without_presence(self) -> None:
+        update = _update("owner/repo", "github_actions", "v1.0.0", "v1.1.0")
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _process(update, Path(tmp), [], [])
+            self.assertEqual(result.status, "not_reviewed")
+            self.assertIn("moving ref", result.note)
+
 
 class SafeExtractionTest(unittest.TestCase):
     def _extract_zip(self, payload: bytes) -> None:
@@ -383,6 +396,17 @@ class DiffAndIocTest(unittest.TestCase):
             patterns = [("axios", re.compile(r"axios@1\.14\.1"))]
             hits = dcr_fetch._scan_diff(path, patterns)
             self.assertEqual([hit["kind"] for hit in hits], ["ioc", "bidi"])
+
+    def test_file_list_keeps_artifact_files_with_output_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "old" / "pkg").mkdir(parents=True)
+            (out / "old" / "pkg" / "meta.json").write_text("{}", encoding="utf-8")
+            (out / "new").mkdir()
+            (out / "new" / "files.txt").write_text("package file", encoding="utf-8")
+            (out / "meta.json").write_text("{}", encoding="utf-8")
+            paths = dcr_fetch._write_file_list(out)
+            self.assertEqual(paths, ["new/files.txt", "old/pkg/meta.json"])
 
     def test_empty_ioc_list_is_an_error(self) -> None:
         with (

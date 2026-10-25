@@ -40,6 +40,10 @@ groups:
     templates:
       - dependency-cursor-review
 
+  - name: dependency-artifact-review
+    templates:
+      - dependency-artifact-review
+
 files:
   - name: commit-signing
     template_name: check-commit-signing.yml
@@ -59,6 +63,9 @@ files:
     template_name: check-node-runtime.sh
     repo_path: .github/scripts/check_node_runtime.sh
 
+  # Legacy bundle: still a default during the transition. It is replaced by
+  # dep-review (default) plus the opt-in dependency-artifact-review. A later
+  # change removes it from default_files and moves its paths to retired_paths.
   - name: dependency-cursor-review
     template_name: dependency-cursor-review.yml
     repo_path: .github/workflows/dependency-cursor-review.yml
@@ -202,6 +209,31 @@ files:
   - name: upstream-release-checkout
     template_name: upstream-release-checkout.sh
     repo_path: .github/scripts/upstream_release_checkout.sh
+
+  - name: dependency-artifact-review
+    template_name: dependency-artifact-review.yml
+    repo_path: .github/workflows/dependency-artifact-review.yml
+    adoption_marker: "repo-content-updater:dependency-artifact-review"
+    requires_paths:
+      - .github/workflows
+    companion_files:
+      - dependency-artifact-review-fetch
+      - dependency-artifact-review-verdict
+      - dependency-artifact-review-prompt
+    alternate_paths:
+      - .github/workflows/dependency-artifact-review.yaml
+
+  - name: dependency-artifact-review-fetch
+    template_name: dcr-fetch.py
+    repo_path: .github/scripts/dcr_fetch.py
+
+  - name: dependency-artifact-review-verdict
+    template_name: dcr-verdict.py
+    repo_path: .github/scripts/dcr_verdict.py
+
+  - name: dependency-artifact-review-prompt
+    template_name: dcr-prompt.md
+    repo_path: .github/scripts/dcr_prompt.md
 
   - name: dep-review
     template_name: dependency-review.yml

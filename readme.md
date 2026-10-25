@@ -26,6 +26,35 @@ Files listed under `default_files` are applied to every non-archived, non-fork r
 
 All defaults require `.github/workflows` containing at least one `.yml`/`.yaml` file. Defaults are adopt-only: an existing root without the adoption marker line (`# <adoption_marker>`) is left untouched; a root carrying the marker is updated in place along with its companions; a new bundle is written only when the root and every companion path are absent. Each default root must declare a unique `adoption_marker`. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot-actions` or `!dependency-cursor-review`. Opting out of any member of a default bundle, companions included, drops the whole bundle. Opting out of any file that writes the same repo path also opts out of the default, so `!dependabot` and `!go-dependabot` both opt out of `dependabot-actions`. A default is not added when an explicitly selected file writes the same repo path. Managed paths are only read, removed and written when every parent directory is a real directory inside the checkout.
 
+### Artifact review (opt-in)
+
+`dep-review` remains the default for every eligible repo: it ships the dependency
+review license and severity gate plus OSV scanning of the PR's lockfiles,
+including transitive dependencies.
+
+`dependency-artifact-review` is a separate, opt-in workflow. It reviews the
+published bytes for npm (`npm_and_yarn`), PyPI (`pip`), Go modules (`gomod`) and
+SHA-pinned GitHub Actions (`github_actions`) updates. Other ecosystems are
+reported as not reviewed. It is **not** in `default_files`.
+
+To enable it, add `dependency-artifact-review` (or
+`group:dependency-artifact-review`) to the repo's `managed-files` property, for
+example:
+
+```
+group:base,dependency-artifact-review
+```
+
+The workflow's publish job id is `dependency-review`, the same job id used by
+the default dependency review workflow. Their workflow names are different
+(`Dependency Artifact Review` versus `🚨 Dependency Review`), so required-check
+names remain unambiguous when both are enabled.
+
+The agent output must start with one `MALWARE_REVIEW_VERDICT:` line. For a
+manual `workflow_dispatch` validation run, supply both `pr_number` and the
+`updated_dependencies_json` string that `dependabot/fetch-metadata` reports for
+that PR.
+
 ## Config Format
 
 ```yaml
@@ -82,7 +111,7 @@ files:
 
 ### Malware verdict formatter (canonical vs templates)
 
-The dependency-cursor-review workflow ships formatter and review companion scripts from `templates/` into consumer repos (`.github/scripts/`). **Canonical edit location:** `internal/workflowscripts/*` only (Python modules, shell scan script, combine/prompt helpers). `make test` and `managed-files` run `sync_malware_formatter_templates.py` first, which **emit** byte-identical mirrors into `templates/` at apply time (formatter tests enforce sync). Generated `templates/malware-verdict-*.py`, `templates/github-scripts-init.py`, and other sync companions are **gitignored** — do not commit or hand-edit them. The consumer package marker is canonical `internal/workflowscripts/github_scripts_init.py` (synced to `.github/scripts/__init__.py`). **Reviewable in git:** workflow YAML and `templates/GENERATED-FORMATTER-MIRRORS`. Edit canonical copies in `internal/workflowscripts/` only.
+The dependency-cursor-review and dependency-artifact-review workflows ship companion scripts from `templates/` into consumer repos (`.github/scripts/`). **Canonical edit location:** `internal/workflowscripts/*` only (Python modules, shell scan script, combine/prompt helpers). `make test` and `managed-files` run `sync_malware_formatter_templates.py` first, which **emit** byte-identical mirrors into `templates/` at apply time (formatter tests enforce sync). Generated `templates/malware-verdict-*.py`, `templates/github-scripts-init.py`, `templates/dcr-fetch.py`, `templates/dcr-verdict.py`, `templates/dcr-prompt.md`, and other sync companions are **gitignored** — do not commit or hand-edit them. The consumer package marker is canonical `internal/workflowscripts/github_scripts_init.py` (synced to `.github/scripts/__init__.py`). **Reviewable in git:** workflow YAML and `templates/GENERATED-FORMATTER-MIRRORS`. Edit canonical copies in `internal/workflowscripts/` only.
 
 * `name` is the name to reference the file by in groups or in the custom property.
 * `template_name` is the name of the template to use from the supplied templates directory

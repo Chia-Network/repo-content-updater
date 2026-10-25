@@ -89,7 +89,7 @@ RULES: tuple[Rule, ...] = (
         "failure",
         lambda facts: facts.verdict == "suspicious" and not facts.warn_only,
     ),
-    Rule("all updates are outside the reviewed ecosystems", "success", _all_not_reviewed),
+    Rule("all updates are not reviewed (outside the reviewed ecosystems)", "success", _all_not_reviewed),
     Rule("the agent verdict is suspicious (warn only)", "success", lambda facts: facts.verdict == "suspicious"),
     Rule("the agent verdict is benign", "success", lambda facts: facts.verdict == "benign"),
 )

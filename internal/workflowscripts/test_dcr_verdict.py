@@ -116,6 +116,7 @@ class DecisionTableTest(unittest.TestCase):
         facts = _facts(updates=[_update("not_reviewed")], verdict="benign")
         decision = decide(facts)
         self.assertEqual(decision.conclusion, "success")
+        self.assertIn("not reviewed", decision.reason)
         self.assertIn("outside the reviewed", decision.reason)
 
     def test_no_updates_fails(self) -> None:

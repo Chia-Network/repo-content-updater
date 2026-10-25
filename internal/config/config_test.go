@@ -84,6 +84,36 @@ func TestConfigIsValid(t *testing.T) {
 	assert.Equal(t, []string{"dependabot"}, mixed)
 }
 
+func TestDependencyArtifactReviewIsOptInOnly(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	assert.NotContains(t, cfg.DefaultFiles, "dependency-artifact-review")
+	selection := cfg.ResolveManagedFileSelection("repo", nil)
+	assert.NotContains(t, defaultNames(selection), "dependency-artifact-review")
+
+	expanded, err := cfg.ExpandManagedFileEntries([]string{"dependency-artifact-review"})
+	assert.Nil(t, err)
+	assert.Equal(t, []string{
+		"dependency-artifact-review",
+		"dependency-artifact-review-fetch",
+		"dependency-artifact-review-verdict",
+		"dependency-artifact-review-prompt",
+	}, expanded)
+
+	groupExpanded, err := cfg.ExpandManagedFileEntries([]string{"group:dependency-artifact-review"})
+	assert.Nil(t, err)
+	assert.Equal(t, expanded, groupExpanded)
+
+	file := cfg.GetFileInfo("dependency-artifact-review")
+	if assert.NotNil(t, file) {
+		assert.Equal(t, "dependency-artifact-review.yml", file.TemplateName)
+		assert.Equal(t, ".github/workflows/dependency-artifact-review.yml", file.RepoPath)
+		assert.Equal(t, "repo-content-updater:dependency-artifact-review", file.AdoptionMarker)
+		assert.Equal(t, []string{".github/workflows"}, file.RequiresPaths)
+	}
+}
+
 func TestManagedFileAliasesAndPathsIncludeCompanions(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
