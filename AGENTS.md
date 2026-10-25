@@ -57,6 +57,11 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
 - Any mention of the package in `pyproject.toml`, `setup.py`, `setup.cfg` or
   `Pipfile` is an unhashed occurrence with no index, because pip installs it
   from the default index. It never makes a change trusted.
+- Includer discovery reads each include option in a requirements file and
+  treats a tracked symlink that resolves to a requirements file, or a tracked
+  `.txt` or `.in` file that is not UTF-8 text, as leaving the base unread. A
+  base filename split across a continuation or built from quoted pieces is
+  not detected; that is an accepted limitation.
 - A Dependabot `replaces-base` setting describes Dependabot's own resolution.
   It never makes an index replace PyPI for pip; only a requirements file's
   effective index does.

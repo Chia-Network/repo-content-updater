@@ -36,3 +36,6 @@ adversarial.
 - "Packages from the organization's configured package indexes are not
   scanned." That trust is deliberate (see "Trusted package indexes" in
   `AGENTS.md`).
+- An includer whose base filename is split across a continuation or built
+  from quoted pieces is not detected. That limitation is documented in
+  `AGENTS.md`.
