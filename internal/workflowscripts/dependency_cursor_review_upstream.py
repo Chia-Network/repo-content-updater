@@ -103,9 +103,10 @@ def _set_timeout(connection: http.client.HTTPSConnection, budget: _DownloadBudge
 class _Deadline:
     """Shut a connection's socket down when its budget deadline passes.
 
-    A socket timeout bounds one receive, but not a header or chunk-size line that arrives in many small pieces, nor
-    the whole connection setup. The timer sets `fired` before it shuts the socket down, so a read that ends at the
-    deadline is a failure rather than the end of a body.
+    The timer bounds the request, the status and header lines, and each body or chunk-size read, including one that
+    arrives in many small pieces. The connect and TLS handshake are bounded by the per-operation socket timeout, the
+    smaller of _TIMEOUT and the time remaining. The timer sets `fired` before it shuts the socket down, so a read that
+    ends at the deadline is a failure rather than the end of a body.
     """
 
     def __init__(self, connection: http.client.HTTPSConnection, budget: _DownloadBudget) -> None:
