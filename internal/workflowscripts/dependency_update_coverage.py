@@ -516,7 +516,7 @@ def _plan(token: str = "") -> _diff.Plan | None:
     """
     base = _base_commit(token)
     changed = _changed_paths(base) if base else None
-    return None if changed is None else _diff.plan(changed, _read_text, base)._replace(base=base)
+    return None if changed is None else _diff.plan(changed, _read_text, base)
 
 
 def _warning(change: _diff.Change, reason: str) -> dict:

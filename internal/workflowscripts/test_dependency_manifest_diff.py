@@ -154,7 +154,7 @@ class NpmTest(unittest.TestCase):
         lock = _npm_lock({"node_modules/chalk": "5.1.2"})
         base = {"package.json": _package(dependencies={"chalk": "^5.0.0"}), "package-lock.json": lock}
         head = {"package.json": _package(dependencies={"chalk": "^5.1.0"}), "package-lock.json": lock}
-        self.assertEqual(_plan(base, head), diff.Plan((), (), (("package.json", "unresolved"),), ()))
+        self.assertEqual(_plan(base, head), diff.Plan((), (), (("package.json", "unresolved"),), (), base=_BASE))
 
     def test_a_name_added_to_the_manifest_but_not_installed_by_the_lock_is_a_gap(self) -> None:
         base = {
@@ -228,21 +228,21 @@ class NpmTest(unittest.TestCase):
             ),
         }
         self.assertEqual(
-            _plan(base, head), diff.Plan(gaps=(("package.json", "unresolved"), ("yarn.lock", "unresolved")))
+            _plan(base, head), diff.Plan(gaps=(("package.json", "unresolved"), ("yarn.lock", "unresolved")), base=_BASE)
         )
 
     def test_a_yarn_header_range_change_alone_is_a_gap(self) -> None:
         package = _package(dependencies={"lodash": "^4.17.0"})
         base = {"package.json": package, "yarn.lock": _yarn(("lodash@^4.17.0", "4.17.21"))}
         head = {"package.json": package, "yarn.lock": _yarn(("lodash@^4.17.21", "4.17.21"))}
-        self.assertEqual(_plan(base, head), diff.Plan(gaps=(("yarn.lock", "unresolved"),)))
+        self.assertEqual(_plan(base, head), diff.Plan(gaps=(("yarn.lock", "unresolved"),), base=_BASE))
 
     def test_a_lock_root_range_change_at_an_unchanged_version_is_a_gap(self) -> None:
         package = _package(dependencies={"lodash": "^4.17.0"})
         installed = {"node_modules/lodash": "4.17.21"}
         base = {"package.json": package, "package-lock.json": _npm_lock(installed, {"lodash": "^4.17.0"})}
         head = {"package.json": package, "package-lock.json": _npm_lock(installed, {"lodash": "^4.17.21"})}
-        self.assertEqual(_plan(base, head), diff.Plan(gaps=(("package-lock.json", "unresolved"),)))
+        self.assertEqual(_plan(base, head), diff.Plan(gaps=(("package-lock.json", "unresolved"),), base=_BASE))
 
     def test_a_lock_root_range_that_moves_with_its_version_is_a_primary_change(self) -> None:
         base = {
@@ -254,7 +254,7 @@ class NpmTest(unittest.TestCase):
             "package-lock.json": _npm_lock({"node_modules/lodash": "4.17.21"}, {"lodash": "^4.17.21"}),
         }
         primary = (Change("npm", ".", "lodash", "4.17.20", "4.17.21"),)
-        self.assertEqual(_plan(base, head), diff.Plan(primary=primary, hashed=("package-lock.json",)))
+        self.assertEqual(_plan(base, head), diff.Plan(primary=primary, hashed=("package-lock.json",), base=_BASE))
 
     def test_manifest_text_outside_the_dependency_entries_is_a_gap(self) -> None:
         base = {"package.json": _package(dependencies={"a": "1.0.0"}, scripts={"test": "jest"})}
@@ -389,11 +389,13 @@ class GoTest(unittest.TestCase):
         self.assertEqual(self._bump(base_sum, head_sum).gaps, (("go.sum", "unresolved"),))
 
     def test_a_go_sum_change_alone_is_a_gap_or_unchecked(self) -> None:
-        self.assertEqual(_plan({"go.sum": "a\n"}, {"go.sum": "b\n"}), diff.Plan(gaps=(("go.sum", "unresolved"),)))
+        self.assertEqual(
+            _plan({"go.sum": "a\n"}, {"go.sum": "b\n"}), diff.Plan(gaps=(("go.sum", "unresolved"),), base=_BASE)
+        )
         module = "github.com/spf13/cobra"
         plan = _plan({"go.sum": self._sum((module, "v1.8.0"))}, {"go.sum": self._sum((module, "v1.8.1"))})
         self.assertEqual(
-            plan, diff.Plan(unchecked=(Change("go", ".", module, "v1.8.0", "v1.8.1"),), hashed=("go.sum",))
+            plan, diff.Plan(unchecked=(Change("go", ".", module, "v1.8.0", "v1.8.1"),), hashed=("go.sum",), base=_BASE)
         )
 
     def test_a_directive_or_replace_change_is_a_gap(self) -> None:
@@ -573,7 +575,9 @@ class PythonTest(unittest.TestCase):
         head = {**pipfile, "Pipfile.lock": pipfile_lock_text({"requests": "2.32.0"}, meta_hash="b")}
         self.assertEqual(
             _plan(base, head),
-            diff.Plan(primary=(Change("pip", ".", "requests", "==2.31.0", "==2.32.0"),), hashed=("Pipfile.lock",)),
+            diff.Plan(
+                primary=(Change("pip", ".", "requests", "==2.31.0", "==2.32.0"),), hashed=("Pipfile.lock",), base=_BASE
+            ),
         )
 
 
@@ -700,6 +704,9 @@ class ChangedPathTest(unittest.TestCase):
     def test_type_changes_are_gaps(self) -> None:
         plan = diff.plan([("requirements.txt", "requirements.txt", "T")], lambda *_args: "", _BASE)
         self.assertEqual(plan.gaps, (("requirements.txt", "unresolved"),))
+
+    def test_the_plan_carries_the_base_revision(self) -> None:
+        self.assertEqual(diff.plan([], lambda *_args: "", "abc123").base, "abc123")
 
 
 if __name__ == "__main__":
