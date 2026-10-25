@@ -44,11 +44,14 @@ package indexes.** The indexes are listed only in
 `internal/workflowscripts/dependency_cursor_review_upstream.py`.
 
 - A pip change is trusted only when its name matches `_PYPI_NAME_RE`, its new
-  version is exact, every occurrence of that name and version that
-  `locked_occurrences` finds beside the change records hashes (a hashed
-  requirements line, a poetry.lock `files` entry or a Pipfile.lock entry),
-  and every recorded hash is `sha256:` and equals the sha256 of a file
-  downloaded from a hard-coded trusted index for that version.
+  version is at that version (compared in PEP 440 canonical form), every
+  occurrence of that name in each lock beside the change and each changed
+  hashed requirements file records hashes (a hashed requirements line, a
+  poetry.lock `files` entry or a Pipfile.lock entry), and every recorded hash
+  is `sha256:` and equals the sha256 of a file downloaded from a hard-coded
+  trusted index for that version.
+- A lock entry is hashed only from a poetry legacy source, a poetry url source
+  with files, or a Pipfile index. Any other source is unhashed and scanned.
 - The code downloads and hashes each file itself. A hash fragment on an index
   page is not accepted in place of the downloaded bytes.
 - Each package check has its own time and byte limits for the index page and

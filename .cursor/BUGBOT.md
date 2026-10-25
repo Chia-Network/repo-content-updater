@@ -17,9 +17,11 @@ untrusted.
 - A second parser or decision point for something that already has a
   canonical one.
 - Anything that trusts a pip change without a hash proof: an unhashed
-  occurrence, a non-sha256 hash, a hash option the parser cannot fully read,
-  or a hash that does not match a file downloaded from a hard-coded trusted
-  index at that exact version. Repository content never adds a trusted index
+  occurrence, a lock entry from any source other than a poetry legacy source,
+  a poetry url source with files, or a Pipfile index, a non-sha256 hash, a
+  hash option the parser cannot fully read, or a hash that does not match a
+  file downloaded from a hard-coded trusted index at that version (compared
+  in PEP 440 canonical form). Repository content never adds a trusted index
   (see "Trusted package indexes" in `AGENTS.md`).
 - Treating a `pip install .` or a downstream install from PyPI as covered by
   a lock hash. Only installs that consume the lock are covered.
