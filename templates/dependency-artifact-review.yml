@@ -3,13 +3,7 @@
 # {{- if .ADOPTION_MARKER }}
 # {{ .ADOPTION_MARKER }}
 # {{- end }}
-# Dependency Artifact Review workflow
-#
-# Opt-in review of the published artifacts for npm, PyPI, Go module and
-# SHA-pinned GitHub Action updates. The prepare job fetches artifacts with a
-# read-only token and no PR-head checkout. The agent job has only the Cursor
-# key. The publish job is the required `dependency-review` check; its workflow
-# name is distinct from the default "🚨 Dependency Review" workflow.
+# Opt-in review of published artifacts for npm, PyPI, Go modules and SHA-pinned Actions.
 name: Dependency Artifact Review
 
 on:
@@ -54,19 +48,8 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      - name: Copy trusted scripts out of the workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          dest="${RUNNER_TEMP}/trusted-dcr-scripts"
-          mkdir -p "${dest}"
-          cp -a .trusted-dcr-scripts/.github/scripts/. "${dest}/"
-          test -s "${dest}/dcr_fetch.py"
-          test -s "${dest}/dcr_prompt.md"
-
       - name: Resolve and validate target PR
         id: pr
-        shell: bash
         env:
           GH_TOKEN: ${{`{{ github.token }}`}}
           DISPATCH_PR: ${{`{{ github.event.inputs.pr_number }}`}}
@@ -74,14 +57,8 @@ jobs:
         run: |
           set -euo pipefail
           number="${PR_NUMBER:-${DISPATCH_PR}}"
-          case "$number" in
-          '' | *[!0-9]*)
-            echo "A numeric PR number is required." >&2
-            exit 1
-            ;;
-          esac
-          author="$(gh pr view "$number" --json author --jq '.author.login')"
-          if [ "$author" != "dependabot[bot]" ]; then
+          [[ "$number" =~ ^[0-9]+$ ]] || { echo "A numeric PR number is required." >&2; exit 1; }
+          if [ "$(gh pr view "$number" --json author --jq '.author.login')" != "dependabot[bot]" ]; then
             echo "PR author is not dependabot[bot]." >&2
             exit 1
           fi
@@ -95,7 +72,6 @@ jobs:
           github-token: ${{`{{ github.token }}`}}
 
       - name: Collect PR diff
-        shell: bash
         env:
           GH_TOKEN: ${{`{{ github.token }}`}}
           PR_NUMBER: ${{`{{ steps.pr.outputs.number }}`}}
@@ -103,7 +79,6 @@ jobs:
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/pr-diff"
           gh pr diff "$PR_NUMBER" > "${RUNNER_TEMP}/pr-diff/pr.diff"
-          test -s "${RUNNER_TEMP}/pr-diff/pr.diff"
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -111,7 +86,6 @@ jobs:
           python-version: "3.12"
 
       - name: Fetch published artifacts
-        shell: bash
         env:
           UPDATED_DEPENDENCIES_JSON: >-
             ${{`{{ github.event_name == 'workflow_dispatch' && github.event.inputs.updated_dependencies_json || steps.metadata.outputs['updated-dependencies-json'] }}`}}
@@ -121,13 +95,10 @@ jobs:
             {{ .DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS }}
         run: |
           set -euo pipefail
-          python3 -I "${RUNNER_TEMP}/trusted-dcr-scripts/dcr_fetch.py"
-          cp "${RUNNER_TEMP}/trusted-dcr-scripts/dcr_prompt.md" "${RUNNER_TEMP}/dcr-review/dcr_prompt.md"
-          test -s "${RUNNER_TEMP}/dcr-review/meta.json"
-          test -s "${RUNNER_TEMP}/dcr-review/changes.diff"
+          python3 -I .trusted-dcr-scripts/.github/scripts/dcr_fetch.py
+          cp .trusted-dcr-scripts/.github/scripts/dcr_prompt.md "${DCR_OUT}/dcr_prompt.md"
 
       - name: Upload review inputs
-        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: dcr-artifact-review-${{`{{ github.run_id }}`}}
@@ -137,7 +108,6 @@ jobs:
 
   agent:
     needs: prepare
-    if: needs.prepare.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -150,30 +120,15 @@ jobs:
           path: dcr-review
 
       - name: Install Cursor CLI
-        shell: bash
         run: |
           installer="$(mktemp)"
           trap 'rm -f "$installer"' EXIT
           curl https://cursor.com/install -fsSL -o "$installer"
-          if [ ! -s "$installer" ]; then
-            echo "Cursor installer download was empty."
-            exit 1
-          fi
           bash "$installer"
-          for bin_dir in "$HOME/.cursor/bin" "$HOME/.local/bin"; do
-            if [ -d "$bin_dir" ]; then
-              echo "$bin_dir" >> "$GITHUB_PATH"
-              export PATH="$bin_dir:$PATH"
-            fi
-          done
-          if ! command -v agent >/dev/null 2>&1; then
-            echo "Could not locate 'agent' binary after Cursor CLI install."
-            exit 1
-          fi
+          printf '%s\n' "$HOME/.local/bin" "$HOME/.cursor/bin" >> "$GITHUB_PATH"
 
       - name: Run Cursor agent
         timeout-minutes: 10
-        shell: bash
         env:
           CURSOR_API_KEY: ${{`{{ secrets.CURSOR_API_KEY }}`}}
           GITHUB_TOKEN: ""
@@ -183,10 +138,6 @@ jobs:
           ACTIONS_RUNTIME_TOKEN: ""
         run: |
           set -euo pipefail
-          if [ -n "${GITHUB_TOKEN:-}" ] || [ -n "${GH_TOKEN:-}" ]; then
-            echo "GITHUB_TOKEN is set." >&2
-            exit 1
-          fi
           out="${RUNNER_TEMP}/dcr-agent"
           mkdir "$out"
           if [ -z "$CURSOR_API_KEY" ]; then
@@ -196,38 +147,15 @@ jobs:
           stream_file="$(mktemp)"
           trap 'rm -f "$stream_file"' EXIT
           (cd dcr-review && agent -f --mode ask -p --output-format stream-json < dcr_prompt.md) > "$stream_file"
-          python3 -I - "$stream_file" <<'PY' >"${out}/agent_output.txt"
-          import json
-          import sys
-
-          result = ""
-          final = ""
-          with open(sys.argv[1], encoding="utf-8") as handle:
-              for line in handle:
-                  line = line.strip()
-                  if not line:
-                      continue
-                  try:
-                      event = json.loads(line)
-                  except json.JSONDecodeError:
-                      continue
-                  if not isinstance(event, dict):
-                      continue
-                  if event.get("type") == "assistant":
-                      text = "".join(
-                          block.get("text", "")
-                          for block in event.get("message", {}).get("content", [])
-                          if isinstance(block, dict)
-                      )
-                      if text:
-                          final = text
-                  elif event.get("type") == "result":
-                      result = event.get("result", "")
-          sys.stdout.write(result or final)
-          PY
+          jq -rRs '
+            [split("\n")[] | fromjson? | select(type == "object")]
+            | (map(select(.type == "result") | .result) | last // "") as $result
+            | if $result != "" then $result
+              else (map(select(.type == "assistant") | [.message.content[]? | .text // ""] | join("")) | last // "")
+              end
+          ' "$stream_file" > "${out}/agent_output.txt"
 
       - name: Upload agent output
-        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: dcr-artifact-agent-${{`{{ github.run_id }}`}}
@@ -270,30 +198,23 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Download review inputs
+      - name: Download review outputs
         uses: actions/download-artifact@v8
         with:
-          name: dcr-artifact-review-${{`{{ github.run_id }}`}}
-          path: dcr-review
-
-      - name: Download agent output
-        uses: actions/download-artifact@v8
-        with:
-          name: dcr-artifact-agent-${{`{{ github.run_id }}`}}
-          path: dcr-agent-output
+          pattern: dcr-artifact-*
+          merge-multiple: true
+          path: dcr-output
 
       - name: Decide and compose comment
         id: verdict
-        shell: bash
         env:
-          DCR_META: ${{`{{ github.workspace }}`}}/dcr-review/meta.json
-          DCR_AGENT_OUTPUT: ${{`{{ github.workspace }}`}}/dcr-agent-output/agent_output.txt
+          DCR_META: ${{`{{ github.workspace }}`}}/dcr-output/meta.json
+          DCR_AGENT_OUTPUT: ${{`{{ github.workspace }}`}}/dcr-output/agent_output.txt
           DCR_COMMENT: ${{`{{ github.workspace }}`}}/dcr-comment.md
           DCR_VERDICT_JSON: ${{`{{ github.workspace }}`}}/dcr-verdict.json
         run: |
           set -euo pipefail
           python3 -I .trusted-dcr-scripts/.github/scripts/dcr_verdict.py
-          test -s dcr-comment.md
 
       - name: Post or update PR comment
         uses: actions/github-script@v9
@@ -307,10 +228,7 @@ jobs:
             const body = fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
             const marker = process.env.REVIEW_MARKER || '';
             const number = Number(process.env.PR_NUMBER || '0');
-            if (!number) {
-              core.setFailed('No PR number was resolved.');
-              return;
-            }
+            if (!number) return core.setFailed('No PR number was resolved.');
             const { owner, repo } = context.repo;
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner,
@@ -319,27 +237,15 @@ jobs:
               per_page: 100,
             });
             const ours = comments
-              .filter((comment) => typeof comment.body === 'string' && comment.body.includes('<!-- dcr-artifact-review sha256:'))
-              .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+              .filter((comment) => comment.body?.includes('<!-- dcr-artifact-review sha256:'))
+              .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
             if (marker && ours.some((comment) => comment.body.includes(marker))) {
               core.info('This artifact review is already recorded.');
               return;
             }
-            if (ours.length > 0) {
-              await github.rest.issues.updateComment({
-                owner,
-                repo,
-                comment_id: ours[ours.length - 1].id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: number,
-                body,
-              });
-            }
+            const issue = { owner, repo, issue_number: number, body };
+            if (!ours.length) return github.rest.issues.createComment(issue);
+            await github.rest.issues.updateComment({ ...issue, comment_id: ours.at(-1).id });
 
       - name: Set the check result
         if: ${{`{{ steps.verdict.outputs.conclusion != 'success' }}`}}
