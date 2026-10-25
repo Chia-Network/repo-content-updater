@@ -15,6 +15,7 @@ from unittest.mock import patch
 import dependency_cursor_review_prompts as prompts
 import dependency_cursor_review_upstream as upstream
 import dependency_manifest_diff as diff
+import dependency_repo_git as repo_git
 import dependency_update_coverage as coverage
 import malware_verdict_formatter as formatter
 
@@ -121,7 +122,7 @@ def _run_main(
             stack.enter_context(patch.object(coverage._ecosystems, "upstream_repo", repo))
             stack.enter_context(patch.object(coverage, "_clone", clone))
             stack.enter_context(patch.object(coverage, "_git_files", files))
-            stack.enter_context(patch.object(coverage, "_repo_facts", return_value=coverage._RepoFacts()))
+            stack.enter_context(patch.object(repo_git, "repo_facts", return_value=repo_git.RepoFacts()))
             if scan is not None:
                 stack.enter_context(patch.object(coverage, "_scan_one", scan))
             coverage.main()

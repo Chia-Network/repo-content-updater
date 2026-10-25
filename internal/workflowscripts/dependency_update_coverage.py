@@ -13,10 +13,8 @@ the summary.
 from __future__ import annotations
 
 import base64
-import codecs
 import json
 import os
-import posixpath
 import re
 import shutil
 import subprocess
@@ -403,149 +401,6 @@ def any_read(report: dict) -> bool:
 
 
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
-_MAX_PIP_SETTING_CANDIDATES = 256
-_MAX_REPO_FACT_BYTES = 8 * 1024 * 1024
-
-
-class _RepoFacts(NamedTuple):
-    """Tracked repository facts that leave a requirements file unable to replace PyPI."""
-
-    unread: bool = False  # whether a tracked .txt or .in file cannot be read or decoded
-    aliases: frozenset[str] = frozenset()  # each repository path a tracked symlink resolves to
-    pip_settings: bool = False  # whether a tracked file sets a pip setting outside a requirements file
-    pip_options: frozenset[str] = frozenset()  # files with a pip index option, before the read set is known
-    texts: tuple[str, ...] = ()  # decoded text of each .txt or .in file a UTF-8 text search does not read
-
-
-# The BOMs pip strips, longest first so a UTF-32 BOM is not read as UTF-16.
-_BOM_CODECS = (
-    (codecs.BOM_UTF32_LE, "utf-32-le"),
-    (codecs.BOM_UTF32_BE, "utf-32-be"),
-    (codecs.BOM_UTF8, "utf-8"),
-    (codecs.BOM_UTF16_LE, "utf-16-le"),
-    (codecs.BOM_UTF16_BE, "utf-16-be"),
-)
-
-
-def _utf8_text(data: bytes) -> bool:
-    """Whether `data` is UTF-8 text with no NUL and no UTF-16 BOM."""
-    if data.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in data:
-        return False
-    try:
-        data.decode("utf-8")
-    except UnicodeDecodeError:
-        return False
-    return True
-
-
-def _pip_decode(data: bytes) -> str | None:
-    """`data` decoded as pip reads a requirements file, or None when its BOM-selected codec cannot decode it."""
-    for bom, codec in _BOM_CODECS:
-        if data.startswith(bom):
-            try:
-                return data[len(bom) :].decode(codec)
-            except UnicodeDecodeError:
-                return None
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return data.decode("latin-1")
-
-
-def _symlink_target(path: str, target: str) -> str | None:
-    """The repository path a symlink at `path` points to, or None when it is absolute or outside the tree."""
-    if not target or target.startswith(("/", "~")) or "\\" in target:
-        return None
-    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
-    return None if resolved in {"", ".", ".."} or resolved.startswith("../") else resolved
-
-
-def _repo_facts() -> _RepoFacts | None:
-    """The tracked-file facts that leave a requirements file unable to replace PyPI.
-
-    A tracked .txt or .in file that text search cannot read is decoded as pip decodes it; its text matters only when
-    it names a loaded requirements file. A tracked symlink whose target resolves to a loaded file also matters. A
-    tracked pip.conf or pip.ini, a tracked file that names a pip index environment variable or a pip config key, or
-    a pip command with an index option outside the requirements files the index check reads leaves every
-    requirements file unable to replace PyPI. An unreadable file or a read over the size limit does the same.
-    """
-    entries = _git.tree()
-    if entries is None:
-        return None
-    candidates = _git.grep_any(_python_indexes.PIP_SETTING_PATTERNS, _MAX_PIP_SETTING_CANDIDATES)
-    if candidates is None:
-        return None
-    read_paths = {path for path, mode in entries if mode == "120000"}
-    read_paths.update(path for path, mode in entries if path.endswith((".txt", ".in")) and mode.startswith("100"))
-    read_paths.update(candidates)
-    blobs, unread = _git.blobs(sorted(read_paths), _MAX_REPO_FACT_BYTES)
-    settings = False
-    aliases: set[str] = set()
-    pip_options: set[str] = set()
-    texts: list[str] = []
-    for path, mode in entries:
-        if posixpath.basename(path).lower() in _python_indexes.PIP_CONF_NAMES:
-            settings = True
-        if mode == "120000":
-            data = blobs.get(path)
-            if data is None:
-                unread = True
-                continue
-            try:
-                target = data.decode("utf-8")
-            except UnicodeDecodeError:
-                unread = True
-                continue
-            resolved = _symlink_target(path, target)
-            if resolved is not None:
-                aliases.add(resolved)
-        elif path.endswith((".txt", ".in")) and mode.startswith("100"):
-            data = blobs.get(path)
-            if data is None or (text := _pip_decode(data)) is None:
-                unread = True
-            elif not _utf8_text(data):
-                texts.append(text)
-    for path in candidates:
-        data = blobs.get(path)
-        if data is None:
-            unread = True
-            continue
-        if path.endswith((".txt", ".in")):
-            text = _pip_decode(data)
-        else:
-            try:
-                text = data.decode("utf-8")
-            except UnicodeDecodeError:
-                text = None
-        if text is None:
-            unread = True
-            continue
-        found_settings, found_options = _python_indexes.pip_setting_flags(path, text)
-        settings = settings or found_settings
-        if found_options:
-            pip_options.add(path)
-    return _RepoFacts(unread, frozenset(aliases), settings, frozenset(pip_options), tuple(texts))
-
-
-def _unread_requirements(loaded: frozenset[str], facts: _RepoFacts | None) -> frozenset[str]:
-    """The loaded requirements files a repository-wide fact leaves unable to replace PyPI.
-
-    A fact that leaves every file unable to replace PyPI is reported by `_no_replace` instead.
-    """
-    if facts is None or facts.unread:
-        return frozenset()
-    return frozenset(
-        path
-        for path in loaded
-        if path in facts.aliases or any(posixpath.basename(path) in text for text in facts.texts)
-    )
-
-
-def _no_replace(loaded: frozenset[str], facts: _RepoFacts | None) -> bool:
-    """Whether a repository-wide fact leaves no requirements file able to replace PyPI."""
-    if facts is None or facts.unread:
-        return True
-    return facts.pip_settings or bool(facts.pip_options - loaded)
 
 
 def _replacement_possible(
@@ -973,13 +828,13 @@ def main() -> None:
 
     indexes = build(no_repo_facts, replace_allowed)
     if _replacement_possible(indexes, configured):
-        facts = _repo_facts()
+        facts = _git.repo_facts()
 
         def repo_unread(loaded: frozenset[str]) -> frozenset[str]:
-            return _unread_requirements(loaded, facts)
+            return _git.unread_requirements(loaded, facts)
 
         def repo_no_replace(loaded: frozenset[str]) -> bool:
-            return _no_replace(loaded, facts)
+            return _git.no_replace(loaded, facts)
 
         indexes = build(repo_unread, repo_no_replace)
     exact = _exact_all(changes, indexes, configured, plan.hashed)
