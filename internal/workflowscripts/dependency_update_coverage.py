@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -425,16 +426,107 @@ def _git_grep(needle: str) -> list[str] | None:
     return [record.removeprefix("HEAD:") for record in proc.stdout.split("\0") if record]
 
 
-def _git_text(rev: str, path: str) -> str:
+def _git_bytes(rev: str, path: str) -> bytes | None:
+    """The bytes of `path` at `rev`, or None when git cannot read it."""
     proc = subprocess.run(
         ["git", "show", f"{rev}:{path}"],
+        check=False,
+        capture_output=True,
+    )
+    return None if proc.returncode != 0 else proc.stdout
+
+
+def _git_text(rev: str, path: str) -> str:
+    """The text of `path` at `rev`, or "" when git cannot read it or it is not UTF-8."""
+    data = _git_bytes(rev, path)
+    if data is None:
+        return ""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+
+
+def _git_tree() -> list[tuple[str, str]] | None:
+    """The (path, mode) of every tracked entry at HEAD, or None when git cannot list them."""
+    proc = subprocess.run(
+        ["git", "ls-tree", "-r", "-z", "HEAD"],
         check=False,
         capture_output=True,
         text=True,
     )
     if proc.returncode != 0:
-        return ""
-    return proc.stdout
+        return None
+    entries: list[tuple[str, str]] = []
+    for record in proc.stdout.split("\0"):
+        if not record:
+            continue
+        meta, _separator, path = record.partition("\t")
+        entries.append((path, meta.split(" ", 1)[0]))
+    return entries
+
+
+class _RepoFacts(NamedTuple):
+    """Tracked repository facts that leave a requirements file unread."""
+
+    unread: bool = False  # whether a tracked .txt or .in file is not UTF-8 text
+    aliases: frozenset[str] = frozenset()  # each repository path a tracked symlink resolves to
+
+
+def _utf8_text(data: bytes) -> bool:
+    """Whether `data` is UTF-8 text with no NUL and no UTF-16 BOM."""
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in data:
+        return False
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _symlink_target(path: str, target: str) -> str | None:
+    """The repository path a symlink at `path` points to, or None when it is absolute or outside the tree."""
+    if not target or target.startswith(("/", "~")) or "\\" in target:
+        return None
+    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
+    return None if resolved in {"", ".", ".."} or resolved.startswith("../") else resolved
+
+
+def _repo_facts() -> _RepoFacts | None:
+    """The tracked-file facts that leave a requirements file unread, or None when the tree cannot be read.
+
+    A tracked .txt or .in file that is not UTF-8 text leaves every loaded requirements file unread. A tracked
+    symlink whose target resolves to a loaded requirements file leaves that file unread.
+    """
+    entries = _git_tree()
+    if entries is None:
+        return None
+    unread = False
+    aliases: set[str] = set()
+    for path, mode in entries:
+        if mode == "120000":
+            data = _git_bytes("HEAD", path)
+            if data is None:
+                return None
+            try:
+                target = data.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+            resolved = _symlink_target(path, target)
+            if resolved is not None:
+                aliases.add(resolved)
+        elif path.endswith((".txt", ".in")) and mode.startswith("100"):
+            data = _git_bytes("HEAD", path)
+            if data is None or not _utf8_text(data):
+                unread = True
+    return _RepoFacts(unread, frozenset(aliases))
+
+
+def _unread_requirements(loaded: frozenset[str], facts: _RepoFacts | None) -> frozenset[str]:
+    """The loaded requirements files a repository-wide fact leaves unread."""
+    if facts is None or facts.unread:
+        return loaded
+    return frozenset(path for path in loaded if path in facts.aliases)
 
 
 def _verify_commit(rev: str) -> str:
@@ -832,8 +924,13 @@ def main() -> None:
     changes, warnings = _split(plan)
     configured = _python_indexes.configured(_git_text)
     pip_dirs = sorted({change.dir for change in changes if change.ecosystem == "pip"})
+    facts = _repo_facts() if pip_dirs else _RepoFacts()
+
+    def unread(loaded: frozenset[str]) -> frozenset[str]:
+        return _unread_requirements(loaded, facts)
+
     indexes = {
-        directory: _python_indexes.for_directory(directory, configured, _git_text, _git_files, _git_grep)
+        directory: _python_indexes.for_directory(directory, configured, _git_text, _git_files, _git_grep, unread)
         for directory in pip_dirs
     }
     exact = _exact_all(changes, indexes, configured, plan.hashed)

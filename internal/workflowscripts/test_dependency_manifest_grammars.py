@@ -25,6 +25,7 @@ from dependency_manifest_python import (
     poetry_lock_hashes,
     requirements,
     requirements_hashes,
+    requirements_includes,
     requirements_index_options,
     requirements_txt,
 )
@@ -676,3 +677,25 @@ class RequirementsIndexOptionsTest(unittest.TestCase):
         for text in unread:
             with self.subTest(text=text):
                 self.assertEqual(requirements_index_options(text), IndexOptions(unread=True))
+
+
+class RequirementsIncludesTest(unittest.TestCase):
+    def test_every_include_option_on_a_joined_line_is_returned(self) -> None:
+        cases = {
+            "-r \\\nrequirements.txt\n": ["requirements.txt"],
+            "--requirem x\n": ["x"],
+            "--cons x\n": ["x"],
+            "--pre -r x\n": ["x"],
+            "\ufeff-r x\n": ["x"],
+            "-r a\n-c b\n": ["a", "b"],
+            "-r ./sub/../requirements.txt\n": ["./sub/../requirements.txt"],
+            "-r requirements.txt/\n": ["requirements.txt/"],
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(requirements_includes(text), expected)
+
+    def test_an_include_the_parser_cannot_read_is_none(self) -> None:
+        for text in ("-r\n", "--req x\n", "${OPT} -r x\n", "--extra-index-url 'a\n"):
+            with self.subTest(text=text):
+                self.assertIsNone(requirements_includes(text))

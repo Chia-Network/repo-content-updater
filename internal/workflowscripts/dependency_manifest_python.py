@@ -133,8 +133,9 @@ def requirements(text: str) -> Parsed:
 def _pip_lines(text: str) -> Iterator[tuple[str, str]]:
     """Each line of a requirements file as pip reads it, with its text in the file.
 
-    A line ending in a backslash continues on the next unless it is a comment, and pip strips the backslashes of
-    each continued line. pip then drops the comment of the joined line, and the whitespace around it.
+    A leading UTF-8 BOM is dropped, as pip drops it. A line ending in a backslash continues on the next unless it
+    is a comment, and pip strips the backslashes of each continued line. pip then drops the comment of the joined
+    line, and the whitespace around it.
     """
 
     def read(joined: list[str]) -> str:
@@ -144,7 +145,7 @@ def _pip_lines(text: str) -> Iterator[tuple[str, str]]:
 
     joined: list[str] = []
     original = ""
-    for line in text.splitlines(keepends=True):
+    for line in text.removeprefix("\ufeff").splitlines(keepends=True):
         bare = line.splitlines()[0]
         original += line
         if bare.endswith("\\") and not _COMMENT_RE.match(bare):
@@ -361,6 +362,47 @@ def _option(word: str, words: list[str]) -> _Option:
     return _Option(option, value)
 
 
+def _pip_options(line: str) -> list[_Option] | None:
+    """Each option word on one joined pip line, or None when shlex cannot split it."""
+    try:
+        words = shlex.split(line)
+    except ValueError:
+        return None
+    found: list[_Option] = []
+    while words:
+        found.append(_option(words.pop(0), words))
+    return found
+
+
+def requirements_includes(text: str) -> list[str] | None:
+    """The file of every include option a requirements file names, in pip's order, or None when one cannot be read.
+
+    A leading UTF-8 BOM is ignored. Every include option on a joined line counts, including an abbreviation pip
+    accepts and a short option joined to its value. A line pip fills from the environment, an option whose
+    abbreviation is ambiguous, and an include without a value leave the result unread.
+    """
+    found: list[str] = []
+    for line, original in _pip_lines(text):
+        if not line:
+            if _ENV_VAR_RE.search(original):
+                return None
+            continue
+        if not line.startswith("-"):
+            continue
+        options = _pip_options(line)
+        if options is None:
+            return None
+        for option in options:
+            if option.name is None:
+                if option.unread:
+                    return None
+            elif option.name in _PIP_INCLUDES:
+                if option.value is None:
+                    return None
+                found.append(option.value)
+    return found
+
+
 def requirements_index_options(text: str) -> IndexOptions:
     """The package source options a requirements file names, read in pip's order.
 
@@ -375,13 +417,11 @@ def requirements_index_options(text: str) -> IndexOptions:
             if not line and _ENV_VAR_RE.search(original) and not _REQ_RE.match(original.strip()):
                 unread = True
             continue
-        try:
-            words = shlex.split(line)
-        except ValueError:
+        options = _pip_options(line)
+        if options is None:
             unread = True
             continue
-        while words:
-            option = _option(words.pop(0), words)
+        for option in options:
             if option.name is None:
                 unread = unread or option.unread
                 continue

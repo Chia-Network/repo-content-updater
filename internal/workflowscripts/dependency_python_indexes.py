@@ -24,6 +24,7 @@ import dependency_manifest_python as _python
 _Read = Callable[[str, str], str]
 _ListFiles = Callable[[str], list[tuple[str, str]] | None]
 _Search = Callable[[str], list[str] | None]
+_UnreadFiles = Callable[[frozenset[str]], frozenset[str]]
 
 _REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
 _REGISTRY_FIELD_RE = re.compile(r"^    ([A-Za-z0-9_-]+):[ \t]+(.+?)[ \t]*$")
@@ -32,19 +33,11 @@ _SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
 _PYPI_INDEXES = frozenset({"https://pypi.org/simple/", "https://pypi.python.org/simple/"})
 _MAX_REQUIREMENTS_FILES = 64
-_INCLUDE_PREFIXES = ("-r", "-c", "--requirement", "--constraint")
+_MAX_INCLUDER_CANDIDATES = 256
 
 
-def _mentions_include(text: str, name: str) -> bool:
-    """Whether a line of `text`, after leading whitespace, starts with an include option naming `name`."""
-    for line in text.splitlines():
-        stripped = line.lstrip()
-        if not stripped.startswith(_INCLUDE_PREFIXES):
-            continue
-        options = _python.requirements_index_options(stripped).options
-        if any(option.kind == _python.INCLUDE and posixpath.basename(option.value) == name for option in options):
-            return True
-    return False
+def _no_unread(_loaded: frozenset[str]) -> frozenset[str]:
+    return frozenset()
 
 
 def _registry_scalar(value: str) -> str | None:
@@ -203,11 +196,19 @@ def _source(url: str, trusted: set[str]) -> str | None:
 class _Requirements:
     """The requirements files a pip directory reaches and the tracked files that include them, read once in order."""
 
-    def __init__(self, configured: Indexes, read: _Read, list_files: _ListFiles, search: _Search) -> None:
+    def __init__(
+        self,
+        configured: Indexes,
+        read: _Read,
+        list_files: _ListFiles,
+        search: _Search,
+        unread_files: _UnreadFiles,
+    ) -> None:
         self._configured = configured
         self._read = read
         self._list_files = list_files
         self._search = search
+        self._unread_files = unread_files
         self._listings: dict[str, list[tuple[str, str]] | None] = {}
         self._texts: dict[str, str] = {}
         self._options: dict[str, _python.IndexOptions] = {}
@@ -256,17 +257,25 @@ class _Requirements:
             )
         return self._included[path]
 
+    def _through_symlink(self, path: str | None) -> bool:
+        """Whether a resolved path goes through a tracked symlink directory."""
+        if path is None:
+            return False
+        parts = path.split("/")
+        return any(self._mode("/".join(parts[:index])) == "120000" for index in range(1, len(parts)))
+
     def _candidates(self, path: str) -> list[str] | None:
         needle = posixpath.basename(path)
         if needle not in self._searched:
-            self._searched[needle] = self._search(needle)
+            found = self._search(needle)
+            self._searched[needle] = None if found is not None and len(found) > _MAX_INCLUDER_CANDIDATES else found
         return self._searched[needle]
 
     def _consider(self, candidate: str, path: str, roots: set[str], pending: list[str]) -> None:
-        """Add `candidate` to `roots` when it includes `path`; ignore it when no leading include option names `path`.
+        """Add `candidate` to `roots` when it includes `path`; ignore it when no include option names `path`.
 
-        A candidate that names `path` in a leading include option but cannot be read, parsed or resolved leaves
-        `path` unread.
+        A candidate that names `path` in an include option but cannot be read, parsed or resolved leaves `path`
+        unread.
         """
         if candidate == path:
             return
@@ -274,11 +283,18 @@ class _Requirements:
         if mode is None or not _is_blob(mode) or not (text := self._text(candidate)):
             self._broken.add(path)
             return
-        if not _mentions_include(text, posixpath.basename(path)):
+        values = _python.requirements_includes(text)
+        if values is None:
+            self._broken.add(path)
             return
         options = self._options_for(candidate)
         included = self._resolve_includes(candidate)
         includes = [option for option in options.options if option.kind == _python.INCLUDE]
+        resolved = [_include_text(posixpath.dirname(candidate), option.value) for option in includes]
+        if path not in resolved and not any(
+            target is None and self._through_symlink(value) for value, target in zip(resolved, included)
+        ):
+            return
         if path in included:
             if options.unread or any(item is None for item in included):
                 self._broken.add(path)
@@ -323,6 +339,7 @@ class _Requirements:
                 continue
             for candidate in candidates:
                 self._consider(candidate, path, roots, pending)
+        self._broken.update(self._unread_files(frozenset(self._loaded)))
         return True
 
     def _effective_at(self, path: str, stack: frozenset[str]) -> _Effective:
@@ -408,14 +425,17 @@ def for_directory(
     read: _Read,
     list_files: _ListFiles,
     search: _Search,
+    unread_files: _UnreadFiles = _no_unread,
 ) -> DirectoryIndexes:
     """The index facts of each requirements file in `directory` at HEAD.
 
-    A file listing that fails, a requirements file that is not a blob, or a reachable set of requirements files
-    larger than `_MAX_REQUIREMENTS_FILES` trusts none in the directory. An include that is not a plain repository
-    path, an include cycle, or another package source leaves that file unread, and an unread file leaves every
-    replacement unread. A file keeps its replacing index only when every tracked file in the repository that
-    includes it, directly or through other includes, ends with that same index and names no extra source.
+    A file listing that fails, a requirements file that is not a blob, a reachable set of requirements files
+    larger than `_MAX_REQUIREMENTS_FILES`, or more than `_MAX_INCLUDER_CANDIDATES` candidates for one name trusts
+    none in the directory. An include that is not a plain repository path, an include cycle, or another package
+    source leaves that file unread, and an unread file leaves every replacement unread. A file keeps its replacing
+    index only when every tracked file in the repository that includes it, directly or through other includes, ends
+    with that same index and names no extra source. `unread_files` names the files a repository-wide fact leaves
+    unread.
     """
     files = list_files(directory)
     if files is None:
@@ -427,7 +447,7 @@ def for_directory(
             if not _is_blob(mode):
                 return DirectoryIndexes(Indexes(other=True))
             roots.add(path)
-    requirements = _Requirements(configured, read, list_files, search)
+    requirements = _Requirements(configured, read, list_files, search, unread_files)
     constraints = set(roots)
     if not requirements.load(constraints):
         return DirectoryIndexes(Indexes(other=True))
