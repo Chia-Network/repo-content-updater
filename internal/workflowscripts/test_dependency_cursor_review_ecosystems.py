@@ -211,6 +211,31 @@ class BindTest(unittest.TestCase):
         files = {"poetry.lock": poetry_lock_text({"requests": "2.32.0"}, legacy=True)}
         self.assertEqual(ecosystems.locked("pip", ".", "requests", "2.32.0", read, ()), (poetry,))
 
+    def test_locked_reads_a_python_lock_package_from_another_source_at_its_bare_version(self) -> None:
+        source = '[package.source]\ntype = "legacy"\nurl = "https://pypi.chia.net/simple"\nreference = "chia"\n'
+        locks = {
+            "poetry.lock": (
+                poetry_lock_text({"chiapos": "2.0.4"}).replace("\n[metadata]", source + "\n[metadata]"),
+                poetry_lock_text({"chiapos": "2.0.4"}),
+            ),
+            "Pipfile.lock": (
+                pipfile_lock_text({"chiapos": "2.0.4"}).replace('"index": "pypi"', '"index": "chia"', 1),
+                pipfile_lock_text({"chiapos": "2.0.4"}),
+            ),
+        }
+        for path, (sourced, plain) in locks.items():
+            with self.subTest(path=path):
+                (recorded,) = ecosystems.locked("pip", ".", "chiapos", "2.0.4", lambda _path, text=plain: text, ())
+                self.assertTrue(recorded)
+                self.assertEqual(
+                    ecosystems.locked_occurrences("pip", ".", "chiapos", "2.0.4", lambda _path, text=sourced: text, ()),
+                    ((path, recorded),),
+                )
+                self.assertEqual(
+                    ecosystems.locked_occurrences("pip", ".", "chiapos", "2.0.3", lambda _path, text=sourced: text, ()),
+                    (),
+                )
+
     def test_locked_reads_the_hashes_of_a_changed_requirements_file_beside_the_change(self) -> None:
         sha_a, sha_b = (f"sha256:{digit * 64}" for digit in "ab")
         files = {

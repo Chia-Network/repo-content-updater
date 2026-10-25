@@ -47,6 +47,7 @@ from dependency_manifest_lines import (
 from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
 from dependency_manifest_pnpm import pnpm_lock, pnpm_lock_integrity, pnpm_lock_unsupported_version
 from dependency_manifest_python import (
+    lock_version,
     pipfile_lock,
     pipfile_lock_hashes,
     poetry_lock,
@@ -132,6 +133,10 @@ def _record(_entry: Entry) -> str:
     return ""
 
 
+def _same_version(version: str) -> str:
+    return version
+
+
 class FileKind(NamedTuple):
     ecosystem: Ecosystem
     role: str
@@ -143,6 +148,8 @@ class FileKind(NamedTuple):
     hashes: Callable[[Entry], str | None] | None = None
     # The format version a lock declares when its grammar does not read that version, or "".
     unsupported: Callable[[str], str] | None = None
+    # The bare version an entry records, for a grammar that appends a source to a non-index version.
+    bare_version: Callable[[str], str] = _same_version
 
 
 NPM = Ecosystem("npm", repo=upstream.npm, bind=binding.npm)
@@ -227,9 +234,23 @@ _FILES = (
         match=_requirements,
         hashes=requirements_hashes,
     ),
-    FileKind(PIP, LOCK, poetry_lock, frozenset({"poetry.lock"}), fixed=_record, hashes=_top_copy(poetry_lock_hashes)),
     FileKind(
-        PIP, LOCK, pipfile_lock, frozenset({"Pipfile.lock"}), fixed=_record, hashes=_top_copy(pipfile_lock_hashes)
+        PIP,
+        LOCK,
+        poetry_lock,
+        frozenset({"poetry.lock"}),
+        fixed=_record,
+        hashes=_top_copy(poetry_lock_hashes),
+        bare_version=lock_version,
+    ),
+    FileKind(
+        PIP,
+        LOCK,
+        pipfile_lock,
+        frozenset({"Pipfile.lock"}),
+        fixed=_record,
+        hashes=_top_copy(pipfile_lock_hashes),
+        bare_version=lock_version,
     ),
     FileKind(ACTIONS, MANIFEST, workflow_uses, match=_workflow),
     FileKind(DOCKER, MANIFEST, dockerfile_from, match=_dockerfile),
@@ -295,7 +316,8 @@ def locked_occurrences(
         parsed = kind.parse(read(path)) if kind.hashes else None
         for entry in parsed[0] if parsed else ():
             recorded = kind.hashes(entry)
-            if recorded is not None and entry[0] == name and exact_body(entry[1], mode=ecosystem) == version:
+            bare = kind.bare_version(entry[1])
+            if recorded is not None and entry[0] == name and exact_body(bare, mode=ecosystem) == version:
                 found.append((path, recorded))
     return tuple(found)
 
