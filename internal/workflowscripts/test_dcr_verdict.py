@@ -220,6 +220,18 @@ class MainTest(unittest.TestCase):
             payload = json.loads((Path(tmp) / "verdict.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["conclusion"], "failure")
 
+    def test_malformed_meta_shapes_fail_closed(self) -> None:
+        cases = (
+            {"updates": "not a list", "ioc_hits": []},
+            {"updates": [], "ioc_hits": "not a list"},
+            {"updates": ["not a dict"], "ioc_hits": []},
+            {"updates": [], "ioc_hits": ["not a dict"]},
+        )
+        for meta in cases:
+            with self.subTest(meta=meta), tempfile.TemporaryDirectory() as tmp:
+                payload, _comment, _output = self._run_main(Path(tmp), meta, "MALWARE_REVIEW_VERDICT: benign\n")
+            self.assertEqual(payload["conclusion"], "failure")
+
     def test_warn_only_allows_suspicious(self) -> None:
         meta = {"schema": 1, "truncated": False, "updates": [_update()], "ioc_hits": []}
         with tempfile.TemporaryDirectory() as tmp:
