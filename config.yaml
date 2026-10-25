@@ -207,6 +207,8 @@ files:
     template_name: dependency-review.yml
     repo_path: .github/workflows/dependency-review.yml
     adoption_marker: "repo-content-updater:dependency-review"
+    requires_paths:
+      - .github/workflows
     alternate_paths:
       - .github/workflows/dependency-review.yaml
 

@@ -169,6 +169,7 @@ func TestResolveManagedFileSelection(t *testing.T) {
 		depReview := cfg.GetFileInfo("dep-review")
 		if assert.NotNil(t, depReview) {
 			assert.Equal(t, "repo-content-updater:dependency-review", depReview.AdoptionMarker)
+			assert.Equal(t, []string{".github/workflows"}, depReview.RequiresPaths)
 		}
 	})
 

@@ -24,7 +24,7 @@ Files listed under `default_files` are applied to every non-archived, non-fork r
 * `dependency-cursor-review` ships the review workflow and its companion scripts.
 * `dep-review` ships the dependency review workflow: a license and severity gate plus OSV scanning of the PR's lockfiles, including transitive dependencies.
 
-The `dependabot-actions` and `dependency-cursor-review` defaults require `.github/workflows` containing at least one `.yml`/`.yaml` file. Defaults are adopt-only: an existing root without the adoption marker line (`# <adoption_marker>`) is left untouched; a root carrying the marker is updated in place along with its companions; a new bundle is written only when the root and every companion path are absent. Each default root must declare a unique `adoption_marker`. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot-actions` or `!dependency-cursor-review`. Opting out of any member of a default bundle, companions included, drops the whole bundle. Opting out of any file that writes the same repo path also opts out of the default, so `!dependabot` and `!go-dependabot` both opt out of `dependabot-actions`. A default is not added when an explicitly selected file writes the same repo path. Managed paths are only read, removed and written when every parent directory is a real directory inside the checkout.
+All defaults require `.github/workflows` containing at least one `.yml`/`.yaml` file. Defaults are adopt-only: an existing root without the adoption marker line (`# <adoption_marker>`) is left untouched; a root carrying the marker is updated in place along with its companions; a new bundle is written only when the root and every companion path are absent. Each default root must declare a unique `adoption_marker`. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot-actions` or `!dependency-cursor-review`. Opting out of any member of a default bundle, companions included, drops the whole bundle. Opting out of any file that writes the same repo path also opts out of the default, so `!dependabot` and `!go-dependabot` both opt out of `dependabot-actions`. A default is not added when an explicitly selected file writes the same repo path. Managed paths are only read, removed and written when every parent directory is a real directory inside the checkout.
 
 ## Config Format
 
@@ -68,6 +68,8 @@ files:
     template_name: dependency-review.yml
     repo_path: .github/workflows/dependency-review.yml
     adoption_marker: repo-content-updater:dependency-review
+    requires_paths:
+      - .github/workflows
     alternate_paths:
       - .github/workflows/dependency-review.yaml
  ```

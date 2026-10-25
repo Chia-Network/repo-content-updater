@@ -49,11 +49,16 @@ class DependencyReviewTemplateTest(unittest.TestCase):
         self.assertIn("-r\n        ./", job)
         self.assertIn("upload-sarif: false", job)
 
-    def test_osv_scanner_job_permissions_are_read_only(self) -> None:
+    def test_osv_scanner_job_grants_the_declared_permissions(self) -> None:
         job = _job(self.workflow, "osv-scanner")
-        self.assertIn("permissions:\n      contents: read\n", job)
-        self.assertNotRegex(job, r"(?m)^\s+[a-z-]+:\s*write\s*$")
+        self.assertIn(
+            "permissions:\n      actions: read\n      contents: read\n      security-events: write\n",
+            job,
+        )
         self.assertNotIn("pull-requests:", job)
+
+    def test_top_level_permissions_stay_read_only(self) -> None:
+        self.assertIn("permissions:\n  contents: read\n", self.workflow)
 
     def test_severity_default_is_configured(self) -> None:
         config = (_REPO_ROOT / "config.yaml").read_text(encoding="utf-8")

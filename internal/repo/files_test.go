@@ -135,8 +135,8 @@ func TestAdoptableDefaults(t *testing.T) {
 		review    bool
 		depReview bool
 	}{
-		{name: "nothing", files: map[string]string{"notes.txt": ""}, depReview: true},
-		{name: "workflows dir without workflow files", files: map[string]string{".github/workflows/notes.txt": ""}, depReview: true},
+		{name: "nothing", files: map[string]string{"notes.txt": ""}},
+		{name: "workflows dir without workflow files", files: map[string]string{".github/workflows/notes.txt": ""}},
 		{name: "workflows only", files: map[string]string{workflow: ""}, actions: true, review: true, depReview: true},
 		{name: "marked dependabot is upgraded", files: map[string]string{workflow: "", ".github/dependabot.yml": actionsMarker}, actions: true, review: true, depReview: true},
 		{name: "marked alternate dependabot is upgraded", files: map[string]string{workflow: "", ".github/dependabot.yaml": actionsMarker}, actions: true, review: true, depReview: true},

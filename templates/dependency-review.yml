@@ -33,13 +33,16 @@ jobs:
   osv-scanner:
     if: github.repository_owner == 'Chia-Network'
     permissions:
+      actions: read
       contents: read
+      security-events: write
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v2.7.0
     with:
       # Recursively scan every lockfile in the PR, including transitive dependencies.
       scan-args: |-
         -r
         ./
-      # Findings fail the job through annotations; uploading SARIF would need
-      # security-events: write, which this job does not require.
+      # The reusable workflow declares actions: read, contents: read and
+      # security-events: write. Findings fail the job through annotations;
+      # SARIF upload stays disabled.
       upload-sarif: false
