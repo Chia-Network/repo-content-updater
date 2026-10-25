@@ -21,9 +21,10 @@ adversarial.
   exact version with matching downloaded file hashes, or, for an unhashed
   occurrence, without a requirements file whose effective index replaces
   PyPI for the whole install and names no other source. Any mention of the
-  package in `pyproject.toml`, `setup.py`, `setup.cfg` or `Pipfile` is
-  unhashed with no index and never makes a change trusted (see "Trusted
-  package indexes" in `AGENTS.md`).
+  package in `pyproject.toml`, `setup.py`, `setup.cfg` or `Pipfile` in the
+  changed package's own directory is unhashed with no index and never makes a
+  change trusted; a mention in a manifest in another directory is not part
+  of the change (see "Trusted package indexes" in `AGENTS.md`).
 - A trusted index replacement while a tracked file sets pip settings outside
   the requirements files the check reads: a `pip.conf` or `pip.ini`, a `PIP_*`
   index environment name, an index key in a pip config section, or a pip

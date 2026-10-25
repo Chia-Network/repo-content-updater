@@ -657,8 +657,9 @@ def _index_occurrences(change: _diff.Change, new: str, hashed: tuple[str, ...]) 
     """Each (path, recorded hash) of an installed copy that constrains the trusted index.
 
     A lock entry records a file hash and a requirements file records one when it pins one. Any mention of the
-    package in pyproject.toml, setup.py, setup.cfg or Pipfile records no hash and names no index: pip installs it
-    from the default index, so it is an unhashed occurrence with no replacing index.
+    package in a pyproject.toml, setup.py, setup.cfg or Pipfile in the change's own directory records no hash and
+    names no index: pip installs it from the default index, so it is an unhashed occurrence with no replacing index.
+    A manifest in another directory is not part of the change.
     """
     found = list(
         _ecosystems.locked_occurrences(

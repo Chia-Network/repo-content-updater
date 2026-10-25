@@ -55,8 +55,10 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
   option filled from the environment, or an include outside the repository
   leaves that file inconclusive.
 - Any mention of the package in `pyproject.toml`, `setup.py`, `setup.cfg` or
-  `Pipfile` is an unhashed occurrence with no index, because pip installs it
-  from the default index. It never makes a change trusted.
+  `Pipfile` in the changed package's own directory is an unhashed occurrence
+  with no index, because pip installs it from the default index. A mention in
+  a manifest in another directory is not part of the change. It never makes a
+  change trusted.
 - Includer discovery reads each include option in a requirements file and
   treats a tracked symlink that resolves to a requirements file, or a tracked
   `.txt` or `.in` file that is not UTF-8 text, as leaving the base unread. A
