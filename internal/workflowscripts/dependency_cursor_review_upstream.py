@@ -144,9 +144,13 @@ def _close(connection: http.client.HTTPSConnection) -> None:
     connection.close()
 
 
-def _connect(parts: urllib.parse.SplitResult, timeout: float) -> http.client.HTTPSConnection:
-    """An https connection to `parts`, with the socket operation timeout."""
-    return http.client.HTTPSConnection(parts.hostname, parts.port, timeout=timeout)
+def _connect(parts: urllib.parse.SplitResult, timeout: float) -> http.client.HTTPSConnection | None:
+    """An https connection to `parts` with the socket operation timeout, or None when its port is invalid."""
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    return http.client.HTTPSConnection(parts.hostname, port, timeout=timeout)
 
 
 def _read_chunk(
@@ -178,6 +182,8 @@ def _get_response(
         return None
     target = parts.path + (f"?{parts.query}" if parts.query else "")
     connection = _connect(parts, min(_TIMEOUT, remaining))
+    if connection is None:
+        return None
     if budget.remaining_seconds() <= 0:
         connection.close()
         return None

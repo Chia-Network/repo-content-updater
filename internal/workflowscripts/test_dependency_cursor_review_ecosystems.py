@@ -724,6 +724,13 @@ class _Connection:
         return None
 
 
+class InvalidPortTest(unittest.TestCase):
+    def test_a_url_with_an_invalid_port_is_unavailable(self) -> None:
+        for port in ("99999", "abc"):
+            with self.subTest(port=port):
+                self.assertIsNone(upstream._get(f"https://example.com:{port}/x", 100))
+
+
 class Sha256DownloadTest(unittest.TestCase):
     def download(
         self,
@@ -773,6 +780,24 @@ class Sha256DownloadTest(unittest.TestCase):
 
     def test_a_download_from_another_host_is_not_read(self) -> None:
         self.assertIsNone(upstream._sha256_download("https://example.com/x", frozenset({_HOST})))
+
+    def test_a_redirect_with_an_invalid_port_has_no_digest(self) -> None:
+        start = f"https://{_HOST}/x"
+        real_get_response = upstream._get_response
+        for location in (f"https://{_HOST}:99999/y", f"https://{_HOST}:abc/y"):
+
+            def get_response(
+                url: str,
+                accept: str,
+                budget: upstream._DownloadBudget | None = None,
+                location: str = location,
+            ) -> tuple[_Connection, _Reply] | None:
+                if url == start:
+                    return _Connection(), _Reply([], status=302, location=location)
+                return real_get_response(url, accept, budget)
+
+            with self.subTest(location=location), patch.object(upstream, "_get_response", get_response):
+                self.assertIsNone(upstream._sha256_download(start, frozenset({_HOST})))
 
     def test_a_download_redirect_may_reach_an_allowed_file_host_only(self) -> None:
         target = "https://download.chia.net/x"
