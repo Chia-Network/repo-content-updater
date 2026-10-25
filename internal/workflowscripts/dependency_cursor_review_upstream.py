@@ -144,6 +144,22 @@ def _close(connection: http.client.HTTPSConnection) -> None:
     connection.close()
 
 
+def _split(url: str) -> urllib.parse.SplitResult | None:
+    """The parts of `url`, or None when it cannot be parsed."""
+    try:
+        return urllib.parse.urlsplit(url)
+    except ValueError:
+        return None
+
+
+def _join(base: str, link: str) -> str | None:
+    """`link` resolved against `base`, or None when either cannot be parsed."""
+    try:
+        return urllib.parse.urljoin(base, link)
+    except ValueError:
+        return None
+
+
 def _connect(parts: urllib.parse.SplitResult, timeout: float) -> http.client.HTTPSConnection | None:
     """An https connection to `parts` with the socket operation timeout, or None when its port is invalid."""
     try:
@@ -174,8 +190,8 @@ def _get_response(
 ) -> tuple[http.client.HTTPSConnection, http.client.HTTPResponse] | None:
     """An open response to an https GET and its connection, or None when there is none within `budget`."""
     budget = budget or _DownloadBudget()
-    parts = urllib.parse.urlsplit(url)
-    if parts.scheme != "https" or not parts.hostname:
+    parts = _split(url)
+    if parts is None or parts.scheme != "https" or not parts.hostname:
         return None
     remaining = budget.remaining_seconds()
     if remaining <= 0:
@@ -237,10 +253,11 @@ def _redirect_allowed(url: str, follow: Mapping[str, str] | None) -> bool:
 
     A path with a `.` or `..` segment is never allowed.
     """
-    parts = urllib.parse.urlsplit(url)
-    prefix = follow.get(parts.hostname) if follow and parts.hostname else None
+    parts = _split(url)
+    prefix = follow.get(parts.hostname) if parts and follow and parts.hostname else None
     return (
-        parts.scheme == "https"
+        parts is not None
+        and parts.scheme == "https"
         and prefix is not None
         and parts.path.startswith(prefix)
         and not _has_dot_segment(parts.path)
@@ -267,8 +284,10 @@ def _fetch(
         status, location, body = answer
         if status not in _REDIRECTS:
             break
-        url = urllib.parse.urljoin(url, location)
-        if not location or not _redirect_allowed(url, follow):
+        if not location:
+            return None
+        url = _join(url, location)
+        if url is None or not _redirect_allowed(url, follow):
             return None
     else:
         return None
@@ -331,8 +350,8 @@ def _sha256_download(
     for _hop in range(_MAX_REDIRECTS + 1):
         if budget.expired():
             return None
-        parts = urllib.parse.urlsplit(url)
-        if parts.scheme != "https" or parts.hostname not in hosts:
+        parts = _split(url)
+        if parts is None or parts.scheme != "https" or parts.hostname not in hosts:
             return None
         opened = _get_response(url, "application/octet-stream", budget)
         if opened is None:
@@ -343,7 +362,9 @@ def _sha256_download(
                 location = response.getheader("Location") or ""
                 if not location:
                     return None
-                url = urllib.parse.urljoin(url, location)
+                url = _join(url, location)
+                if url is None:
+                    return None
                 continue
             if response.status != 200:
                 return None
@@ -482,7 +503,8 @@ def _release(filename: str) -> tuple[str, str]:
 
 def _index_hosts(index: str) -> frozenset[str]:
     """The hosts a trusted index may serve its page and files from."""
-    host = urllib.parse.urlsplit(index).hostname
+    parts = _split(index)
+    host = parts.hostname if parts else None
     return frozenset({host, *TRUSTED_PYTHON_INDEX_FILE_HOSTS.get(index, ())}) if host else frozenset()
 
 
@@ -503,8 +525,10 @@ def _index_files(index: str, name: str, version: str, budget: _DownloadBudget) -
         return None
     files: list[str] = []
     for href in _INDEX_LINK_RE.findall(body.decode("utf-8", errors="replace")):
-        url = urllib.parse.urljoin(page_url, href.replace("&amp;", "&"))
-        parts = urllib.parse.urlsplit(url)
+        url = _join(page_url, href.replace("&amp;", "&"))
+        parts = _split(url) if url is not None else None
+        if parts is None:
+            return None
         found_name, found_version = _release(urllib.parse.unquote(parts.path.rsplit("/", 1)[-1]))
         if found_name != _canonical(name) or versions.pep440_key(found_version) != wanted:
             continue
@@ -575,4 +599,5 @@ def trusted_python_index(
     if required - served or (wanted and not matched):
         return ""
     chosen = next(index for index in TRUSTED_PYTHON_INDEXES if index in required) if required else matched
-    return urllib.parse.urlsplit(chosen).hostname or ""
+    parts = _split(chosen)
+    return parts.hostname or "" if parts is not None else ""

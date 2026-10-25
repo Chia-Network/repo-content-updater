@@ -665,9 +665,75 @@ class PipSettingFlagsTest(unittest.TestCase):
             ),
             "long option abbreviations": (
                 "Makefile",
-                "pip install --index=https://pypi.org/simple/ --extra x --find y --no-i\n",
+                "pip install --in=https://pypi.org/simple/ --ext x --fi y --no-ind\n",
                 False,
                 True,
+            ),
+            "clustered short options": (
+                "Makefile",
+                "pip install -Ui https://pypi.org/simple/ -r requirements.txt\n",
+                False,
+                True,
+            ),
+            "pip global option": (
+                "Makefile",
+                "pip -v install -i https://pypi.org/simple/ -r requirements.txt\n",
+                False,
+                True,
+            ),
+            "pip versioned command": (
+                "Makefile",
+                "pip3.11 install -i https://pypi.org/simple/ -r requirements.txt\n",
+                False,
+                True,
+            ),
+            "pip config set": (
+                ".github/workflows/ci.yml",
+                "run: pip config set global.extra-index-url https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
+            "pip config site set": (
+                ".github/workflows/ci.yml",
+                "run: pip config --site set global.index-url https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
+            "heredoc pip config": (
+                "script.sh",
+                "cat > pip.conf <<EOF\n[global]\nindex-url = https://pypi.org/simple/\nEOF\n",
+                True,
+                False,
+            ),
+            "lowercase environment": (
+                ".github/workflows/ci.yml",
+                "env:\n  $env:pip_extra_index_url: https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
+            "uv environment": (
+                ".github/workflows/ci.yml",
+                "env:\n  UV_EXTRA_INDEX_URL: https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
+            "uv pyproject table": (
+                "pyproject.toml",
+                "[tool.uv]\nextra-index-url = https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
+            "tox indexserver": (
+                "tox.ini",
+                "[testenv]\nindexserver = https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
+            "config section in any file": (
+                "notes.md",
+                "[global]\nindex-url = https://pypi.org/simple/\n",
+                True,
+                False,
             ),
         }
         for label, (path, text, settings, options) in cases.items():
@@ -701,6 +767,18 @@ class PipSettingFlagsTest(unittest.TestCase):
             "config key outside a pip section": (
                 "setup.cfg",
                 "[options]\nindex-url = https://pypi.org/simple/\n",
+                False,
+                False,
+            ),
+            "pip config get": (
+                ".github/workflows/ci.yml",
+                "run: pip config get global.index-url\n",
+                False,
+                False,
+            ),
+            "quoted exec form": (
+                "Dockerfile",
+                'RUN ["pip", "install", "-i", "https://pypi.org/simple/"]\n',
                 False,
                 False,
             ),

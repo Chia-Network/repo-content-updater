@@ -45,6 +45,11 @@ PIP_SETTING_PATTERNS = (
     "PIP_FIND_LINKS",
     "PIP_NO_INDEX",
     "PIP_CONFIG_FILE",
+    "UV_INDEX_URL",
+    "UV_EXTRA_INDEX_URL",
+    "UV_FIND_LINKS",
+    "UV_NO_INDEX",
+    "indexserver",
     "--index",
     "--extra",
     "--find",
@@ -54,23 +59,33 @@ PIP_SETTING_PATTERNS = (
     "extra-index-url",
     "find-links",
 )
-_PIP_ENV_RE = re.compile(r"\b(?:PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|PIP_FIND_LINKS|PIP_NO_INDEX|PIP_CONFIG_FILE)\b")
-_PIP_TOKEN_RE = re.compile(r"\bpip3?\b")
+_PIP_ENV_RE = re.compile(
+    r"\b(?:PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|PIP_FIND_LINKS|PIP_NO_INDEX|PIP_CONFIG_FILE"
+    r"|UV_INDEX_URL|UV_EXTRA_INDEX_URL|UV_FIND_LINKS|UV_NO_INDEX)\b",
+    re.IGNORECASE,
+)
+_PIP_TOKEN_RE = re.compile(r"\bpip\d*(?:\.\d+)*\b")
 _PIP_INSTALL_RE = re.compile(
-    r"\b(?:pip3?|uv\s+pip|python(?:\d+(?:\.\d+)?)?\s+-m\s+pip)\s+install\b|\bpip-(?:sync|compile)\b"
+    r"\b(?:pip\d*(?:\.\d+)*|uv\s+pip|python(?:\d+(?:\.\d+)?)?\s+-m\s+pip)(?:\s+-\S+)*\s+install\b"
+    r"|\bpip-(?:sync|compile)\b"
 )
 _PIP_LONG_OPTION_RE = re.compile(r"(?<![\w-])(--[A-Za-z0-9][A-Za-z0-9-]*)(?:=\S*)?")
-_PIP_SHORT_OPTION_RE = re.compile(r"(?<!\S)-[if]\S*(?=\s|$)")
+_PIP_SHORT_OPTION_RE = re.compile(r"(?<!\S)-[A-Za-z]*[if]")
 # The long option each minimum abbreviation names, so only prefixes of a real option count.
 _PIP_INDEX_TARGETS = (
-    ("--index-url", "--index"),
-    ("--extra-index-url", "--extra"),
-    ("--find-links", "--find"),
-    ("--no-index", "--no-i"),
+    ("--index-url", "--in"),
+    ("--extra-index-url", "--ext"),
+    ("--find-links", "--fi"),
+    ("--no-index", "--no-ind"),
 )
-_PIP_CONFIG_FILES = frozenset({"setup.cfg", "tox.ini", "pyproject.toml"})
-_PIP_CONFIG_SECTIONS = frozenset({"global", "install"})
-_PIP_CONFIG_KEY_RE = re.compile(r"^\s*(?:index-url|extra-index-url|find-links)\s*[:=]", re.IGNORECASE)
+_PIP_CONFIG_SECTIONS = frozenset({"global", "install", "tool.pip", "tool.uv"})
+_PIP_CONFIG_KEY_RE = re.compile(r"^\s*(?:index-url|extra-index-url|find-links|no-index)\s*[:=]", re.IGNORECASE)
+_PIP_CONFIG_SET_RE = re.compile(
+    r"\bpip\d*(?:\.\d+)*(?:\s+-\S+)*\s+config(?:\s+-\S+)*\s+set\b[^\n]*?"
+    r"(?:index-url|extra-index-url|find-links|no-index)\b",
+    re.IGNORECASE,
+)
+_TOX_INDEXSERVER_RE = re.compile(r"^\s*indexserver\s*[:=]", re.IGNORECASE)
 _SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
 
 
@@ -238,30 +253,29 @@ def _index_option_line(line: str) -> bool:
 
 
 def _pip_config_key(text: str) -> bool:
-    """Whether a pip config section of `text` sets an index key."""
+    """Whether `text` sets a pip index key in a config section or a pip config command."""
     section = ""
     for line in _joined_lines(text):
         header = _SECTION_RE.match(line)
         if header:
             section = header.group(1).strip().lower()
             continue
-        if (section in _PIP_CONFIG_SECTIONS or section == "tool.pip" or section.startswith("tool.pip.")) and (
-            _PIP_CONFIG_KEY_RE.match(line)
-        ):
+        if _TOX_INDEXSERVER_RE.match(line) or _PIP_CONFIG_SET_RE.search(line):
+            return True
+        pip_section = section in _PIP_CONFIG_SECTIONS or section.startswith(("tool.pip.", "tool.uv."))
+        if pip_section and _PIP_CONFIG_KEY_RE.match(line):
             return True
     return False
 
 
-def pip_setting_flags(path: str, text: str) -> tuple[bool, bool]:
+def pip_setting_flags(_path: str, text: str) -> tuple[bool, bool]:
     """(whether `text` sets a pip setting, whether a pip command passes an index option).
 
-    The environment names apply to any file. The config keys are read only in setup.cfg, tox.ini and pyproject.toml.
-    A long option counts on a line that names pip; a short -i or -f counts only after a pip install command on the
-    same joined line. Whether the file is one the requirements index check reads is decided by the caller.
+    The environment names and config keys apply to any file. A long option counts on a line that names pip; a short
+    -i or -f counts only after a pip install command on the same joined line. Whether the file is one the
+    requirements index check reads is decided by the caller.
     """
-    settings = bool(_PIP_ENV_RE.search(text))
-    if posixpath.basename(path) in _PIP_CONFIG_FILES:
-        settings = settings or _pip_config_key(text)
+    settings = bool(_PIP_ENV_RE.search(text)) or _pip_config_key(text)
     options = any(_index_option_line(line) for line in _joined_lines(text))
     return settings, options
 

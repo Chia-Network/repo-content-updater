@@ -484,7 +484,7 @@ def _repo_facts() -> _RepoFacts | None:
     pip_options: set[str] = set()
     texts: list[str] = []
     for path, mode in entries:
-        if posixpath.basename(path) in _python_indexes.PIP_CONF_NAMES:
+        if posixpath.basename(path).lower() in _python_indexes.PIP_CONF_NAMES:
             settings = True
         if mode == "120000":
             data = blobs.get(path)

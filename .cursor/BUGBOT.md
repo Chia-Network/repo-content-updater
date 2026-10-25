@@ -50,3 +50,6 @@ adversarial.
   left inconclusive. Only an unreadable Dependabot config is inconclusive.
 - A `-i` or `-f` option of a non-pip command (`sed -i`, `grep -i`, `rm -f`),
   or prose that names an index option without a pip command.
+- A nox `session.install` call, a YAML-folded option on a later line, or a
+  quoted exec-form option that names an index source. Those are accepted
+  limits, documented in `AGENTS.md`.

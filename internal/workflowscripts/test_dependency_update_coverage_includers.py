@@ -242,9 +242,7 @@ class IncluderDiscoveryTest(unittest.TestCase):
 
     def test_a_latin1_dependabot_config_is_inconclusive(self) -> None:
         _write(self.root, "requirements.txt", _BASE.encode(), "base")
-        _write(
-            self.root, ".github/dependabot.yml", b"version: 2\n# caf\xe9\n", "config"
-        )
+        _write(self.root, ".github/dependabot.yml", b"version: 2\n# caf\xe9\n", "config")
         report = _run(self.root, trusted_host="pypi.chia.net")
         self.assertEqual(report["trusted_packages"], [])
         self.assertIs(report["scan_conclusive"], False)
@@ -262,6 +260,41 @@ class PipSettingsTest(unittest.TestCase):
 
     def test_a_repository_pip_conf_is_scanned(self) -> None:
         _write(self.root, "pip.conf", b"[global]\nindex-url = https://pypi.org/simple/\n", "pip config")
+        report, looked_up = _run_settings(self.root)
+        self._assert_scanned(report, looked_up)
+
+    def test_a_uv_environment_is_scanned(self) -> None:
+        _write(
+            self.root,
+            ".github/workflows/ci.yml",
+            b"env:\n  UV_INDEX_URL: https://pypi.org/simple/\n",
+            "uv workflow",
+        )
+        report, looked_up = _run_settings(self.root)
+        self._assert_scanned(report, looked_up)
+
+    def test_a_pip_config_command_is_scanned(self) -> None:
+        _write(
+            self.root,
+            ".github/workflows/ci.yml",
+            b"jobs:\n  test:\n    steps:\n      - run: pip config set global.index-url https://pypi.org/simple/\n",
+            "pip config command",
+        )
+        report, looked_up = _run_settings(self.root)
+        self._assert_scanned(report, looked_up)
+
+    def test_a_case_variant_pip_conf_is_scanned(self) -> None:
+        _write(self.root, "PIP.CONF", b"[global]\nindex-url = https://pypi.org/simple/\n", "pip config")
+        report, looked_up = _run_settings(self.root)
+        self._assert_scanned(report, looked_up)
+
+    def test_a_tox_indexserver_is_scanned(self) -> None:
+        _write(
+            self.root,
+            "tox.ini",
+            b"[testenv]\nindexserver = https://pypi.org/simple/\n",
+            "tox indexserver",
+        )
         report, looked_up = _run_settings(self.root)
         self._assert_scanned(report, looked_up)
 

@@ -75,14 +75,18 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
   effective index does.
 - pip settings outside a requirements file are not trusted. A tracked
   `pip.conf` or `pip.ini`, a tracked file that names `PIP_INDEX_URL`,
-  `PIP_EXTRA_INDEX_URL`, `PIP_FIND_LINKS`, `PIP_NO_INDEX` or
-  `PIP_CONFIG_FILE`, an `index-url`, `extra-index-url` or `find-links` key in
-  a `[global]`, `[install]` or `[tool.pip]` section, or a pip command outside
+  `PIP_EXTRA_INDEX_URL`, `PIP_FIND_LINKS`, `PIP_NO_INDEX`, `PIP_CONFIG_FILE`,
+  `UV_INDEX_URL`, `UV_EXTRA_INDEX_URL`, `UV_FIND_LINKS` or `UV_NO_INDEX`, an
+  `index-url`, `extra-index-url`, `find-links` or `no-index` key in a
+  `[global]`, `[install]`, `[tool.pip]` or `[tool.uv]` section, a tox
+  `indexserver` setting, a pip `config set` command, or a pip command outside
   the requirements files this check reads that passes an index option leaves
   every requirements file unable to replace PyPI, so the pip change is looked
   up and scanned. A long option counts on a line that names pip; a short `-i`
   or `-f` counts only after a pip install command on the same joined line.
-  Options of other tools and prose without a pip command do not count.
+  Options of other tools and prose without a pip command do not count. A nox
+  `session.install` call, a YAML-folded option on a later line, and a quoted
+  exec-form option are not detected; that is an accepted limitation.
 - pip configuration outside the repository is out of scope: the review reads
   only the pull request's tree.
 - A pip change is trusted only when a listed, configured index serves that

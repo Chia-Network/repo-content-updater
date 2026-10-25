@@ -431,6 +431,15 @@ class UpstreamRepoTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(upstream._redirect_allowed(f"https://storage.googleapis.com{path}", follow))
 
+    def test_a_redirect_with_a_malformed_host_is_no_answer(self) -> None:
+        url = "https://proxy.golang.org/m/@v/v1.zip"
+
+        def get(_url: str, _limit: int, _accept: str, _budget: object = None) -> tuple[int, str, bytes]:
+            return 302, "https://[::1/x", b""
+
+        with patch.object(upstream, "_get", get):
+            self.assertIsNone(upstream.fetch_archive(url, 100, binding._GO_REDIRECTS))
+
     def test_a_redirect_loop_is_no_answer(self) -> None:
         url = "https://proxy.golang.org/m/@v/v1.zip"
         self.assertIsNone(self._follow({url: (302, url, b"")}, url, binding._GO_REDIRECTS))
@@ -567,6 +576,11 @@ class TrustedPythonIndexTest(unittest.TestCase):
 
     def test_an_off_host_file_link_is_not_downloaded(self) -> None:
         page = b'<a href="https://example.com/chiapos-2.0.4.tar.gz">x</a>\n'
+        self.assertEqual(self.trusted("2.0.4", (f"sha256:{_sha(_SDIST)}",), pages={f"{_CHIA}chiapos/": page}), "")
+        self.assertEqual(self.downloaded, [])
+
+    def test_a_malformed_file_link_is_not_trusted(self) -> None:
+        page = b'<a href="https://[::1/chiapos-2.0.4.tar.gz">x</a>\n'
         self.assertEqual(self.trusted("2.0.4", (f"sha256:{_sha(_SDIST)}",), pages={f"{_CHIA}chiapos/": page}), "")
         self.assertEqual(self.downloaded, [])
 
@@ -730,6 +744,9 @@ class InvalidPortTest(unittest.TestCase):
             with self.subTest(port=port):
                 self.assertIsNone(upstream._get(f"https://example.com:{port}/x", 100))
 
+    def test_a_url_with_a_malformed_host_is_unavailable(self) -> None:
+        self.assertIsNone(upstream._get("https://[::1/x", 100))
+
 
 class Sha256DownloadTest(unittest.TestCase):
     def download(
@@ -784,7 +801,7 @@ class Sha256DownloadTest(unittest.TestCase):
     def test_a_redirect_with_an_invalid_port_has_no_digest(self) -> None:
         start = f"https://{_HOST}/x"
         real_get_response = upstream._get_response
-        for location in (f"https://{_HOST}:99999/y", f"https://{_HOST}:abc/y"):
+        for location in (f"https://{_HOST}:99999/y", f"https://{_HOST}:abc/y", "https://[::1/x"):
 
             def get_response(
                 url: str,
