@@ -687,6 +687,36 @@ class PipSettingFlagsTest(unittest.TestCase):
                 False,
                 True,
             ),
+            "py module pip install": (
+                "Makefile",
+                "py -m pip install -i https://pypi.org/simple/ -r requirements.txt\n",
+                False,
+                True,
+            ),
+            "later pip install on one line": (
+                "Makefile",
+                "pip install setuptools && pip install -i https://pypi.org/simple/ -r requirements.txt\n",
+                False,
+                True,
+            ),
+            "yaml folded short option": (
+                ".github/workflows/ci.yml",
+                "steps:\n  - run: >\n      pip install -r requirements.txt\n      -i https://pypi.org/simple/\n",
+                False,
+                True,
+            ),
+            "dockerfile exec short option": (
+                "Dockerfile",
+                'RUN ["pip", "install", "-i", "https://pypi.org/simple/", "-r", "requirements.txt"]\n',
+                False,
+                True,
+            ),
+            "nox session install": (
+                "noxfile.py",
+                "session.install('-i', 'https://pypi.org/simple/', '-r', 'requirements.txt')\n",
+                False,
+                True,
+            ),
             "pip config set": (
                 ".github/workflows/ci.yml",
                 "run: pip config set global.extra-index-url https://pypi.org/simple/\n",
@@ -723,6 +753,24 @@ class PipSettingFlagsTest(unittest.TestCase):
                 True,
                 False,
             ),
+            "uv index environment": (
+                ".github/workflows/ci.yml",
+                "env:\n  UV_INDEX: https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
+            "uv default index environment": (
+                ".github/workflows/ci.yml",
+                "env:\n  UV_DEFAULT_INDEX: https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
+            "uv index strategy environment": (
+                ".github/workflows/ci.yml",
+                "env:\n  UV_INDEX_STRATEGY: unsafe-best-match\n  UV_INDEX_URL: https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
             "tox indexserver": (
                 "tox.ini",
                 "[testenv]\nindexserver = https://pypi.org/simple/\n",
@@ -745,6 +793,12 @@ class PipSettingFlagsTest(unittest.TestCase):
             "workflow tools": (
                 ".github/workflows/ci.yml",
                 "run: |\n  sed -i s/a/b/ f\n  grep -i x f\n  pip install -r requirements.txt\n",
+                False,
+                False,
+            ),
+            "consecutive workflow steps": (
+                ".github/workflows/ci.yml",
+                "steps:\n  - run: pip install -r requirements.txt\n  - run: sed -i s/a/b/ f\n",
                 False,
                 False,
             ),
@@ -776,9 +830,33 @@ class PipSettingFlagsTest(unittest.TestCase):
                 False,
                 False,
             ),
-            "quoted exec form": (
+            "pip freeze piped to grep": (
+                "Makefile",
+                "pip freeze | grep -i chia\n",
+                False,
+                False,
+            ),
+            "pipx then sed": (
+                "Makefile",
+                "pipx run x; sed -i s/a/b/ f\n",
+                False,
+                False,
+            ),
+            "pip upgrade itself": (
+                "Makefile",
+                "python -m pip install --upgrade pip\n",
+                False,
+                False,
+            ),
+            "pip install then sed": (
+                "Makefile",
+                "pip install -r requirements.txt && sed -i s/a/b/ f\n",
+                False,
+                False,
+            ),
+            "version build argument": (
                 "Dockerfile",
-                'RUN ["pip", "install", "-i", "https://pypi.org/simple/"]\n',
+                "ARG pip_version=23.0\n",
                 False,
                 False,
             ),

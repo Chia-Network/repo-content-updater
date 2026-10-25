@@ -74,19 +74,31 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
   It never makes an index replace PyPI for pip; only a requirements file's
   effective index does.
 - pip settings outside a requirements file are not trusted. A tracked
-  `pip.conf` or `pip.ini`, a tracked file that names `PIP_INDEX_URL`,
-  `PIP_EXTRA_INDEX_URL`, `PIP_FIND_LINKS`, `PIP_NO_INDEX`, `PIP_CONFIG_FILE`,
-  `UV_INDEX_URL`, `UV_EXTRA_INDEX_URL`, `UV_FIND_LINKS` or `UV_NO_INDEX`, an
-  `index-url`, `extra-index-url`, `find-links` or `no-index` key in a
-  `[global]`, `[install]`, `[tool.pip]` or `[tool.uv]` section, a tox
-  `indexserver` setting, a pip `config set` command, or a pip command outside
-  the requirements files this check reads that passes an index option leaves
-  every requirements file unable to replace PyPI, so the pip change is looked
-  up and scanned. A long option counts on a line that names pip; a short `-i`
-  or `-f` counts only after a pip install command on the same joined line.
-  Options of other tools and prose without a pip command do not count. A nox
-  `session.install` call, a YAML-folded option on a later line, and a quoted
-  exec-form option are not detected; that is an accepted limitation.
+  `pip.conf` or `pip.ini` (name compared case-insensitively), a tracked file
+  that names `PIP_INDEX_URL`, `PIP_EXTRA_INDEX_URL`, `PIP_FIND_LINKS`,
+  `PIP_NO_INDEX`, `PIP_CONFIG_FILE`, `UV_INDEX`, `UV_INDEX_URL`,
+  `UV_EXTRA_INDEX_URL`, `UV_DEFAULT_INDEX`, `UV_FIND_LINKS`, `UV_NO_INDEX` or
+  `UV_INDEX_STRATEGY` (name compared case-insensitively), an `index-url`,
+  `extra-index-url`, `find-links` or `no-index` key in a `[global]`,
+  `[install]`, `[tool.pip]` or `[tool.uv]` section, a tox `indexserver`
+  setting, a pip `config set` command, a nox `session.install` call passing an
+  index option, or a pip command outside the requirements files this check
+  reads that passes an index option leaves every requirements file unable to
+  replace PyPI, so the pip change is looked up and scanned.
+- Long index options count by any unique prefix of `--index-url`,
+  `--extra-index-url`, `--find-links` and `--no-index`, from `--in`, `--ext`,
+  `--fi` and `--no-ind`. A pip command is `pip`, `pip3.11`, `python -m pip`,
+  `py -m pip` or `uv pip`, with global options before `install`; every install
+  command on a joined line is checked. A short `-i` or `-f` counts after such
+  a command, alone or clustered with other letters. A quoted exec-form token
+  in an array that names pip, and a quoted index option in a nox
+  `session.install` call, also count. A YAML folded scalar or shell
+  continuation is joined first.
+- Options of other tools and prose without a pip command do not count.
+  Accepted limits: an option assembled from a variable or shell expansion, a
+  YAML form other than a simple folded scalar or an indented option on the
+  next line, a nox call other than `session.install`, and commands of tools
+  other than pip, uv, nox or tox are not detected.
 - pip configuration outside the repository is out of scope: the review reads
   only the pull request's tree.
 - A pip change is trusted only when a listed, configured index serves that

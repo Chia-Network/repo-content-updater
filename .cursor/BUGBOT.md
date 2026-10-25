@@ -27,9 +27,9 @@ adversarial.
   of the change (see "Trusted package indexes" in `AGENTS.md`).
 - A trusted index replacement while a tracked file sets pip settings outside
   the requirements files the check reads: a `pip.conf` or `pip.ini`, a `PIP_*`
-  index environment name, an index key in a pip config section, or a pip
-  command passing an index option (see "Trusted package indexes" in
-  `AGENTS.md`).
+  or `UV_*` index environment name, an index key in a pip config section, a
+  nox `session.install` call, or a pip command passing an index option (see
+  "Trusted package indexes" in `AGENTS.md`).
 
 ## Do not raise
 
@@ -50,6 +50,7 @@ adversarial.
   left inconclusive. Only an unreadable Dependabot config is inconclusive.
 - A `-i` or `-f` option of a non-pip command (`sed -i`, `grep -i`, `rm -f`),
   or prose that names an index option without a pip command.
-- A nox `session.install` call, a YAML-folded option on a later line, or a
-  quoted exec-form option that names an index source. Those are accepted
-  limits, documented in `AGENTS.md`.
+- An index option assembled from a variable or shell expansion, a YAML form
+  other than a simple folded scalar or an indented option on the next line, a
+  nox call other than `session.install`, or a command of a tool other than
+  pip, uv, nox or tox. Those are accepted limits, documented in `AGENTS.md`.

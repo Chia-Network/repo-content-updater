@@ -45,32 +45,37 @@ PIP_SETTING_PATTERNS = (
     "PIP_FIND_LINKS",
     "PIP_NO_INDEX",
     "PIP_CONFIG_FILE",
+    "UV_INDEX",
     "UV_INDEX_URL",
     "UV_EXTRA_INDEX_URL",
+    "UV_DEFAULT_INDEX",
     "UV_FIND_LINKS",
     "UV_NO_INDEX",
+    "UV_INDEX_STRATEGY",
     "indexserver",
-    "--index",
-    "--extra",
-    "--find",
-    "--no-i",
+    "session.install",
     "pip",
+    "pip2",
+    "pip3",
     "index-url",
     "extra-index-url",
     "find-links",
+    "no-index",
 )
 _PIP_ENV_RE = re.compile(
     r"\b(?:PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|PIP_FIND_LINKS|PIP_NO_INDEX|PIP_CONFIG_FILE"
-    r"|UV_INDEX_URL|UV_EXTRA_INDEX_URL|UV_FIND_LINKS|UV_NO_INDEX)\b",
+    r"|UV_INDEX_URL|UV_EXTRA_INDEX_URL|UV_DEFAULT_INDEX|UV_FIND_LINKS|UV_NO_INDEX|UV_INDEX_STRATEGY|UV_INDEX)\b",
     re.IGNORECASE,
 )
 _PIP_TOKEN_RE = re.compile(r"\bpip\d*(?:\.\d+)*\b")
 _PIP_INSTALL_RE = re.compile(
-    r"\b(?:pip\d*(?:\.\d+)*|uv\s+pip|python(?:\d+(?:\.\d+)?)?\s+-m\s+pip)(?:\s+-\S+)*\s+install\b"
+    r"\b(?:pip\d*(?:\.\d+)*|uv\s+pip|(?:python|py)(?:\d+(?:\.\d+)?)?\s+-m\s+pip)(?:\s+-\S+)*\s+install\b"
     r"|\bpip-(?:sync|compile)\b"
 )
 _PIP_LONG_OPTION_RE = re.compile(r"(?<![\w-])(--[A-Za-z0-9][A-Za-z0-9-]*)(?:=\S*)?")
 _PIP_SHORT_OPTION_RE = re.compile(r"(?<!\S)-[A-Za-z]*[if]")
+_PIP_QUOTED_OPTION_RE = re.compile(r"[\"']((?:--[A-Za-z0-9][A-Za-z0-9-]*)|(?:-[A-Za-z]*[if]))[\"']")
+_NOX_INSTALL_RE = re.compile(r"\bsession\.install\s*\(")
 # The long option each minimum abbreviation names, so only prefixes of a real option count.
 _PIP_INDEX_TARGETS = (
     ("--index-url", "--in"),
@@ -87,6 +92,7 @@ _PIP_CONFIG_SET_RE = re.compile(
 )
 _TOX_INDEXSERVER_RE = re.compile(r"^\s*indexserver\s*[:=]", re.IGNORECASE)
 _SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+_YAML_BLOCK_START_RE = re.compile(r"^[ \t]*(?:-\s+)?[^\s:#][^:]*:[ \t]*[>|](?:[1-9][-+]?|[-+]?)?[ \t]*(?:#.*)?$")
 
 
 def _registry_scalar(value: str) -> str | None:
@@ -225,8 +231,31 @@ def _is_blob(mode: str) -> bool:
 
 
 def _joined_lines(text: str) -> list[str]:
-    """Each line of `text` after joining a shell backslash continuation."""
-    return re.sub(r"\\\r?\n", " ", text).splitlines()
+    """Each line of `text` after joining a shell backslash continuation or a simple YAML pip block.
+
+    A YAML folded or literal block joins its content lines for the search, so an indented option on a later line
+    counts as an argument to a pip install command in the same block. A line outside the block is never joined.
+    """
+    joined: list[str] = []
+    content_indent: int | None = None
+    for line in re.sub(r"\\\r?\n", " ", text).splitlines():
+        indent = len(line) - len(line.lstrip())
+        if _YAML_BLOCK_START_RE.match(line):
+            content_indent = indent + 1
+            joined.append(line)
+            continue
+        if content_indent is not None and line.strip() and indent < content_indent:
+            content_indent = None
+        if (
+            content_indent is not None
+            and line.lstrip().startswith("-")
+            and joined
+            and _PIP_INSTALL_RE.search(joined[-1])
+        ):
+            joined[-1] = f"{joined[-1]} {line.strip()}"
+        else:
+            joined.append(line)
+    return joined
 
 
 def _long_index_option(word: str) -> bool:
@@ -235,16 +264,33 @@ def _long_index_option(word: str) -> bool:
 
 
 def _short_index_option(line: str) -> bool:
-    """Whether `-i` or `-f` follows a pip install command on `line`."""
-    match = _PIP_INSTALL_RE.search(line)
-    if not match:
+    """Whether `-i` or `-f` follows any pip install command on `line`."""
+    for match in _PIP_INSTALL_RE.finditer(line):
+        tail = re.split(r"&&|\|\||[;|&]", line[match.end() :], maxsplit=1)[0]
+        if _PIP_SHORT_OPTION_RE.search(tail):
+            return True
+    return False
+
+
+def _quoted_index_option(line: str) -> bool:
+    """Whether `line` has a quoted long index option or a quoted short one."""
+    return any(
+        _long_index_option(match.group(1)) or _PIP_SHORT_OPTION_RE.fullmatch(match.group(1)) is not None
+        for match in _PIP_QUOTED_OPTION_RE.finditer(line)
+    )
+
+
+def _exec_index_option(line: str) -> bool:
+    """Whether a quoted index option appears in a pip exec-form array or a nox session install call."""
+    if not (_NOX_INSTALL_RE.search(line) or _PIP_TOKEN_RE.search(line)):
         return False
-    tail = re.split(r"&&|\|\||[;|&]", line[match.end() :], maxsplit=1)[0]
-    return _PIP_SHORT_OPTION_RE.search(tail) is not None
+    return _quoted_index_option(line)
 
 
 def _index_option_line(line: str) -> bool:
-    """Whether `line` names pip and passes it a long index option, or a short one after an install command."""
+    """Whether `line` names pip and passes a long index option, or a short one after any install command."""
+    if _exec_index_option(line):
+        return True
     if not _PIP_TOKEN_RE.search(line):
         return False
     if any(_long_index_option(match.group(1)) for match in _PIP_LONG_OPTION_RE.finditer(line)):
@@ -272,8 +318,9 @@ def pip_setting_flags(_path: str, text: str) -> tuple[bool, bool]:
     """(whether `text` sets a pip setting, whether a pip command passes an index option).
 
     The environment names and config keys apply to any file. A long option counts on a line that names pip; a short
-    -i or -f counts only after a pip install command on the same joined line. Whether the file is one the
-    requirements index check reads is decided by the caller.
+    -i or -f counts after any pip install command on the same joined line, including a clustered flag, a quoted
+    exec-form token or a nox session install call. A YAML folded option on the line after its command is joined
+    first. Whether the file is one the requirements index check reads is decided by the caller.
     """
     settings = bool(_PIP_ENV_RE.search(text)) or _pip_config_key(text)
     options = any(_index_option_line(line) for line in _joined_lines(text))

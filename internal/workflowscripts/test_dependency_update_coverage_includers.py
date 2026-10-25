@@ -219,8 +219,8 @@ class IncluderDiscoveryTest(unittest.TestCase):
         _write(self.root, "requirements.txt", _PLAIN.encode(), "base")
         _write_many(
             self.root,
-            {f"docs/pipe{index}.txt": b"pipe\n" for index in range(300)},
-            "pipes",
+            {f"docs/pip{index}.txt": b"pip\n" for index in range(300)},
+            "pip candidates",
         )
         self._assert_scanned(_run(self.root))
 
@@ -230,10 +230,24 @@ class IncluderDiscoveryTest(unittest.TestCase):
         _write(self.root, "requirements.txt", _BASE.encode(), "base")
         _write_many(
             self.root,
+            {f"docs/pip{index}.txt": b"pip\n" for index in range(300)},
+            "pip candidates",
+        )
+        self._assert_scanned(_run(self.root, trusted_host="pypi.chia.net"))
+
+    def test_many_files_containing_pipe_keep_the_base_trusted(self) -> None:
+        _write(self.root, "requirements.txt", _BASE.encode(), "base")
+        _write_many(
+            self.root,
             {f"docs/pipe{index}.txt": b"pipe\n" for index in range(300)},
             "pipes",
         )
-        self._assert_scanned(_run(self.root, trusted_host="pypi.chia.net"))
+        self._assert_trusted(_run(self.root, trusted_host="pypi.chia.net"))
+
+    def test_a_latin1_readme_containing_pipeline_keeps_the_base_trusted(self) -> None:
+        _write(self.root, "requirements.txt", _BASE.encode(), "base")
+        _write(self.root, "README.md", "pipeline caf\xe9\n".encode("latin-1"), "readme")
+        self._assert_trusted(_run(self.root, trusted_host="pypi.chia.net"))
 
     def test_more_than_the_byte_cap_of_text_is_scanned(self) -> None:
         _write(self.root, "requirements.txt", _BASE.encode(), "base")
@@ -386,6 +400,57 @@ class PipSettingsTest(unittest.TestCase):
             [(item["name"], item["index"]) for item in report["trusted_packages"]],
             [("chiapos", "pypi.chia.net")],
         )
+
+    def test_a_later_pip_install_on_one_line_is_scanned(self) -> None:
+        _write(
+            self.root,
+            "Makefile",
+            b"install:\n\tpip install setuptools && pip install -i https://pypi.org/simple/ -r requirements.txt\n",
+            "makefile",
+        )
+        report, looked_up = _run_settings(self.root)
+        self._assert_scanned(report, looked_up)
+
+    def test_a_yaml_folded_option_is_scanned(self) -> None:
+        _write(
+            self.root,
+            ".github/workflows/ci.yml",
+            b"jobs:\n  test:\n    steps:\n      - run: >\n"
+            b"          pip install -r requirements.txt\n          -i https://pypi.org/simple/\n",
+            "workflow",
+        )
+        report, looked_up = _run_settings(self.root)
+        self._assert_scanned(report, looked_up)
+
+    def test_a_dockerfile_exec_form_option_is_scanned(self) -> None:
+        _write(
+            self.root,
+            "Dockerfile",
+            b'FROM python:3.12\nRUN ["pip", "install", "-i", "https://pypi.org/simple/", "-r", "requirements.txt"]\n',
+            "dockerfile",
+        )
+        report, looked_up = _run_settings(self.root)
+        self._assert_scanned(report, looked_up)
+
+    def test_a_nox_session_install_is_scanned(self) -> None:
+        _write(
+            self.root,
+            "noxfile.py",
+            b"session.install('-i', 'https://pypi.org/simple/', '-r', 'requirements.txt')\n",
+            "nox",
+        )
+        report, looked_up = _run_settings(self.root)
+        self._assert_scanned(report, looked_up)
+
+    def test_a_uv_default_index_is_scanned(self) -> None:
+        _write(
+            self.root,
+            ".github/workflows/ci.yml",
+            b"env:\n  UV_DEFAULT_INDEX: https://pypi.org/simple/\n",
+            "uv workflow",
+        )
+        report, looked_up = _run_settings(self.root)
+        self._assert_scanned(report, looked_up)
 
     def test_a_latin1_manifest_that_names_the_package_is_scanned(self) -> None:
         for name, text in {

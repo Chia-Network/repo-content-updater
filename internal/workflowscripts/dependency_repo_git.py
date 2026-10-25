@@ -12,6 +12,17 @@ import io
 import subprocess
 
 
+def _entries(records: str) -> list[tuple[str, str]]:
+    """The (path, mode) of each nonempty NUL-separated ls-tree record."""
+    entries: list[tuple[str, str]] = []
+    for record in records.split("\0"):
+        if not record:
+            continue
+        meta, _separator, path = record.partition("\t")
+        entries.append((path, meta.split(" ", 1)[0]))
+    return entries
+
+
 def files(directory: str) -> list[tuple[str, str]] | None:
     """The (path, mode) of each entry directly in `directory` at HEAD, or None when git cannot list them."""
     prefix = "" if directory in {"", "."} else f"{directory}/"
@@ -21,20 +32,22 @@ def files(directory: str) -> list[tuple[str, str]] | None:
         capture_output=True,
         text=True,
     )
-    if proc.returncode != 0:
-        return None
-    entries: list[tuple[str, str]] = []
-    for record in proc.stdout.split("\0"):
-        if not record:
-            continue
-        meta, _separator, path = record.partition("\t")
-        entries.append((path, meta.split(" ", 1)[0]))
-    return entries
+    return None if proc.returncode != 0 else _entries(proc.stdout)
 
 
-def _grep(needles: list[str], limit: int | None) -> list[str] | None:
+def _grep(
+    needles: list[str],
+    limit: int | None,
+    *,
+    word: bool = False,
+    ignore_case: bool = False,
+) -> list[str] | None:
     """The tracked paths at HEAD whose text contains any needle, or None on an error or above `limit`."""
     args = ["git", "grep", "-l", "-F", "-I", "-z"]
+    if word:
+        args.append("-w")
+    if ignore_case:
+        args.append("-i")
     for needle in needles:
         args.extend(["-e", needle])
     args.extend(["HEAD", "--"])
@@ -51,8 +64,11 @@ def grep(needle: str) -> list[str] | None:
 
 
 def grep_any(needles: tuple[str, ...], limit: int) -> list[str] | None:
-    """The tracked paths at HEAD whose text contains any of `needles`, or None on an error or above `limit`."""
-    return _grep(list(needles), limit)
+    """The tracked paths at HEAD whose text contains any of `needles` as a whole word, ignoring case.
+
+    Returns None on an error or when the result is above `limit`.
+    """
+    return _grep(list(needles), limit, word=True, ignore_case=True)
 
 
 def bytes_at(rev: str, path: str) -> bytes | None:
@@ -84,15 +100,7 @@ def tree() -> list[tuple[str, str]] | None:
         capture_output=True,
         text=True,
     )
-    if proc.returncode != 0:
-        return None
-    entries: list[tuple[str, str]] = []
-    for record in proc.stdout.split("\0"):
-        if not record:
-            continue
-        meta, _separator, path = record.partition("\t")
-        entries.append((path, meta.split(" ", 1)[0]))
-    return entries
+    return None if proc.returncode != 0 else _entries(proc.stdout)
 
 
 def blobs(paths: list[str], limit: int) -> tuple[dict[str, bytes], bool]:
