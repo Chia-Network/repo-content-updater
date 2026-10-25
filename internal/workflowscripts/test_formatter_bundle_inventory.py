@@ -31,6 +31,7 @@ class FormatterBundleInventoryTest(unittest.TestCase):
             ("upstream_malware_scan.sh", "upstream-malware-scan.sh"),
             ("dependency_update_coverage.py", "dependency-cursor-review-update-coverage.py"),
             ("dependency_manifest_diff.py", "dependency-cursor-review-manifest-diff.py"),
+            ("dependency_repo_git.py", "dependency-cursor-review-repo-git.py"),
             ("dependency_cursor_review_versions.py", "dependency-cursor-review-versions.py"),
             ("dependency_cursor_review_ecosystems.py", "dependency-cursor-review-ecosystems.py"),
             ("dependency_cursor_review_upstream.py", "dependency-cursor-review-upstream.py"),

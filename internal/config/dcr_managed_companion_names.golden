@@ -4,6 +4,7 @@ malware-verdict-formatter
 upstream-malware-scan
 dependency-update-coverage
 dependency-manifest-diff
+dependency-repo-git
 dependency-cursor-review-versions
 dependency-cursor-review-ecosystems
 dependency-cursor-review-upstream

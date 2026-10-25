@@ -65,9 +65,18 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
 - A Dependabot `replaces-base` setting describes Dependabot's own resolution.
   It never makes an index replace PyPI for pip; only a requirements file's
   effective index does.
-- pip configuration outside the repository, such as `pip.conf` or
-  `PIP_INDEX_URL`, is out of scope: the review reads only the pull request's
-  tree.
+- pip settings outside a requirements file are not trusted. A tracked
+  `pip.conf` or `pip.ini`, a tracked file that names `PIP_INDEX_URL`,
+  `PIP_EXTRA_INDEX_URL`, `PIP_FIND_LINKS`, `PIP_NO_INDEX` or
+  `PIP_CONFIG_FILE`, an `index-url`, `extra-index-url` or `find-links` key in
+  a `[global]`, `[install]` or `[tool.pip]` section, or a pip command outside
+  the requirements files this check reads that passes an index option leaves
+  every requirements file unable to replace PyPI, so the pip change is looked
+  up and scanned. A long option counts on a line that names pip; a short `-i`
+  or `-f` counts only after a pip install command on the same joined line.
+  Options of other tools and prose without a pip command do not count.
+- pip configuration outside the repository is out of scope: the review reads
+  only the pull request's tree.
 - A pip change is trusted only when a listed, configured index serves that
   exact version and either every file hash its lock records matches a file
   downloaded from that index's own links, or every unhashed occurrence is in

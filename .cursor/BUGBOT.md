@@ -24,6 +24,11 @@ adversarial.
   package in `pyproject.toml`, `setup.py`, `setup.cfg` or `Pipfile` is
   unhashed with no index and never makes a change trusted (see "Trusted
   package indexes" in `AGENTS.md`).
+- A trusted index replacement while a tracked file sets pip settings outside
+  the requirements files the check reads: a `pip.conf` or `pip.ini`, a `PIP_*`
+  index environment name, an index key in a pip config section, or a pip
+  command passing an index option (see "Trusted package indexes" in
+  `AGENTS.md`).
 
 ## Do not raise
 
@@ -39,3 +44,5 @@ adversarial.
 - An includer whose base filename is split across a continuation or built
   from quoted pieces is not detected. That limitation is documented in
   `AGENTS.md`.
+- A `-i` or `-f` option of a non-pip command (`sed -i`, `grep -i`, `rm -f`),
+  or prose that names an index option without a pip command.

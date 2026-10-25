@@ -25,6 +25,7 @@ _Read = Callable[[str, str], str]
 _ListFiles = Callable[[str], list[tuple[str, str]] | None]
 _Search = Callable[[str], list[str] | None]
 _UnreadFiles = Callable[[frozenset[str]], frozenset[str]]
+_NoReplace = Callable[[frozenset[str]], bool]
 
 _REGISTRY_RE = re.compile(r"^  [^\s#][^:]*:\s*(#.*)?$")
 _REGISTRY_FIELD_RE = re.compile(r"^    ([A-Za-z0-9_-]+):[ \t]+(.+?)[ \t]*$")
@@ -35,9 +36,50 @@ _PYPI_INDEXES = frozenset({"https://pypi.org/simple/", "https://pypi.python.org/
 _MAX_REQUIREMENTS_FILES = 64
 _MAX_INCLUDER_CANDIDATES = 256
 
+# A tracked file with one of these names is a pip config wherever it sits.
+PIP_CONF_NAMES = frozenset({"pip.conf", "pip.ini"})
+# Fixed strings a repository search uses to find a file that may set a pip option or environment variable.
+PIP_SETTING_PATTERNS = (
+    "PIP_INDEX_URL",
+    "PIP_EXTRA_INDEX_URL",
+    "PIP_FIND_LINKS",
+    "PIP_NO_INDEX",
+    "PIP_CONFIG_FILE",
+    "--index",
+    "--extra",
+    "--find",
+    "--no-i",
+    "pip",
+    "index-url",
+    "extra-index-url",
+    "find-links",
+)
+_PIP_ENV_RE = re.compile(r"\b(?:PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|PIP_FIND_LINKS|PIP_NO_INDEX|PIP_CONFIG_FILE)\b")
+_PIP_TOKEN_RE = re.compile(r"\bpip3?\b")
+_PIP_INSTALL_RE = re.compile(
+    r"\b(?:pip3?|uv\s+pip|python(?:\d+(?:\.\d+)?)?\s+-m\s+pip)\s+install\b|\bpip-(?:sync|compile)\b"
+)
+_PIP_LONG_OPTION_RE = re.compile(r"(?<![\w-])(--[A-Za-z0-9][A-Za-z0-9-]*)(?:=\S*)?")
+_PIP_SHORT_OPTION_RE = re.compile(r"(?<!\S)-[if]\S*(?=\s|$)")
+# The long option each minimum abbreviation names, so only prefixes of a real option count.
+_PIP_INDEX_TARGETS = (
+    ("--index-url", "--index"),
+    ("--extra-index-url", "--extra"),
+    ("--find-links", "--find"),
+    ("--no-index", "--no-i"),
+)
+_PIP_CONFIG_FILES = frozenset({"setup.cfg", "tox.ini", "pyproject.toml"})
+_PIP_CONFIG_SECTIONS = frozenset({"global", "install"})
+_PIP_CONFIG_KEY_RE = re.compile(r"^\s*(?:index-url|extra-index-url|find-links)\s*[:=]", re.IGNORECASE)
+_SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+
 
 def _no_unread(_loaded: frozenset[str]) -> frozenset[str]:
     return frozenset()
+
+
+def _never_replace(_loaded: frozenset[str]) -> bool:
+    return False
 
 
 def _registry_scalar(value: str) -> str | None:
@@ -173,6 +215,63 @@ def _is_blob(mode: str) -> bool:
     return mode.startswith("100")
 
 
+def _joined_lines(text: str) -> list[str]:
+    """Each line of `text` after joining a shell backslash continuation."""
+    return re.sub(r"\\\r?\n", " ", text).splitlines()
+
+
+def _long_index_option(word: str) -> bool:
+    """Whether `word` is a long pip index option or a unique-prefix abbreviation of at least its minimum."""
+    return any(target.startswith(word) and word.startswith(minimum) for target, minimum in _PIP_INDEX_TARGETS)
+
+
+def _short_index_option(line: str) -> bool:
+    """Whether `-i` or `-f` follows a pip install command on `line`."""
+    match = _PIP_INSTALL_RE.search(line)
+    if not match:
+        return False
+    tail = re.split(r"&&|\|\||[;|&]", line[match.end() :], maxsplit=1)[0]
+    return _PIP_SHORT_OPTION_RE.search(tail) is not None
+
+
+def _index_option_line(line: str) -> bool:
+    """Whether `line` names pip and passes it a long index option, or a short one after an install command."""
+    if not _PIP_TOKEN_RE.search(line):
+        return False
+    if any(_long_index_option(match.group(1)) for match in _PIP_LONG_OPTION_RE.finditer(line)):
+        return True
+    return _short_index_option(line)
+
+
+def _pip_config_key(text: str) -> bool:
+    """Whether a pip config section of `text` sets an index key."""
+    section = ""
+    for line in _joined_lines(text):
+        header = _SECTION_RE.match(line)
+        if header:
+            section = header.group(1).strip().lower()
+            continue
+        if (section in _PIP_CONFIG_SECTIONS or section == "tool.pip" or section.startswith("tool.pip.")) and (
+            _PIP_CONFIG_KEY_RE.match(line)
+        ):
+            return True
+    return False
+
+
+def pip_setting_flags(path: str, text: str) -> tuple[bool, bool]:
+    """(whether `text` sets a pip setting, whether a pip command passes an index option).
+
+    The environment names apply to any file. The config keys are read only in setup.cfg, tox.ini and pyproject.toml.
+    A long option counts on a line that names pip; a short -i or -f counts only after a pip install command on the
+    same joined line. Whether the file is one the requirements index check reads is decided by the caller.
+    """
+    settings = bool(_PIP_ENV_RE.search(text))
+    if posixpath.basename(path) in _PIP_CONFIG_FILES:
+        settings = settings or _pip_config_key(text)
+    options = any(_index_option_line(line) for line in _joined_lines(text))
+    return settings, options
+
+
 class _Effective(NamedTuple):
     """What a requirements file and its includes leave for the next file pip reads."""
 
@@ -203,12 +302,15 @@ class _Requirements:
         list_files: _ListFiles,
         search: _Search,
         unread_files: _UnreadFiles,
+        no_replace: _NoReplace,
     ) -> None:
         self._configured = configured
         self._read = read
         self._list_files = list_files
         self._search = search
         self._unread_files = unread_files
+        self._no_replace = no_replace
+        self._replace_blocked = False
         self._listings: dict[str, list[tuple[str, str]] | None] = {}
         self._texts: dict[str, str] = {}
         self._options: dict[str, _python.IndexOptions] = {}
@@ -340,6 +442,7 @@ class _Requirements:
             for candidate in candidates:
                 self._consider(candidate, path, roots, pending)
         self._broken.update(self._unread_files(frozenset(self._loaded)))
+        self._replace_blocked = self._no_replace(frozenset(self._loaded))
         return True
 
     def _effective_at(self, path: str, stack: frozenset[str]) -> _Effective:
@@ -411,7 +514,8 @@ class _Requirements:
         index = effective.index or ""
         replaces = (
             index
-            if not effective.extra
+            if not self._replace_blocked
+            and not effective.extra
             and index in _upstream.TRUSTED_PYTHON_INDEXES
             and self.replaces_pypi(path, index, roots)
             else ""
@@ -426,6 +530,7 @@ def for_directory(
     list_files: _ListFiles,
     search: _Search,
     unread_files: _UnreadFiles = _no_unread,
+    no_replace: _NoReplace = _never_replace,
 ) -> DirectoryIndexes:
     """The index facts of each requirements file in `directory` at HEAD.
 
@@ -435,7 +540,7 @@ def for_directory(
     source leaves that file unread, and an unread file leaves every replacement unread. A file keeps its replacing
     index only when every tracked file in the repository that includes it, directly or through other includes, ends
     with that same index and names no extra source. `unread_files` names the files a repository-wide fact leaves
-    unread.
+    unread, and `no_replace` says whether a repository-wide fact leaves no file able to replace PyPI.
     """
     files = list_files(directory)
     if files is None:
@@ -447,7 +552,7 @@ def for_directory(
             if not _is_blob(mode):
                 return DirectoryIndexes(Indexes(other=True))
             roots.add(path)
-    requirements = _Requirements(configured, read, list_files, search, unread_files)
+    requirements = _Requirements(configured, read, list_files, search, unread_files, no_replace)
     constraints = set(roots)
     if not requirements.load(constraints):
         return DirectoryIndexes(Indexes(other=True))

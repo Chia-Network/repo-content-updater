@@ -35,11 +35,17 @@ import dependency_cursor_review_versions as _versions
 import dependency_manifest_diff as _diff
 import dependency_manifest_python as _manifest_python
 import dependency_python_indexes as _python_indexes
+import dependency_repo_git as _git
 from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN, reason_note
 
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
 # Registry lookups and bindings run at once; each waits on the network, not on the others.
 _LOOKUPS = 8
+
+# Names the tests and the rest of this module patch or pass as callbacks.
+_git_text = _git.text_at
+_git_files = _git.files
+_git_grep = _git.grep
 
 
 class Target(NamedTuple):
@@ -391,86 +397,17 @@ def any_read(report: dict) -> bool:
 
 
 _BASE_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
-
-
-def _git_files(directory: str) -> list[tuple[str, str]] | None:
-    """The (path, mode) of each entry directly in `directory` at HEAD, or None when git cannot list them."""
-    prefix = "" if directory in {"", "."} else f"{directory}/"
-    proc = subprocess.run(
-        ["git", "ls-tree", "-z", "HEAD", "--", prefix or "."],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        return None
-    entries: list[tuple[str, str]] = []
-    for record in proc.stdout.split("\0"):
-        if not record:
-            continue
-        meta, _separator, path = record.partition("\t")
-        entries.append((path, meta.split(" ", 1)[0]))
-    return entries
-
-
-def _git_grep(needle: str) -> list[str] | None:
-    """The tracked paths at HEAD whose text contains `needle`, or None when git cannot search them."""
-    proc = subprocess.run(
-        ["git", "grep", "-l", "-F", "-I", "-z", "-e", needle, "HEAD", "--"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode not in {0, 1}:
-        return None
-    return [record.removeprefix("HEAD:") for record in proc.stdout.split("\0") if record]
-
-
-def _git_bytes(rev: str, path: str) -> bytes | None:
-    """The bytes of `path` at `rev`, or None when git cannot read it."""
-    proc = subprocess.run(
-        ["git", "show", f"{rev}:{path}"],
-        check=False,
-        capture_output=True,
-    )
-    return None if proc.returncode != 0 else proc.stdout
-
-
-def _git_text(rev: str, path: str) -> str:
-    """The text of `path` at `rev`, or "" when git cannot read it or it is not UTF-8."""
-    data = _git_bytes(rev, path)
-    if data is None:
-        return ""
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return ""
-
-
-def _git_tree() -> list[tuple[str, str]] | None:
-    """The (path, mode) of every tracked entry at HEAD, or None when git cannot list them."""
-    proc = subprocess.run(
-        ["git", "ls-tree", "-r", "-z", "HEAD"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        return None
-    entries: list[tuple[str, str]] = []
-    for record in proc.stdout.split("\0"):
-        if not record:
-            continue
-        meta, _separator, path = record.partition("\t")
-        entries.append((path, meta.split(" ", 1)[0]))
-    return entries
+_MAX_PIP_SETTING_CANDIDATES = 256
+_MAX_REPO_FACT_BYTES = 8 * 1024 * 1024
 
 
 class _RepoFacts(NamedTuple):
-    """Tracked repository facts that leave a requirements file unread."""
+    """Tracked repository facts that leave a requirements file unread or unable to replace PyPI."""
 
     unread: bool = False  # whether a tracked .txt or .in file is not UTF-8 text
     aliases: frozenset[str] = frozenset()  # each repository path a tracked symlink resolves to
+    pip_settings: bool = False  # whether a tracked file sets a pip setting outside a requirements file
+    pip_options: frozenset[str] = frozenset()  # files with a pip index option, before the read set is known
 
 
 def _utf8_text(data: bytes) -> bool:
@@ -493,33 +430,56 @@ def _symlink_target(path: str, target: str) -> str | None:
 
 
 def _repo_facts() -> _RepoFacts | None:
-    """The tracked-file facts that leave a requirements file unread, or None when the tree cannot be read.
+    """The tracked-file facts that leave a requirements file unread or unable to replace PyPI.
 
-    A tracked .txt or .in file that is not UTF-8 text leaves every loaded requirements file unread. A tracked
-    symlink whose target resolves to a loaded requirements file leaves that file unread.
+    A tracked .txt or .in file that is not UTF-8 text leaves every loaded requirements file unread, and a tracked
+    symlink whose target resolves to one leaves that file unread. A tracked pip.conf or pip.ini, a tracked file that
+    names a pip index environment variable or a pip config key, or a pip command with an index option outside the
+    requirements files the index check reads leaves every requirements file unable to replace PyPI.
     """
-    entries = _git_tree()
+    entries = _git.tree()
     if entries is None:
         return None
-    unread = False
+    candidates = _git.grep_any(_python_indexes.PIP_SETTING_PATTERNS, _MAX_PIP_SETTING_CANDIDATES)
+    if candidates is None:
+        return None
+    read_paths = {path for path, mode in entries if mode == "120000"}
+    read_paths.update(path for path, mode in entries if path.endswith((".txt", ".in")) and mode.startswith("100"))
+    read_paths.update(candidates)
+    blobs, unread = _git.blobs(sorted(read_paths), _MAX_REPO_FACT_BYTES)
+    settings = False
     aliases: set[str] = set()
+    pip_options: set[str] = set()
     for path, mode in entries:
+        if posixpath.basename(path) in _python_indexes.PIP_CONF_NAMES:
+            settings = True
         if mode == "120000":
-            data = _git_bytes("HEAD", path)
+            data = blobs.get(path)
             if data is None:
-                return None
+                unread = True
+                continue
             try:
                 target = data.decode("utf-8")
             except UnicodeDecodeError:
-                return None
+                unread = True
+                continue
             resolved = _symlink_target(path, target)
             if resolved is not None:
                 aliases.add(resolved)
         elif path.endswith((".txt", ".in")) and mode.startswith("100"):
-            data = _git_bytes("HEAD", path)
+            data = blobs.get(path)
             if data is None or not _utf8_text(data):
                 unread = True
-    return _RepoFacts(unread, frozenset(aliases))
+    for path in candidates:
+        data = blobs.get(path)
+        if data is None or not _utf8_text(data):
+            unread = True
+            continue
+        found_settings, found_options = _python_indexes.pip_setting_flags(path, data.decode("utf-8"))
+        settings = settings or found_settings
+        if found_options:
+            pip_options.add(path)
+    return _RepoFacts(unread, frozenset(aliases), settings, frozenset(pip_options))
 
 
 def _unread_requirements(loaded: frozenset[str], facts: _RepoFacts | None) -> frozenset[str]:
@@ -527,6 +487,11 @@ def _unread_requirements(loaded: frozenset[str], facts: _RepoFacts | None) -> fr
     if facts is None or facts.unread:
         return loaded
     return frozenset(path for path in loaded if path in facts.aliases)
+
+
+def _no_replace(loaded: frozenset[str], facts: _RepoFacts | None) -> bool:
+    """Whether a repository-wide pip setting leaves no requirements file able to replace PyPI."""
+    return facts is not None and (facts.pip_settings or bool(facts.pip_options - loaded))
 
 
 def _verify_commit(rev: str) -> str:
@@ -929,8 +894,13 @@ def main() -> None:
     def unread(loaded: frozenset[str]) -> frozenset[str]:
         return _unread_requirements(loaded, facts)
 
+    def no_replace(loaded: frozenset[str]) -> bool:
+        return _no_replace(loaded, facts)
+
     indexes = {
-        directory: _python_indexes.for_directory(directory, configured, _git_text, _git_files, _git_grep, unread)
+        directory: _python_indexes.for_directory(
+            directory, configured, _git_text, _git_files, _git_grep, unread, no_replace
+        )
         for directory in pip_dirs
     }
     exact = _exact_all(changes, indexes, configured, plan.hashed)

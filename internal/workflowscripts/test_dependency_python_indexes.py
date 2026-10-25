@@ -595,5 +595,103 @@ class PythonIndexesTest(unittest.TestCase):
                 )
 
 
+class PipSettingFlagsTest(unittest.TestCase):
+    def test_a_pip_setting_outside_a_requirements_file_is_found(self) -> None:
+        cases = {
+            "tox setenv": (
+                "tox.ini",
+                "[testenv]\nsetenv = PIP_EXTRA_INDEX_URL=https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
+            "workflow env": (
+                ".github/workflows/ci.yml",
+                "env:\n  PIP_INDEX_URL: https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
+            "workflow long option": (
+                ".github/workflows/ci.yml",
+                "run: pip install -r requirements.txt --extra-index-url https://pypi.org/simple/\n",
+                False,
+                True,
+            ),
+            "dockerfile short option": (
+                "Dockerfile",
+                "RUN pip install -i https://pypi.org/simple/ -r requirements.txt\n",
+                False,
+                True,
+            ),
+            "dockerfile joined short option": (
+                "Dockerfile",
+                "RUN pip install -ihttps://pypi.org/simple/ -r requirements.txt\n",
+                False,
+                True,
+            ),
+            "makefile continuation": (
+                "Makefile",
+                "install:\n\tpython -m pip install \\\n\t\t--find-links dist/ -r requirements.txt\n",
+                False,
+                True,
+            ),
+            "pip config section": (
+                "setup.cfg",
+                "[install]\nindex-url = https://pypi.org/simple/\n",
+                True,
+                False,
+            ),
+            "pyproject pip table": (
+                "pyproject.toml",
+                "[tool.pip]\nfind-links = wheels\n",
+                True,
+                False,
+            ),
+            "long option abbreviations": (
+                "Makefile",
+                "pip install --index=https://pypi.org/simple/ --extra x --find y --no-i\n",
+                False,
+                True,
+            ),
+        }
+        for label, (path, text, settings, options) in cases.items():
+            with self.subTest(label):
+                self.assertEqual(indexes.pip_setting_flags(path, text), (settings, options))
+
+    def test_another_tool_or_prose_is_not_a_pip_setting(self) -> None:
+        cases = {
+            "workflow tools": (
+                ".github/workflows/ci.yml",
+                "run: |\n  sed -i s/a/b/ f\n  grep -i x f\n  pip install -r requirements.txt\n",
+                False,
+                False,
+            ),
+            "makefile remove": ("Makefile", "clean:\n\trm -f x\n", False, False),
+            "readme prose": ("README.md", "Use --no-index when offline.\n", False, False),
+            "npm registry": (
+                "package.json",
+                '{"scripts": {"install": "npm install --registry https://x/"}}\n',
+                False,
+                False,
+            ),
+            "short option before pip": ("Makefile", "-i https://pypi.org/simple/ pip install x\n", False, False),
+            "short option after another command": (
+                "Makefile",
+                "pip install x && sed -i s/a/b/ f\n",
+                False,
+                False,
+            ),
+            "not a whole environment name": ("tox.ini", "setenv = PIP_INDEX_URLS=x\n", False, False),
+            "config key outside a pip section": (
+                "setup.cfg",
+                "[options]\nindex-url = https://pypi.org/simple/\n",
+                False,
+                False,
+            ),
+        }
+        for label, (path, text, settings, options) in cases.items():
+            with self.subTest(label):
+                self.assertEqual(indexes.pip_setting_flags(path, text), (settings, options))
+
+
 if __name__ == "__main__":
     unittest.main()
