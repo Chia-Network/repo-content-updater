@@ -469,12 +469,9 @@ def go(module: str, _version: str) -> Repo:
     return _found(_go_get_repository(module), PUBLISHER)
 
 
-# Deliberate trust decision (AGENTS.md, "Trusted package indexes"): a Python package that one of the organization's
-# own indexes below serves at the exact version is trusted and is not scanned when every file hash the lock records
-# matches a file downloaded from it, or, for an unhashed occurrence, when the requirements file that pins it replaces
-# PyPI with that index. This tuple is the only list of trusted indexes. A repository's Dependabot config can select
-# among them, but nothing a repository or a package says can add one; any other configured index leaves pip changes
-# inconclusive.
+# Deliberate trust decision (AGENTS.md, "Trusted package indexes"): a pip change is trusted and not scanned only
+# when every hash its lock records for the new version is sha256 and matches a file one of these indexes serves at
+# that version. This tuple is the only list of trusted indexes. Nothing a repository or a package says can add one.
 TRUSTED_PYTHON_INDEXES = ("https://pypi.chia.net/simple/", "https://download.chia.net/simple/")
 # A trusted index may serve its files from another host. A link and a download redirect may reach only the index's
 # own host or a host listed here.
@@ -538,13 +535,6 @@ def _index_files(index: str, name: str, version: str, budget: _DownloadBudget) -
     return tuple(files) if files and len(files) <= _MAX_INDEX_FILES else None
 
 
-class Locked(NamedTuple):
-    """One occurrence of a package in a lock or requirements file."""
-
-    hashes: str = ""  # space-separated sha256 values, "" when the occurrence records none
-    index: str = ""  # the trusted index its file replaces PyPI with, "" when it does not
-
-
 def _serves_wanted(files: tuple[str, ...], hosts: frozenset[str], wanted: set[str], budget: _DownloadBudget) -> bool:
     """Whether `files` serve every wanted digest, stopping once they all match.
 
@@ -561,43 +551,30 @@ def _serves_wanted(files: tuple[str, ...], hosts: frozenset[str], wanted: set[st
     return wanted <= found
 
 
-def trusted_python_index(
-    name: str,
-    version: str,
-    locked: tuple[Locked, ...],
-    configured: frozenset[str],
-) -> str:
-    """The host of a trusted index in `configured` that serves `name` at `version`, or "".
+def trusted_python_index(name: str, version: str, hashes: tuple[str, ...]) -> str:
+    """The host of a trusted index that serves `name` at `version`, or "".
 
-    An unhashed occurrence must name the trusted index its file installs from, and every such index must serve
-    `name` at this version. Each sha256 a hashed occurrence records must match a file downloaded from a trusted
-    index at this version. A file link outside the index's hosts is not downloaded. One budget covers this
-    package check, including the index page and every file read; a grouped update runs one check per package.
+    Every recorded hash must be `sha256:` and must match a file downloaded from the same trusted index at this
+    version; a missing or empty record, another algorithm, or a digest no trusted index serves leaves it untrusted.
+    One budget covers this package check, including the index page and every file read; a grouped update runs one
+    check per package.
     """
-    if not _PYPI_NAME_RE.fullmatch(name) or not version:
+    if not _PYPI_NAME_RE.fullmatch(name) or not version or not hashes:
         return ""
-    required = {item.index for item in locked if not item.hashes}
-    if any(not item.hashes and not item.index for item in locked):
-        return ""
-    wanted = {digest.removeprefix("sha256:").lower() for item in locked for digest in item.hashes.split()}
-    if not wanted and not required:
-        return ""
-    served: set[str] = set()
-    matched = ""
+    wanted: set[str] = set()
+    for recorded in hashes:
+        values = recorded.split()
+        if not values:
+            return ""
+        for value in values:
+            algorithm, separator, digest = value.partition(":")
+            if not separator or algorithm != "sha256" or not digest:
+                return ""
+            wanted.add(digest.lower())
     budget = _DownloadBudget(seconds=_INDEX_DOWNLOAD_SECONDS, size=_MAX_INDEX_DOWNLOAD_BYTES)
     for index in TRUSTED_PYTHON_INDEXES:
-        if index not in configured:
-            continue
         files = _index_files(index, name, version, budget)
-        if not files:
-            continue
-        hosts = _index_hosts(index)
-        if index in required:
-            served.add(index)
-        if wanted and not matched and _serves_wanted(files, hosts, wanted, budget):
-            matched = index
-    if required - served or (wanted and not matched):
-        return ""
-    chosen = next(index for index in TRUSTED_PYTHON_INDEXES if index in required) if required else matched
-    parts = _split(chosen)
-    return parts.hostname or "" if parts is not None else ""
+        if files and _serves_wanted(files, _index_hosts(index), wanted, budget):
+            parts = _split(index)
+            return parts.hostname or "" if parts is not None else ""
+    return ""

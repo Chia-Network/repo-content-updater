@@ -16,8 +16,6 @@ from dependency_manifest_go import go_mod, go_sum, go_sum_hash, go_zip_hash
 from dependency_manifest_lines import Pin, dockerfile_from, terraform_config, terraform_lock, workflow_uses
 from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
 from dependency_manifest_python import (
-    IndexOption,
-    IndexOptions,
     mentions,
     pipfile_lock,
     pipfile_lock_hashes,
@@ -25,7 +23,6 @@ from dependency_manifest_python import (
     poetry_lock_hashes,
     requirements,
     requirements_hashes,
-    requirements_index_options,
     requirements_txt,
 )
 
@@ -639,51 +636,3 @@ class LineGrammarTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class RequirementsIndexOptionsTest(unittest.TestCase):
-    def test_every_form_pip_accepts_names_an_index(self) -> None:
-        index = IndexOption("index", "https://a/")
-        extra = IndexOption("extra", "https://b/")
-        cases = {
-            "-i https://a/\nattrs==1.0\n": IndexOptions((index,)),
-            "-ihttps://a/": IndexOptions((index,)),
-            "--index-url=https://a/": IndexOptions((index,)),
-            "--index-url \\\n  https://a/  # note": IndexOptions((index,)),
-            "--extra-index-url https://b/": IndexOptions((extra,)),
-            "--extra=https://b/": IndexOptions((extra,)),
-            "--ind https://a/ --pre": IndexOptions((index,)),
-            "-r ../base.txt\n--constraint=c.txt": IndexOptions(
-                (IndexOption("include", "../base.txt"), IndexOption("include", "c.txt"))
-            ),
-            "--trusted-host h --pre\n# -i https://x/\nattrs==1.0 --hash=sha256:aa": IndexOptions(),
-            "-i https://a/\n-r base.txt\n--extra-index-url https://b/": IndexOptions(
-                (index, IndexOption("include", "base.txt"), extra)
-            ),
-        }
-        unread = {
-            "-i": IndexOptions(unread=True),
-            "--index-url ${URL}": IndexOptions(unread=True, unread_includes=("--index-url ${URL}",)),
-            "${OPT} https://example.com/simple": IndexOptions(unread=True),
-            "--find-links ./wheels": IndexOptions(unread=True),
-            "-f x": IndexOptions(unread=True),
-            "--no-index": IndexOptions(unread=True),
-            "--extra-index-url 'a": IndexOptions(unread=True, unread_includes=("--extra-index-url 'a",)),
-        }
-        for text, expected in cases.items():
-            with self.subTest(text=text):
-                self.assertEqual(requirements_index_options(text), expected)
-        for text, expected in unread.items():
-            with self.subTest(text=text):
-                self.assertEqual(requirements_index_options(text), expected)
-
-    def test_a_line_that_may_name_an_unread_include_is_recorded(self) -> None:
-        cases = {
-            "--req x\n": ("--req x",),
-            "-r\n": ("-r",),
-            "-r \\\nbase.txt\n": (),
-            "-r base.txt\n": (),
-        }
-        for text, expected in cases.items():
-            with self.subTest(text=text):
-                self.assertEqual(requirements_index_options(text).unread_includes, expected)

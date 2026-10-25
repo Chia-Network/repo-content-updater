@@ -4,7 +4,6 @@ malware-verdict-formatter
 upstream-malware-scan
 dependency-update-coverage
 dependency-manifest-diff
-dependency-repo-git
 dependency-cursor-review-versions
 dependency-cursor-review-ecosystems
 dependency-cursor-review-upstream
@@ -16,7 +15,6 @@ dependency-manifest-pnpm
 dependency-manifest-python
 dependency-manifest-lines
 dependency-manifest-pep508
-dependency-cursor-review-python-indexes
 dependency-cursor-review-prompts
 dependency-cursor-review-combine-outputs
 dependency-cursor-review-dependabot-context

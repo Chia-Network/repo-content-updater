@@ -490,20 +490,15 @@ class TrustedPythonIndexTest(unittest.TestCase):
     def trusted(
         self,
         version: str,
-        locked: tuple[str, ...] = (),
-        configured: frozenset[str] = frozenset({_CHIA}),
+        hashes: tuple[str, ...] = (),
         pages: dict[str, bytes] | None = None,
         downloads: dict[str, bytes | None] | None = None,
-        replaces: str = "",
         name: str = "ChiaPos",
     ) -> str:
         urls: list[str] = []
         fetched = {f"{_CHIA}chiapos/": _PAGE} if pages is None else pages
         served = {_WHEEL_URL: _WHEEL, _SDIST_URL: _SDIST} if downloads is None else downloads
         downloaded: list[str] = []
-        facts = tuple(upstream.Locked(hashes) for hashes in locked)
-        if replaces:
-            facts += (upstream.Locked("", replaces),)
 
         def fetch(url: str, **_kwargs: object) -> bytes | None:
             urls.append(url)
@@ -515,7 +510,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
             return _sha(body) if isinstance(body, bytes) else None
 
         with patch.object(upstream, "_fetch", fetch), patch.object(upstream, "_sha256_download", download):
-            found = upstream.trusted_python_index(name, version, facts, configured)
+            found = upstream.trusted_python_index(name, version, hashes)
         self.urls = urls
         self.downloaded = downloaded
         return found
@@ -552,9 +547,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
             patch.object(upstream, "_get_response", get_response),
             patch.object(upstream, "_DownloadBudget", lambda **_kwargs: real_budget(size=1, clock=lambda: 0.0)),
         ):
-            found = upstream.trusted_python_index(
-                "ChiaPos", "2.0.4", (upstream.Locked(f"sha256:{_sha(body)}"),), frozenset({_CHIA})
-            )
+            found = upstream.trusted_python_index("ChiaPos", "2.0.4", (f"sha256:{_sha(body)}",))
         self.assertEqual(found, "")
 
     def test_the_index_page_read_uses_the_check_budget(self) -> None:
@@ -570,7 +563,7 @@ class TrustedPythonIndexTest(unittest.TestCase):
             patch.object(upstream, "_get_response", get_response),
             patch.object(upstream, "_DownloadBudget", lambda **_kwargs: real_budget(seconds=3, clock=lambda: now[0])),
         ):
-            found = upstream.trusted_python_index("ChiaPos", "2.0.4", (upstream.Locked("", _CHIA),), frozenset({_CHIA}))
+            found = upstream.trusted_python_index("ChiaPos", "2.0.4", (f"sha256:{_sha(_SDIST)}",))
         self.assertEqual(found, "")
         self.assertLessEqual(now[0], 3.0)
 
@@ -598,30 +591,25 @@ class TrustedPythonIndexTest(unittest.TestCase):
         )
         self.assertEqual(self.downloaded, [file_url])
 
-    def test_an_unhashed_pin_is_trusted_only_when_its_file_replaces_pypi(self) -> None:
+    def test_an_unhashed_occurrence_is_never_trusted(self) -> None:
         self.assertEqual(self.trusted("2.0.4"), "")
-        self.assertEqual(self.trusted("2.0.4", replaces=_CHIA), _HOST)
         self.assertEqual(self.trusted("2.0.4", ("",)), "")
-        self.assertEqual(self.trusted("2.0.4", ("",), replaces=_CHIA), "")
-
-    def test_every_unhashed_occurrence_must_replace_pypi(self) -> None:
-        facts = (upstream.Locked("", _CHIA), upstream.Locked("", ""))
-        with patch.object(upstream, "_fetch", lambda *_args, **_kwargs: _PAGE):
-            self.assertEqual(upstream.trusted_python_index("ChiaPos", "2.0.4", facts, frozenset({_CHIA})), "")
+        self.assertEqual(self.trusted("2.0.4", (f"sha256:{_sha(_WHEEL)}", "")), "")
+        self.assertEqual(self.downloaded, [])
 
     def test_a_version_the_index_does_not_serve_is_not_trusted(self) -> None:
-        self.assertEqual(self.trusted("2.0.5", replaces=_CHIA), "")
-        self.assertEqual(self.trusted("2.0.4", replaces=_CHIA, pages={}), "")
+        hashed = (f"sha256:{_sha(_WHEEL)}",)
+        self.assertEqual(self.trusted("2.0.5", hashed), "")
+        self.assertEqual(self.trusted("2.0.4", hashed, pages={}), "")
 
     def test_only_a_listed_index_is_ever_read(self) -> None:
         evil = "https://pypi.chia.net.evil/simple/"
         self.assertEqual(
-            self.trusted("2.0.4", configured=frozenset({evil}), pages={f"{evil}chiapos/": _PAGE}, replaces=_CHIA),
+            self.trusted("2.0.4", (f"sha256:{_sha(_WHEEL)}",), pages={f"{evil}chiapos/": _PAGE}),
             "",
         )
-        self.assertEqual(self.urls, [])
-        self.assertEqual(self.trusted("2.0.4", configured=frozenset(), replaces=_CHIA), "")
-        self.assertEqual(self.urls, [])
+        self.assertTrue(self.urls)
+        self.assertTrue(all("/pypi.chia.net.evil/" not in url for url in self.urls))
 
     def test_versions_compare_in_canonical_pep440_form(self) -> None:
         for filename_name, page_version, name, version in (
@@ -645,23 +633,25 @@ class TrustedPythonIndexTest(unittest.TestCase):
     def test_a_post_release_does_not_match_the_plain_version(self) -> None:
         page = b'<a href="../../files/chiapos-2.0.4.post0.tar.gz">s</a>\n'
         page_url = f"{_CHIA}chiapos/"
-        self.assertEqual(self.trusted("2.0.4", replaces=_CHIA, pages={page_url: page}), "")
-        self.assertEqual(self.trusted("2.0.4.post0", replaces=_CHIA, pages={page_url: page}), _HOST)
+        hashed = (f"sha256:{_sha(_SDIST)}",)
+        file_url = f"https://{_HOST}/files/chiapos-2.0.4.post0.tar.gz"
+        self.assertEqual(self.trusted("2.0.4", hashed, pages={page_url: page}), "")
+        self.assertEqual(
+            self.trusted("2.0.4.post0", hashed, pages={page_url: page}, downloads={file_url: _SDIST}), _HOST
+        )
 
     def _redirect_result(self, answers: dict[str, tuple[int, str, bytes]], version: str) -> str:
         requested: list[str] = []
 
         def get(url: str, _limit: int, _accept: str, _budget: object = None) -> tuple[int, str, bytes]:
             requested.append(url)
-            return answers[url]
+            return answers.get(url, (404, "", b""))
 
         with (
             patch.object(upstream, "_get", get),
             patch.object(upstream, "_sha256_download", lambda _url, _hosts, **_kwargs: _sha(_SDIST)),
         ):
-            found = upstream.trusted_python_index(
-                "ChiaPos", version, (upstream.Locked(f"sha256:{_sha(_SDIST)}"),), frozenset({_CHIA})
-            )
+            found = upstream.trusted_python_index("ChiaPos", version, (f"sha256:{_sha(_SDIST)}",))
         self.requested = requested
         return found
 
@@ -676,7 +666,8 @@ class TrustedPythonIndexTest(unittest.TestCase):
         page_url = f"{_CHIA}chiapos/"
         moved = "https://example.com/chiapos/"
         self.assertEqual(self._redirect_result({page_url: (302, moved, b"")}, "2.0.4"), "")
-        self.assertEqual(self.requested, [page_url])
+        self.assertEqual(self.requested[:1], [page_url])
+        self.assertNotIn(moved, self.requested)
 
     def test_release_reads_wheel_and_sdist_names(self) -> None:
         self.assertEqual(upstream._release("Chia_Pos-2.0.4-cp312-cp312-linux_x86_64.whl"), ("chia-pos", "2.0.4"))
@@ -850,8 +841,8 @@ class FetchBudgetTest(unittest.TestCase):
             patch.object(upstream, "_MAX_INDEX_DOWNLOAD_BYTES", 11),
             patch.object(upstream, "_index_files", index_files),
         ):
-            upstream.trusted_python_index("chiapos", "2.0.4", (upstream.Locked("", _CHIA),), frozenset({_CHIA}))
-        self.assertEqual(seen, [11])
+            upstream.trusted_python_index("chiapos", "2.0.4", (f"sha256:{_sha(_SDIST)}",))
+        self.assertEqual(set(seen), {11})
 
     def test_a_redirect_body_and_the_next_hop_share_one_deadline(self) -> None:
         now = [0.0]

@@ -76,7 +76,7 @@ class _Diff(unittest.TestCase):
         with (
             contextlib.chdir(self.root),
             patch.dict(os.environ, variables),
-            patch.object(coverage._ecosystems.upstream, "_fetch", lambda url, *_limit: answers.get(url, b"")),
+            patch.object(coverage._ecosystems.upstream, "_fetch", lambda url, *_args, **_kwargs: answers.get(url, b"")),
             patch.object(coverage, "_scan_one", scan or clean_scan),
         ):
             os.environ.pop("GITHUB_BASE_REF", None)

@@ -15,7 +15,6 @@ from unittest.mock import patch
 import dependency_cursor_review_prompts as prompts
 import dependency_cursor_review_upstream as upstream
 import dependency_manifest_diff as diff
-import dependency_repo_git as repo_git
 import dependency_update_coverage as coverage
 import malware_verdict_formatter as formatter
 
@@ -108,10 +107,8 @@ def _run_main(
     scan: Callable[..., dict] | None = None,
     repo: Callable[[str, str, str], upstream.Repo] = lambda _ecosystem, name, _version: _found(f"upstream/{name}"),
     clone: Callable[[str, Path], bool] = lambda *_args: False,
-    files: Callable[[str], list[str] | None] = lambda _directory: [],
 ) -> tuple[dict, str, str]:
-    """coverage.main() over `plan`: (report, summary, GITHUB_OUTPUT text). `scan` replaces _scan_one, and `files`
-    lists a directory at HEAD."""
+    """coverage.main() over `plan`: (report, summary, GITHUB_OUTPUT text). `scan` replaces _scan_one."""
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         output = root / "github_output.txt"
@@ -121,8 +118,6 @@ def _run_main(
             stack.enter_context(patch.object(coverage, "_plan", return_value=plan))
             stack.enter_context(patch.object(coverage._ecosystems, "upstream_repo", repo))
             stack.enter_context(patch.object(coverage, "_clone", clone))
-            stack.enter_context(patch.object(coverage, "_git_files", files))
-            stack.enter_context(patch.object(repo_git, "repo_facts", return_value=repo_git.RepoFacts()))
             if scan is not None:
                 stack.enter_context(patch.object(coverage, "_scan_one", scan))
             coverage.main()
@@ -633,33 +628,21 @@ class DependencyUpdateCoverageTest(unittest.TestCase):
         )
         self.assertEqual(published["check"], "fail")
 
-    def test_git_files_lists_one_directory_at_head(self) -> None:
+    def test_git_text_reads_utf8_and_rejects_missing_or_non_utf8(self) -> None:
         with TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
             _git_repo(repo)
-            _commit(repo, "requirements.txt", "attrs==1.0\n", "root")
-            _commit(repo, "app/requirements.txt", "six==1.0\n", "app")
-            _commit(repo, "app/deep/requirements.txt", "six==1.0\n", "deep")
+            _commit(repo, "notes.txt", "caf\u00e9\n", "utf-8")
+            path = repo / "legacy.txt"
+            path.write_bytes(b"caf\xe9\n")
+            _git(repo, "add", "legacy.txt")
+            _git(repo, "commit", "-m", "latin-1")
             with contextlib.chdir(repo):
-                self.assertEqual(coverage._git_files("."), [("app", "040000"), ("requirements.txt", "100644")])
-                self.assertEqual(
-                    coverage._git_files("app"), [("app/deep", "040000"), ("app/requirements.txt", "100644")]
-                )
-            with contextlib.chdir(tmp):
-                self.assertIsNone(coverage._git_files("."))
-
-    def test_git_grep_lists_tracked_files_at_head(self) -> None:
-        with TemporaryDirectory() as tmp:
-            repo = Path(tmp) / "repo"
-            _git_repo(repo)
-            _commit(repo, "requirements.txt", "attrs==1.0\n", "root")
-            _commit(repo, "dev.txt", "-r requirements.txt\n", "dev")
-            _commit(repo, "notes.md", "nothing here\n", "notes")
-            with contextlib.chdir(repo):
-                self.assertEqual(coverage._git_grep("requirements.txt"), ["dev.txt"])
-                self.assertEqual(coverage._git_grep("absent"), [])
-            with contextlib.chdir(tmp):
-                self.assertIsNone(coverage._git_grep("requirements.txt"))
+                self.assertEqual(coverage._git_text("HEAD", "notes.txt"), "caf\u00e9\n")
+                self.assertIsNone(coverage._git_text("HEAD", "legacy.txt"))
+                self.assertEqual(coverage._read_text("HEAD", "legacy.txt"), "")
+                self.assertIsNone(coverage._git_text("HEAD", "missing.txt"))
+                self.assertEqual(coverage._read_text("HEAD", "missing.txt"), "")
 
     def test_unreadable_diff_is_one_unresolved_gap(self) -> None:
         report, summary, _output = _run_main(None)

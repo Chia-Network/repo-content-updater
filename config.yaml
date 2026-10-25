@@ -72,7 +72,6 @@ files:
       - upstream-malware-scan
       - dependency-update-coverage
       - dependency-manifest-diff
-      - dependency-repo-git
       - dependency-cursor-review-versions
       - dependency-cursor-review-ecosystems
       - dependency-cursor-review-upstream
@@ -84,7 +83,6 @@ files:
       - dependency-manifest-python
       - dependency-manifest-lines
       - dependency-manifest-pep508
-      - dependency-cursor-review-python-indexes
       - dependency-cursor-review-prompts
       - dependency-cursor-review-combine-outputs
       - dependency-cursor-review-dependabot-context
@@ -128,10 +126,6 @@ files:
   - name: dependency-manifest-diff
     template_name: dependency-cursor-review-manifest-diff.py
     repo_path: .github/scripts/dependency_manifest_diff.py
-
-  - name: dependency-repo-git
-    template_name: dependency-cursor-review-repo-git.py
-    repo_path: .github/scripts/dependency_repo_git.py
 
   - name: dependency-cursor-review-versions
     template_name: dependency-cursor-review-versions.py
@@ -180,10 +174,6 @@ files:
   - name: dependency-manifest-pep508
     template_name: dependency-cursor-review-manifest-pep508.py
     repo_path: .github/scripts/dependency_pep508.py
-
-  - name: dependency-cursor-review-python-indexes
-    template_name: dependency-cursor-review-python-indexes.py
-    repo_path: .github/scripts/dependency_python_indexes.py
 
   - name: dependency-cursor-review-prompts
     template_name: dependency-cursor-review-prompts.py
