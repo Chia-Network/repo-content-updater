@@ -32,6 +32,7 @@ import dependency_cursor_review_ecosystems as _ecosystems
 import dependency_cursor_review_upstream as _upstream
 import dependency_cursor_review_versions as _versions
 import dependency_manifest_diff as _diff
+import dependency_manifest_python as _manifest_python
 from malware_verdict_formatter import DISCLOSED_KEYS, NOTHING_TO_SCAN, reason_note
 
 _FINDING_KEYS = ("unicode", "confusable", "ioc", "heuristic")
@@ -515,7 +516,7 @@ def _plan(token: str = "") -> _diff.Plan | None:
     """
     base = _base_commit(token)
     changed = _changed_paths(base) if base else None
-    return None if changed is None else _diff.plan(changed, _read_text, base)
+    return None if changed is None else _diff.plan(changed, _read_text, base)._replace(base=base)
 
 
 def _warning(change: _diff.Change, reason: str) -> dict:
@@ -582,12 +583,36 @@ def _index_occurrences(change: _diff.Change, new: str, hashed: tuple[str, ...]) 
     )
 
 
-def _exact(change: _diff.Change, hashed: tuple[str, ...]) -> Exact:
+def _unchecked_source(change: _diff.Change, versions: tuple[str, ...], hashed: tuple[str, ...], base: str) -> bool:
+    """Whether a lock entry of the package at one of `versions` comes from a source the installer does not
+    hash-check.
+
+    Both sides of the change are read, so a source that changed in the pull request is checked on each side.
+    """
+    revisions = ("HEAD", base) if base else ("HEAD",)
+    for revision in revisions:
+        entries = _ecosystems.locked_entries(
+            change.ecosystem,
+            change.dir,
+            change.name,
+            versions,
+            lambda path, revision=revision: _read_text(revision, path),
+            hashed,
+        )
+        for _path, entry in entries:
+            lock = _manifest_python.lock_source(entry)
+            if lock is not None and not _manifest_python.hash_checked_source(lock):
+                return True
+    return False
+
+
+def _exact(change: _diff.Change, hashed: tuple[str, ...], base: str) -> Exact:
     """The Target of one primary change, why it is not scanned, and any trusted index that serves it.
 
     An empty from version stays inconclusive. A range, wildcard, tag name, operator or moving major could resolve to a
-    tree other than the one installed, so it is never scanned. A pip change is trusted only when every lock
-    occurrence records a sha256 that matches a file a hard-coded trusted index serves at the new version.
+    tree other than the one installed, so it is never scanned. A pip change whose lock entry comes from a source the
+    installer does not hash-check is unresolved. A pip change is trusted only when every lock occurrence records a
+    sha256 that matches a file a hard-coded trusted index serves at the new version.
     """
     old = _versions.exact_body(change.old, mode=change.ecosystem)
     new = _versions.exact_body(change.new, mode=change.ecosystem)
@@ -596,15 +621,18 @@ def _exact(change: _diff.Change, hashed: tuple[str, ...]) -> Exact:
         return Exact(change, target, "unresolved")
     if change.ecosystem != "pip":
         return Exact(change, target)
+    versions = tuple(dict.fromkeys(version for version in (old, new) if version))
+    if _unchecked_source(change, versions, hashed, base):
+        return Exact(change, target, "unresolved")
     occurrences = _index_occurrences(change, new, hashed)
     host = _upstream.trusted_python_index(change.name, new, tuple(recorded for _path, recorded in occurrences))
     return Exact(change, target, index=host)
 
 
-def _exact_all(changes: list[_diff.Change], hashed: tuple[str, ...]) -> list[Exact]:
+def _exact_all(changes: list[_diff.Change], hashed: tuple[str, ...], base: str) -> list[Exact]:
     """`_exact` for each change; the index lookups run concurrently."""
     with ThreadPoolExecutor(max_workers=_LOOKUPS) as pool:
-        return list(pool.map(lambda change: _exact(change, hashed), changes))
+        return list(pool.map(lambda change: _exact(change, hashed, base), changes))
 
 
 def _targets(exact: list[Exact]) -> list[tuple[_diff.Change, Target, str]]:
@@ -776,7 +804,7 @@ def main() -> None:
     gaps = plan.gaps if plan else (("pull request diff", "unresolved"),)
     plan = plan or _diff.Plan()
     changes, warnings = _split(plan)
-    exact = _exact_all(changes, plan.hashed)
+    exact = _exact_all(changes, plan.hashed, plan.base)
     trusted = tuple({**item.change._asdict(), "index": item.index} for item in exact if item.index)
     exact = [item for item in exact if not item.index]
     work = Path(".dcr-dependency-scans")

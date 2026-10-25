@@ -67,6 +67,7 @@ class Plan(NamedTuple):
     gaps: tuple[tuple[str, str], ...] = ()
     unparsed_locks: tuple[UnparsedLock, ...] = ()
     hashed: tuple[str, ...] = ()  # each changed path read whose row records artifact hashes (ecosystems.locked)
+    base: str = ""  # the base revision the files were read from, when the caller names it
 
 
 # Each (change, whether it is the top copy) one file moved.
@@ -227,4 +228,4 @@ def plan(changed: list[tuple[str, str, str]], read: Read, base: str) -> Plan:
     changes = [move for file in files if file.kind == _VERSIONS for move in file.moves]
     parts = [_resolve(file, changes) for file in files]
     merged = Plan(*(tuple(dict.fromkeys(item for items in column for item in items)) for column in zip(*parts)))
-    return merged._replace(hashed=tuple(file.path for file in files if file.hashed))
+    return merged._replace(hashed=tuple(file.path for file in files if file.hashed), base="")

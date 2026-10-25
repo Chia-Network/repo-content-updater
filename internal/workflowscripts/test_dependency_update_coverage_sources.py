@@ -125,14 +125,19 @@ class SourcedLockEntryTest(unittest.TestCase):
         self.assertEqual(self.scanned, [])
         self.assertEqual(requested, [_PAGE_URL, _SDIST_URL])
 
-    def assert_scanned(self, report: dict, requested: list[str]) -> None:
+    def assert_unresolved(self, report: dict, requested: list[str]) -> None:
+        self.assertEqual(report["not_scanned_reason"], "unresolved")
+        self.assertFalse(report["scan_conclusive"])
         self.assertEqual(report["trusted_packages"], [])
-        self.assertEqual([(target.package, target.new) for target in self.scanned], [("chiapos", "2.0.4")])
+        self.assertEqual(self.scanned, [])
         self.assertEqual(requested, [])
 
     def bump_poetry(self, source: str, *hashes: str) -> tuple[dict, list[str]]:
-        base = {**_MANIFEST, "poetry.lock": _poetry_lock("2.0.3", source, *hashes)}
-        head = {**_MANIFEST, "poetry.lock": _poetry_lock("2.0.4", source, *hashes)}
+        return self.bump_poetry_sides(source, source, *hashes)
+
+    def bump_poetry_sides(self, base_source: str, head_source: str, *hashes: str) -> tuple[dict, list[str]]:
+        base = {**_MANIFEST, "poetry.lock": _poetry_lock("2.0.3", base_source, *hashes)}
+        head = {**_MANIFEST, "poetry.lock": _poetry_lock("2.0.4", head_source, *hashes)}
         return self.run_main(base, head)
 
     def test_a_poetry_legacy_source_with_trusted_index_hashes_is_trusted(self) -> None:
@@ -145,12 +150,12 @@ class SourcedLockEntryTest(unittest.TestCase):
         report, requested = self.bump_poetry(source, _sha(_SDIST))
         self.assert_trusted(report, requested)
 
-    def test_a_poetry_url_source_without_files_is_scanned(self) -> None:
+    def test_a_poetry_url_source_without_files_is_unresolved(self) -> None:
         source = '[package.source]\ntype = "url"\nurl = "https://example.com/chiapos-2.0.4.tar.gz"\n'
         report, requested = self.bump_poetry(source)
-        self.assert_scanned(report, requested)
+        self.assert_unresolved(report, requested)
 
-    def test_a_poetry_source_the_installer_does_not_hash_check_is_scanned(self) -> None:
+    def test_a_poetry_source_the_installer_does_not_hash_check_is_unresolved(self) -> None:
         for kind, extra in (
             ("git", 'url = "https://github.com/example/chiapos.git"\nreference = "abc"\n'),
             ("directory", 'url = "../chiapos"\n'),
@@ -159,7 +164,18 @@ class SourcedLockEntryTest(unittest.TestCase):
             with self.subTest(kind=kind):
                 source = f'[package.source]\ntype = "{kind}"\n{extra}'
                 report, requested = self.bump_poetry(source, _sha(_SDIST))
-                self.assert_scanned(report, requested)
+                self.assert_unresolved(report, requested)
+
+    def test_a_poetry_source_without_a_type_is_unresolved(self) -> None:
+        source = '[package.source]\nindex = "private"\n'
+        report, requested = self.bump_poetry(source, _sha(_SDIST))
+        self.assert_unresolved(report, requested)
+
+    def test_a_poetry_old_side_without_a_hash_check_is_unresolved(self) -> None:
+        legacy = '[package.source]\ntype = "legacy"\nurl = "https://pypi.chia.net/simple"\nreference = "chia"\n'
+        git = '[package.source]\ntype = "git"\nurl = "https://github.com/example/chiapos.git"\nreference = "abc"\n'
+        report, requested = self.bump_poetry_sides(git, legacy, _sha(_SDIST))
+        self.assert_unresolved(report, requested)
 
     def test_a_pipfile_index_source_with_hashes_is_trusted(self) -> None:
         record = {"hashes": [f"sha256:{_sha(_SDIST)}"], "index": "chia"}
@@ -168,7 +184,7 @@ class SourcedLockEntryTest(unittest.TestCase):
         report, requested = self.run_main(base, head)
         self.assert_trusted(report, requested)
 
-    def test_a_pipfile_git_source_with_hashes_is_scanned(self) -> None:
+    def test_a_pipfile_git_source_with_hashes_is_unresolved(self) -> None:
         record = {
             "hashes": [f"sha256:{_sha(_SDIST)}"],
             "git": "https://github.com/example/chiapos.git",
@@ -177,7 +193,7 @@ class SourcedLockEntryTest(unittest.TestCase):
         base = {"Pipfile": '[packages]\nchiapos = "*"\n', "Pipfile.lock": _pipfile_lock("2.0.3", record)}
         head = {"Pipfile": '[packages]\nchiapos = "*"\n', "Pipfile.lock": _pipfile_lock("2.0.4", record)}
         report, requested = self.run_main(base, head)
-        self.assert_scanned(report, requested)
+        self.assert_unresolved(report, requested)
 
 
 if __name__ == "__main__":

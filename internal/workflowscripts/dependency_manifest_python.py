@@ -34,6 +34,7 @@ import json
 import re
 import shlex
 from collections.abc import Iterator
+from typing import NamedTuple
 
 import tomllib
 from dependency_manifest_lines import Entry, Parsed, Pin
@@ -211,37 +212,50 @@ def _locked_hashes(hashes: object) -> str:
     return " ".join(sorted(set(hashes)))
 
 
-def _poetry_source(record: dict) -> dict | None:
-    """A poetry record's `[package.source]` table, or None when it records no source."""
+class LockSource(NamedTuple):
+    """A lock entry's source, tagged with the lock grammar it was read from."""
+
+    kind: str  # "poetry" or "pipfile"
+    source: dict | None  # None when the entry records no source
+    files: object = None  # a poetry record's `files`, which decides a url source
+
+
+def _poetry_source(record: dict) -> LockSource:
+    """A poetry record's source, tagged as poetry."""
     source = record.get("source")
-    if source is None:
-        return None
-    return source if isinstance(source, dict) else {}
+    tagged = None if source is None else source if isinstance(source, dict) else {}
+    return LockSource("poetry", tagged, record.get("files"))
 
 
-def _pipfile_source(record: dict) -> dict | None:
-    """A Pipfile.lock record's source keys, or None when it records no source."""
+def _pipfile_source(record: dict) -> LockSource:
+    """A Pipfile.lock record's source, tagged as Pipfile."""
     source = {key: record[key] for key in _PIPFILE_SOURCES if key in record}
     if "index" in record:
         source["index"] = record["index"]
-    return source or None
+    return LockSource("pipfile", source or None)
 
 
-def hash_checked_source(source: dict | None, files: object = None) -> bool:
-    """Whether the installer checks file hashes for a lock entry from `source`.
+def hash_checked_source(lock: LockSource | None) -> bool:
+    """Whether the installer checks file hashes for a lock entry from `lock`.
 
-    Poetry checks them for a legacy index and for a url source that lists files. Pipenv checks them for an index.
-    Any other source installs without a hash check. An entry with no source is unchanged.
+    Poetry checks them for a legacy source and for a url source that lists files; a poetry source with no type is
+    never hash-checked. Pipenv checks them for an index. An entry with no source uses the index, which checks hashes.
+    Any other source, and a source the grammar did not read, is not hash-checked.
     """
-    if source is None:
+    if lock is None:
+        return False
+    if lock.source is None:
         return True
-    if "type" in source:
-        return source["type"] == "legacy" or (source["type"] == "url" and isinstance(files, list) and bool(files))
-    return set(source) == {"index"}
+    if lock.kind == "poetry":
+        kind = lock.source.get("type")
+        return kind == "legacy" or (kind == "url" and isinstance(lock.files, list) and bool(lock.files))
+    if lock.kind == "pipfile":
+        return set(lock.source) == {"index"}
+    return False
 
 
-def lock_source(entry: Entry) -> dict | None:
-    """The source a poetry or Pipfile lock entry records, or None when it records none."""
+def lock_source(entry: Entry) -> LockSource | None:
+    """The source a poetry or Pipfile lock entry records, or None when the entry records none."""
     text = entry[3]
     if not isinstance(text, str):
         return None
@@ -295,7 +309,7 @@ def poetry_lock_hashes(text: str) -> str:
     if not isinstance(record, dict):
         return ""
     files = record.get("files")
-    if not hash_checked_source(_poetry_source(record), files):
+    if not hash_checked_source(_poetry_source(record)):
         return ""
     if not isinstance(files, list) or not all(isinstance(item, dict) for item in files):
         return ""

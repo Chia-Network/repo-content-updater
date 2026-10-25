@@ -505,8 +505,18 @@ class PythonLockGrammarTest(unittest.TestCase):
                 )
                 entry = poetry_lock(text)[0][0]
                 self.assertEqual(poetry_lock_hashes(entry[3]), want)
-                checked = hash_checked_source(lock_source(entry), json.loads(entry[3])[1].get("files"))
-                self.assertEqual(checked, want != "")
+                self.assertEqual(hash_checked_source(lock_source(entry)), want != "")
+
+    def test_a_poetry_source_without_a_type_is_never_hash_checked(self) -> None:
+        digest = _sha("idna", "3.7", "sdist")
+        text = (
+            f'[[package]]\nname = "idna"\nversion = "3.7"\n'
+            f'files = [{{file = "idna-3.7.tar.gz", hash = "sha256:{digest}"}}]\n'
+            '[package.source]\nindex = "private"\n'
+        )
+        entry = poetry_lock(text)[0][0]
+        self.assertEqual(poetry_lock_hashes(entry[3]), "")
+        self.assertFalse(hash_checked_source(lock_source(entry)))
 
     def test_a_poetry_1_1_lock_joins_each_metadata_files_table_to_its_package(self) -> None:
         old, new = (
@@ -552,7 +562,7 @@ class PythonLockGrammarTest(unittest.TestCase):
         )
         entry = poetry_lock(text)[0][0]
         self.assertEqual(entry[:2], ("idna", "3.7"))
-        self.assertEqual(lock_source(entry), source)
+        self.assertEqual(lock_source(entry).source, source)
 
     def test_pipfile_lock_records_are_top_in_both_sections_and_the_meta_hash_is_not_residue(self) -> None:
         parsed = pipfile_lock(pipfile_lock_text({"Requests": "2.32.0"}, develop={"pytest": "8.2.0"}))

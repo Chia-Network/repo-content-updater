@@ -279,6 +279,44 @@ def hash_sources(ecosystem: Ecosystem, directory: str, hashed: tuple[str, ...]) 
     return sources
 
 
+def _locked(
+    ecosystem: str,
+    directory: str,
+    name: str,
+    versions: tuple[str, ...],
+    read: Callable[[str], str],
+    hashed: tuple[str, ...],
+) -> tuple[tuple[str, FileKind, Entry, str], ...]:
+    """Each (path, row, entry, recorded hash) of an installed copy of `name` at one of `versions`."""
+    row = _BY_NAME.get(ecosystem)
+    wanted = set(versions)
+    if row is None or not wanted:
+        return ()
+    found: list[tuple[str, FileKind, Entry, str]] = []
+    for path, kind in hash_sources(row, directory, hashed).items():
+        parsed = kind.parse(read(path)) if kind.hashes else None
+        for entry in parsed[0] if parsed else ():
+            recorded = kind.hashes(entry)
+            if recorded is not None and entry[0] == name and exact_body(entry[1], mode=ecosystem) in wanted:
+                found.append((path, kind, entry, recorded))
+    return tuple(found)
+
+
+def locked_entries(
+    ecosystem: str,
+    directory: str,
+    name: str,
+    versions: tuple[str, ...],
+    read: Callable[[str], str],
+    hashed: tuple[str, ...],
+) -> tuple[tuple[str, Entry], ...]:
+    """Each (path, entry) of an installed copy of `name` at one of `versions` in the hash_sources beside
+    `directory`."""
+    return tuple(
+        (path, entry) for path, _kind, entry, _recorded in _locked(ecosystem, directory, name, versions, read, hashed)
+    )
+
+
 def locked_occurrences(
     ecosystem: str, directory: str, name: str, version: str, read: Callable[[str], str], hashed: tuple[str, ...]
 ) -> tuple[tuple[str, str], ...]:
@@ -287,17 +325,10 @@ def locked_occurrences(
 
     Each row's `hashes` reads which entries are installed copies and what they record. "" is a copy with no hash.
     """
-    row = _BY_NAME.get(ecosystem)
-    if row is None or not version:
-        return ()
-    found: list[tuple[str, str]] = []
-    for path, kind in hash_sources(row, directory, hashed).items():
-        parsed = kind.parse(read(path)) if kind.hashes else None
-        for entry in parsed[0] if parsed else ():
-            recorded = kind.hashes(entry)
-            if recorded is not None and entry[0] == name and exact_body(entry[1], mode=ecosystem) == version:
-                found.append((path, recorded))
-    return tuple(found)
+    return tuple(
+        (path, recorded)
+        for path, _kind, _entry, recorded in _locked(ecosystem, directory, name, (version,), read, hashed)
+    )
 
 
 def locked(
