@@ -447,6 +447,13 @@ class DiffAndIocTest(unittest.TestCase):
             dcr_fetch._write_diff(Path(tmp))
 
 
+class ParseUpdatesTest(unittest.TestCase):
+    def test_malformed_update_lists_fail_closed(self) -> None:
+        for raw in ("", "{}", "[1]", "[{}]", '[{"dependencyName": "x"}]'):
+            with self.subTest(raw=raw), self.assertRaises(SystemExit):
+                dcr_fetch._parse_updates(raw)
+
+
 class MainTest(unittest.TestCase):
     def test_updates_over_the_cap_are_not_reviewed(self) -> None:
         updates = [
