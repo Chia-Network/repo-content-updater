@@ -43,23 +43,25 @@ package indexes.** The indexes are listed only in
 `TRUSTED_PYTHON_INDEXES` in
 `internal/workflowscripts/dependency_cursor_review_upstream.py`.
 
-- A pip change is trusted only when its name matches `_PYPI_NAME_RE`, its new
-  version is at that version (compared in PEP 440 canonical form), every
-  occurrence of that name in each lock beside the change and each changed
-  hashed requirements file records hashes (a hashed requirements line, a
-  poetry.lock `files` entry or a Pipfile.lock entry), and every recorded hash
-  is `sha256:` and equals the sha256 of a file downloaded from a hard-coded
-  trusted index for that version.
+- A pip change is trusted only when its name matches `_PYPI_NAME_RE`, the new
+  version matches the locked version (compared in PEP 440 canonical form),
+  every occurrence of that name in each lock beside the change and each
+  changed hashed requirements file records hashes (a hashed requirements line,
+  a poetry.lock `files` entry or a Pipfile.lock entry), and every recorded
+  hash is `sha256:` and equals the sha256 of a file downloaded from a
+  hard-coded trusted index for that version.
 - A lock entry is hashed only from a poetry legacy source, a poetry url source
-  with files, or a Pipfile index. Any other source is unhashed and scanned.
+  with files, or a Pipfile index. An entry from any other source is reported
+  unresolved (fail closed) and is not scanned.
 - The code downloads and hashes each file itself. A hash fragment on an index
   page is not accepted in place of the downloaded bytes.
 - Each package check has its own time and byte limits for the index page and
   its files. A grouped update runs one check per package, so it can take up to
   N times those limits.
-- Anything else is looked up and scanned exactly as on `main`: an unhashed
-  occurrence, a non-sha256 algorithm, a hash option the parser cannot fully
-  read, a hash no trusted index serves, or an index page that cannot be read.
+- A pip change with an unhashed occurrence, a non-sha256 algorithm, a hash
+  option the parser cannot fully read, a hash no trusted index serves, or an
+  index page that cannot be read is looked up and scanned exactly as on
+  `main`.
 - Only installs that consume the lock are covered. A `pip install .` or a
   downstream install from PyPI does not read those hashes, so those installs
   are not covered.

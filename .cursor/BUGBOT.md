@@ -23,6 +23,8 @@ untrusted.
   file downloaded from a hard-coded trusted index at that version (compared
   in PEP 440 canonical form). Repository content never adds a trusted index
   (see "Trusted package indexes" in `AGENTS.md`).
+- Treating a pip change whose lock entry comes from any other source as
+  scanned instead of unresolved.
 - Treating a `pip install .` or a downstream install from PyPI as covered by
   a lock hash. Only installs that consume the lock are covered.
 
@@ -39,4 +41,5 @@ untrusted.
   package indexes" in `AGENTS.md`).
 - A pip change left untrusted by an unhashed occurrence, a non-sha256 hash, an
   unreadable hash option or a hash no trusted index serves is looked up and
-  scanned, not left inconclusive.
+  scanned, not left inconclusive. A lock entry from any other source is
+  reported unresolved (fail closed) and is not scanned.
