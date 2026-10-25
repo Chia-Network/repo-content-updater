@@ -508,6 +508,40 @@ class PythonTest(unittest.TestCase):
                 self.assertEqual(plan.unchecked, (Change("pip", ".", "idna", "3.6", "3.7"),))
                 self.assertEqual((plan.gaps, plan.unparsed_locks), ((), ()))
 
+    def test_a_poetry_source_change_keeps_a_bare_version_and_the_change(self) -> None:
+        manifest = {"pyproject.toml": '[tool.poetry.dependencies]\nrequests = "*"\n'}
+        source = '[package.source]\ntype = "legacy"\nurl = "{}"\nreference = "chia"\n'
+        base = {
+            **manifest,
+            "poetry.lock": poetry_lock_text({"requests": "2.31.0"}).replace(
+                "\n[metadata]", "\n" + source.format("https://a.example/simple") + "\n[metadata]"
+            ),
+        }
+        head = {
+            **manifest,
+            "poetry.lock": poetry_lock_text({"requests": "2.32.0"}).replace(
+                "\n[metadata]", "\n" + source.format("https://b.example/simple") + "\n[metadata]"
+            ),
+        }
+        self.assertEqual(_plan(base, head).primary, (Change("pip", ".", "requests", "2.31.0", "2.32.0"),))
+
+    def test_a_poetry_source_change_at_an_unchanged_version_is_a_gap(self) -> None:
+        manifest = {"pyproject.toml": '[tool.poetry.dependencies]\nrequests = "*"\n'}
+        source = '[package.source]\ntype = "legacy"\nurl = "https://example.com/simple"\nreference = "{}"\n'
+        base = {
+            **manifest,
+            "poetry.lock": poetry_lock_text({"requests": "2.31.0"}).replace(
+                "\n[metadata]", "\n" + source.format("a") + "\n[metadata]"
+            ),
+        }
+        head = {
+            **manifest,
+            "poetry.lock": poetry_lock_text({"requests": "2.31.0"}).replace(
+                "\n[metadata]", "\n" + source.format("b") + "\n[metadata]"
+            ),
+        }
+        self.assertEqual(_plan(base, head).gaps, (("poetry.lock", "unresolved"),))
+
     def test_a_poetry_lock_change_outside_its_records_or_without_a_manifest_is_a_gap(self) -> None:
         manifest = {"pyproject.toml": '[tool.poetry.dependencies]\nrequests = "^2.31"\n'}
         base = poetry_lock_text({"requests": "2.31.0"})

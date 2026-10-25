@@ -19,12 +19,13 @@ poetry_lock and pipfile_lock return (entries, residue), or None when the text
 does not parse. Every locked package is installed at the top of the
 environment, so every entry is top; its text is its whole record, and
 residue is the document left once the records and the manifest's content hash
-are taken out (the manifest beside the lock is read on its own). A package
-locked from anywhere but the package index keeps its version with the source
-appended, so it is never read as an exact PyPI version. poetry_lock_hashes and
-pipfile_lock_hashes read the file hashes a record locks. A lock from Poetry
-before 1.2 keeps each package's files in `[metadata.files]`; each package's
-table there joins its record, so it changes with the version.
+are taken out (the manifest beside the lock is read on its own). An entry keeps
+its bare version and records its source in the record text; lock_source reads
+it back. poetry_lock_hashes and pipfile_lock_hashes read the file hashes a
+record locks, and record none for a source the installer does not hash-check.
+A lock from Poetry before 1.2 keeps each package's files in
+`[metadata.files]`; each package's table there joins its record, so it changes
+with the version.
 """
 
 from __future__ import annotations
@@ -210,6 +211,54 @@ def _locked_hashes(hashes: object) -> str:
     return " ".join(sorted(set(hashes)))
 
 
+def _poetry_source(record: dict) -> dict | None:
+    """A poetry record's `[package.source]` table, or None when it records no source."""
+    source = record.get("source")
+    if source is None:
+        return None
+    return source if isinstance(source, dict) else {}
+
+
+def _pipfile_source(record: dict) -> dict | None:
+    """A Pipfile.lock record's source keys, or None when it records no source."""
+    source = {key: record[key] for key in _PIPFILE_SOURCES if key in record}
+    if "index" in record:
+        source["index"] = record["index"]
+    return source or None
+
+
+def hash_checked_source(source: dict | None, files: object = None) -> bool:
+    """Whether the installer checks file hashes for a lock entry from `source`.
+
+    Poetry checks them for a legacy index and for a url source that lists files. Pipenv checks them for an index.
+    Any other source installs without a hash check. An entry with no source is unchanged.
+    """
+    if source is None:
+        return True
+    if "type" in source:
+        return source["type"] == "legacy" or (source["type"] == "url" and isinstance(files, list) and bool(files))
+    return set(source) == {"index"}
+
+
+def lock_source(entry: Entry) -> dict | None:
+    """The source a poetry or Pipfile lock entry records, or None when it records none."""
+    text = entry[3]
+    if not isinstance(text, str):
+        return None
+    try:
+        where, record = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    if where == "package":
+        return _poetry_source(record)
+    if where in {"default", "develop"}:
+        inner = next(iter(record.values()), None)
+        return _pipfile_source(inner) if isinstance(inner, dict) else None
+    return None
+
+
 def poetry_lock(text: str) -> Parsed | None:
     if not text.strip():
         return [], ""
@@ -236,16 +285,18 @@ def poetry_lock(text: str) -> Parsed | None:
         key = claims.pop(name, None) if "files" not in package else None
         item = {**package, "files": legacy.pop(key)} if key is not None else package
         version = str(item.get("version") or "")
-        source = item.get("source")
-        if source is not None:
-            version = f"{version} ({_residue(source)})"
         entries.append((name, version, True, _record("package", item)))
     return entries, _residue(doc)
 
 
 def poetry_lock_hashes(text: str) -> str:
-    """The `hash` of each of a poetry_lock record's `files`, or "" when one has none."""
-    files = json.loads(text)[1].get("files")
+    """The `hash` of each of a poetry_lock record's `files`, or "" when one has none or its source is not hashed."""
+    _where, record = json.loads(text)
+    if not isinstance(record, dict):
+        return ""
+    files = record.get("files")
+    if not hash_checked_source(_poetry_source(record), files):
+        return ""
     if not isinstance(files, list) or not all(isinstance(item, dict) for item in files):
         return ""
     return _locked_hashes([item.get("hash") for item in files])
@@ -271,11 +322,6 @@ def pipfile_lock(text: str) -> Parsed | None:
             return None
         for name, record in block.items():
             version = str(record.get("version") or "")
-            source = {key: record[key] for key in _PIPFILE_SOURCES if key in record}
-            if record.get("index", "pypi") != "pypi":
-                source["index"] = record["index"]
-            if source:
-                version = f"{version} ({_residue(source)})"
             entries.append((_requirement_name(name), version, True, _record(section, {name: record})))
     if isinstance(doc.get("_meta"), dict):
         doc["_meta"].pop("hash", None)
@@ -283,6 +329,9 @@ def pipfile_lock(text: str) -> Parsed | None:
 
 
 def pipfile_lock_hashes(text: str) -> str:
-    """The `hashes` of a pipfile_lock record, or "" when it has none."""
-    record = next(iter(json.loads(text)[1].values()))
+    """The `hashes` of a pipfile_lock record, or "" when it has none or its source is not hashed."""
+    _where, block = json.loads(text)
+    record = next(iter(block.values())) if isinstance(block, dict) and block else None
+    if not isinstance(record, dict) or not hash_checked_source(_pipfile_source(record)):
+        return ""
     return _locked_hashes(record.get("hashes"))

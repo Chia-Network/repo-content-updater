@@ -13,9 +13,23 @@ from unittest.mock import patch
 
 import dependency_manifest_go
 from dependency_manifest_go import go_mod, go_sum, go_sum_hash, go_zip_hash
-from dependency_manifest_lines import Pin, dockerfile_from, terraform_config, terraform_lock, workflow_uses
-from dependency_manifest_npm import package_json, package_lock, package_lock_integrity, yarn_lock, yarn_lock_integrity
+from dependency_manifest_lines import (
+    Pin,
+    dockerfile_from,
+    terraform_config,
+    terraform_lock,
+    workflow_uses,
+)
+from dependency_manifest_npm import (
+    package_json,
+    package_lock,
+    package_lock_integrity,
+    yarn_lock,
+    yarn_lock_integrity,
+)
 from dependency_manifest_python import (
+    hash_checked_source,
+    lock_source,
     mentions,
     pipfile_lock,
     pipfile_lock_hashes,
@@ -474,6 +488,26 @@ class PythonLockGrammarTest(unittest.TestCase):
         entries, _residue = poetry_lock('[[package]]\nname = "a"\nversion = "1.0"\n')
         self.assertEqual(poetry_lock_hashes(entries[0][3]), "")
 
+    def test_only_a_hashed_poetry_source_records_its_file_hashes(self) -> None:
+        digest = _sha("idna", "3.7", "sdist")
+        files = f'[{{file = "idna-3.7.tar.gz", hash = "sha256:{digest}"}}]'
+        for source, files_list, want in (
+            ('type = "legacy"\nurl = "https://example.com/simple"\nreference = "private"', files, f"sha256:{digest}"),
+            ('type = "url"\nurl = "https://example.com/idna.tar.gz"', files, f"sha256:{digest}"),
+            ('type = "url"\nurl = "https://example.com/idna.tar.gz"', "[]", ""),
+            ('type = "git"\nurl = "https://github.com/a/b.git"\nreference = "abc"', files, ""),
+            ('type = "directory"\nurl = "../idna"', files, ""),
+            ('type = "file"\nurl = "idna-3.7.tar.gz"', files, ""),
+        ):
+            with self.subTest(source=source, files_list=files_list):
+                text = (
+                    f'[[package]]\nname = "idna"\nversion = "3.7"\nfiles = {files_list}\n[package.source]\n{source}\n'
+                )
+                entry = poetry_lock(text)[0][0]
+                self.assertEqual(poetry_lock_hashes(entry[3]), want)
+                checked = hash_checked_source(lock_source(entry), json.loads(entry[3])[1].get("files"))
+                self.assertEqual(checked, want != "")
+
     def test_a_poetry_1_1_lock_joins_each_metadata_files_table_to_its_package(self) -> None:
         old, new = (
             poetry_lock(poetry_lock_text({"Requests": v, "idna": "3.7"}, legacy=True)) for v in ("2.31", "2.32")
@@ -510,12 +544,15 @@ class PythonLockGrammarTest(unittest.TestCase):
         self.assertEqual(hashes[1], "")
         self.assertNotEqual(hashes[0], "")
 
-    def test_a_poetry_package_from_another_source_is_never_an_index_version(self) -> None:
-        source = '[package.source]\ntype = "legacy"\nurl = "https://example.com/simple"\nreference = "private"\n'
-        text = poetry_lock_text({"idna": "3.7"}).replace("\n[metadata]", source + "\n[metadata]")
-        ((name, version, _top, _text),) = poetry_lock(text)[0]
-        self.assertEqual(name, "idna")
-        self.assertTrue(version.startswith("3.7 ("), version)
+    def test_a_poetry_package_from_another_source_keeps_a_bare_version_and_its_source(self) -> None:
+        source = {"type": "legacy", "url": "https://example.com/simple", "reference": "private"}
+        text = poetry_lock_text({"idna": "3.7"}).replace(
+            "\n[metadata]",
+            '\n[package.source]\ntype = "legacy"\nurl = "https://example.com/simple"\nreference = "private"\n\n[metadata]',
+        )
+        entry = poetry_lock(text)[0][0]
+        self.assertEqual(entry[:2], ("idna", "3.7"))
+        self.assertEqual(lock_source(entry), source)
 
     def test_pipfile_lock_records_are_top_in_both_sections_and_the_meta_hash_is_not_residue(self) -> None:
         parsed = pipfile_lock(pipfile_lock_text({"Requests": "2.32.0"}, develop={"pytest": "8.2.0"}))
@@ -529,17 +566,18 @@ class PythonLockGrammarTest(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.assertIsNone(pipfile_lock(bad))
 
-    def test_a_pipfile_package_from_git_a_path_or_another_index_is_never_an_index_version(self) -> None:
-        for record in (
-            {"git": "https://github.com/a/b.git", "ref": "0" * 40, "version": "==1.0"},
-            {"path": ".", "editable": True, "version": "==1.0"},
-            {"index": "private", "version": "==1.0", "hashes": ["sha256:" + "0" * 64]},
+    def test_a_pipfile_package_keeps_a_bare_version_and_hashes_only_an_index_source(self) -> None:
+        digest = "sha256:" + "a" * 64
+        for record, want in (
+            ({"git": "https://github.com/a/b.git", "ref": "0" * 40, "version": "==1.0"}, ""),
+            ({"path": ".", "editable": True, "version": "==1.0"}, ""),
+            ({"index": "private", "version": "==1.0", "hashes": [digest]}, digest),
+            ({"version": "==1.0"}, ""),
         ):
             with self.subTest(record=record):
                 ((_name, version, _top, text),) = pipfile_lock(json.dumps({"default": {"a": record}}))[0]
-                self.assertTrue(version.startswith("==1.0 ("), version)
-        ((_name, _version, _top, text),) = pipfile_lock(json.dumps({"default": {"a": {"version": "==1.0"}}}))[0]
-        self.assertEqual(pipfile_lock_hashes(text), "")
+                self.assertEqual(version, "==1.0")
+                self.assertEqual(pipfile_lock_hashes(text), want)
 
 
 class LineGrammarTest(unittest.TestCase):
