@@ -561,7 +561,9 @@ class TrustedPythonIndexTest(unittest.TestCase):
         real_budget = upstream._DownloadBudget
         with (
             patch.object(upstream, "_get_response", get_response),
-            patch.object(upstream, "_DownloadBudget", lambda **_kwargs: real_budget(seconds=3, clock=lambda: now[0])),
+            patch.object(
+                upstream, "_DownloadBudget", lambda **_kwargs: real_budget(1_000_000, seconds=3, clock=lambda: now[0])
+            ),
         ):
             found = upstream.trusted_python_index("ChiaPos", "2.0.4", (f"sha256:{_sha(_SDIST)}",))
         self.assertEqual(found, "")
@@ -761,13 +763,13 @@ class Sha256DownloadTest(unittest.TestCase):
 
     def test_an_expired_deadline_has_no_digest(self) -> None:
         now = [0.0]
-        budget = upstream._DownloadBudget(clock=lambda: now[0])
+        budget = upstream._DownloadBudget(size=100, clock=lambda: now[0])
         now[0] = upstream._INDEX_DOWNLOAD_SECONDS + 1
         self.assertIsNone(self.download([b"abc"], budget=budget))
 
     def test_a_drip_body_stops_at_the_deadline(self) -> None:
         now = [0.0]
-        budget = upstream._DownloadBudget(seconds=3, clock=lambda: now[0])
+        budget = upstream._DownloadBudget(size=100, seconds=3, clock=lambda: now[0])
         reply = _Reply([b"x"] * 10, clock=now, step=1.0)
         with patch.object(upstream, "_get_response", lambda _url, _accept, _budget=None: (_Connection(), reply)):
             self.assertIsNone(upstream._sha256_download(f"https://{_HOST}/x", frozenset({_HOST}), 100, budget))
@@ -775,7 +777,7 @@ class Sha256DownloadTest(unittest.TestCase):
 
     def test_each_read_uses_the_remaining_budget_as_its_timeout(self) -> None:
         now = [0.0]
-        budget = upstream._DownloadBudget(seconds=30, clock=lambda: now[0])
+        budget = upstream._DownloadBudget(size=100, seconds=30, clock=lambda: now[0])
         now[0] = 25.0
         connection = _Connection()
         reply = _Reply([b"x"])
@@ -822,10 +824,17 @@ class Sha256DownloadTest(unittest.TestCase):
 
 
 class FetchBudgetTest(unittest.TestCase):
-    def test_the_default_budget_is_the_non_index_fetch_limit(self) -> None:
-        with patch.object(upstream, "_FETCH_SECONDS", 7.0), patch.object(upstream, "_FETCH_BYTES", 11):
-            budget = upstream._DownloadBudget(clock=lambda: 0.0)
-        self.assertEqual((budget.remaining_seconds(), budget.remaining), (7.0, 11))
+    def test_a_non_index_fetch_is_bounded_by_its_limit(self) -> None:
+        seen: list[tuple[int, int]] = []
+
+        def get(_url: str, limit: int, _accept: str = "", budget: upstream._DownloadBudget | None = None) -> tuple:
+            assert budget is not None
+            seen.append((budget.remaining, limit))
+            return 200, "", b"x"
+
+        with patch.object(upstream, "_FETCH_SECONDS", 7.0), patch.object(upstream, "_get", get):
+            self.assertEqual(upstream._fetch("https://example.com/x", 11), b"x")
+        self.assertEqual(seen, [(11, 11)])
 
     def test_an_index_check_uses_the_index_budget(self) -> None:
         seen: list[int] = []
@@ -836,7 +845,6 @@ class FetchBudgetTest(unittest.TestCase):
 
         with (
             patch.object(upstream, "_FETCH_SECONDS", 1.0),
-            patch.object(upstream, "_FETCH_BYTES", 1),
             patch.object(upstream, "_INDEX_DOWNLOAD_SECONDS", 120.0),
             patch.object(upstream, "_MAX_INDEX_DOWNLOAD_BYTES", 11),
             patch.object(upstream, "_index_files", index_files),
@@ -846,7 +854,7 @@ class FetchBudgetTest(unittest.TestCase):
 
     def test_a_redirect_body_and_the_next_hop_share_one_deadline(self) -> None:
         now = [0.0]
-        budget = upstream._DownloadBudget(seconds=2, clock=lambda: now[0])
+        budget = upstream._DownloadBudget(size=100, seconds=2, clock=lambda: now[0])
         url = f"https://{_HOST}/a"
         moved = f"https://{_HOST}/b"
         requested: list[str] = []
@@ -938,20 +946,20 @@ class ConnectionDeadlineTest(unittest.TestCase):
     def test_headers_that_drip_stop_at_the_deadline(self) -> None:
         port = _serve(_drip_headers)
         started = time.monotonic()
-        self.assertIsNone(_get_from(port, upstream._DownloadBudget(seconds=0.5)))
+        self.assertIsNone(_get_from(port, upstream._DownloadBudget(size=100, seconds=0.5)))
         self.assertLess(time.monotonic() - started, 2.0)
 
     def test_chunk_size_lines_that_drip_stop_at_the_deadline(self) -> None:
         port = _serve(_drip_chunk_size)
         started = time.monotonic()
-        self.assertIsNone(_get_from(port, upstream._DownloadBudget(seconds=0.5)))
+        self.assertIsNone(_get_from(port, upstream._DownloadBudget(size=100, seconds=0.5)))
         self.assertLess(time.monotonic() - started, 2.0)
 
     def test_a_normal_response_is_read_and_its_timer_cancelled(self) -> None:
         _Timer.instances.clear()
         port = _serve(_complete_response)
         with patch.object(upstream.threading, "Timer", _Timer):
-            self.assertEqual(_get_from(port, upstream._DownloadBudget(seconds=5)), (200, "", b"abc"))
+            self.assertEqual(_get_from(port, upstream._DownloadBudget(size=100, seconds=5)), (200, "", b"abc"))
         self.assertEqual(len(_Timer.instances), 1)
         self.assertTrue(_Timer.instances[0].started)
         self.assertTrue(_Timer.instances[0].cancelled)

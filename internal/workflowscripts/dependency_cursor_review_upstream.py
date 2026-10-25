@@ -85,7 +85,6 @@ _CHUNK = 1024 * 1024
 _MAX_INDEX_FILE = 512 * 1024 * 1024
 _MAX_INDEX_FILES = 64
 _FETCH_SECONDS = 120.0
-_FETCH_BYTES = 1024 * 1024 * 1024
 _INDEX_DOWNLOAD_SECONDS = 120.0
 _MAX_INDEX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 
@@ -186,10 +185,9 @@ def _read_chunk(
 def _get_response(
     url: str,
     accept: str,
-    budget: _DownloadBudget | None = None,
+    budget: _DownloadBudget,
 ) -> tuple[http.client.HTTPSConnection, http.client.HTTPResponse] | None:
     """An open response to an https GET and its connection, or None when there is none within `budget`."""
-    budget = budget or _DownloadBudget()
     parts = _split(url)
     if parts is None or parts.scheme != "https" or not parts.hostname:
         return None
@@ -222,7 +220,7 @@ def _get(
     budget: _DownloadBudget | None = None,
 ) -> tuple[int, str, bytes] | None:
     """The status, Location header and first `limit + 1` body bytes of an https GET, or None when there is none."""
-    budget = budget or _DownloadBudget()
+    budget = budget or _DownloadBudget(limit)
     opened = _get_response(url, accept, budget)
     if opened is None:
         return None
@@ -276,7 +274,7 @@ def _fetch(
     A redirect is followed only to an https URL on a host in `follow`, within that host's path prefix, and at most
     _MAX_REDIRECTS times. `budget` covers every redirect hop and body read.
     """
-    budget = budget or _DownloadBudget()
+    budget = budget or _DownloadBudget(limit)
     for _hop in range(_MAX_REDIRECTS + 1):
         answer = _get(url, limit, accept, budget)
         if answer is None:
@@ -307,19 +305,20 @@ def fetch_archive(url: str, limit: int, follow: Mapping[str, str] | None = None)
 class _DownloadBudget:
     """The time and total byte allowance of one fetch.
 
-    A non-index fetch gets _FETCH_SECONDS and _FETCH_BYTES. A trusted index check gets its own limits and passes them
-    explicitly. A grouped update runs one package check per package, so it can take up to N times these limits.
+    A non-index fetch gets _FETCH_SECONDS, and its size is bounded by the caller's `limit`. A trusted index check
+    passes its own time and byte limits. A grouped update runs one package check per package, so it can take up to N
+    times these limits.
     """
 
     def __init__(
         self,
+        size: int,
         seconds: float | None = None,
-        size: int | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._clock = clock
         self.deadline = clock() + (_FETCH_SECONDS if seconds is None else seconds)
-        self.remaining = _FETCH_BYTES if size is None else size
+        self.remaining = size
 
     def remaining_seconds(self) -> float:
         return self.deadline - self._clock()
@@ -346,7 +345,7 @@ def _sha256_download(
     The body is read in chunks. A redirect is followed only to a host in `hosts`, and at most _MAX_REDIRECTS times.
     `budget` bounds the whole check's time and bytes; a limit that it hits gives no digest.
     """
-    budget = budget or _DownloadBudget()
+    budget = budget or _DownloadBudget(limit)
     for _hop in range(_MAX_REDIRECTS + 1):
         if budget.expired():
             return None
