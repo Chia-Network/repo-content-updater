@@ -53,17 +53,23 @@ are listed only in `TRUSTED_PYTHON_INDEXES` in
   includes it, directly or through other includes, ends with that same index
   and names no extra source. Any other index, `--find-links`, `--no-index`, an
   option filled from the environment, or an include outside the repository
-  leaves that file inconclusive.
+  leaves that file unable to replace PyPI, so the pip change is looked up and
+  scanned. Only a Dependabot config the scripts cannot read leaves the change
+  inconclusive.
 - Any mention of the package in `pyproject.toml`, `setup.py`, `setup.cfg` or
   `Pipfile` in the changed package's own directory is an unhashed occurrence
   with no index, because pip installs it from the default index. A mention in
   a manifest in another directory is not part of the change. It never makes a
   change trusted.
 - Includer discovery reads each include option in a requirements file and
-  treats a tracked symlink that resolves to a requirements file, or a tracked
-  `.txt` or `.in` file that is not UTF-8 text, as leaving the base unread. A
-  base filename split across a continuation or built from quoted pieces is
-  not detected; that is an accepted limitation.
+  treats a tracked symlink whose target names the base, a `.txt` or `.in` file
+  that cannot be read or parsed, more than 64 requirements files or 256
+  candidates for one base, or more than 8 MB of candidate text as leaving the
+  base unable to replace PyPI, so the pip change is looked up and scanned.
+  `.txt` and `.in` files are decoded as pip reads them: a BOM-selected
+  encoding, then UTF-8, then latin-1. A base filename split across a
+  continuation or built from quoted pieces is not detected; that is an
+  accepted limitation.
 - A Dependabot `replaces-base` setting describes Dependabot's own resolution.
   It never makes an index replace PyPI for pip; only a requirements file's
   effective index does.

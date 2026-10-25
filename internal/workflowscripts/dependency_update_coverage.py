@@ -13,6 +13,7 @@ the summary.
 from __future__ import annotations
 
 import base64
+import codecs
 import json
 import os
 import posixpath
@@ -46,6 +47,11 @@ _LOOKUPS = 8
 _git_text = _git.text_at
 _git_files = _git.files
 _git_grep = _git.grep
+
+
+def _read_text(rev: str, path: str) -> str:
+    """The text of `path` at `rev`, or "" when it is missing or not UTF-8, for a grammar that needs text."""
+    return _git_text(rev, path) or ""
 
 
 class Target(NamedTuple):
@@ -402,12 +408,23 @@ _MAX_REPO_FACT_BYTES = 8 * 1024 * 1024
 
 
 class _RepoFacts(NamedTuple):
-    """Tracked repository facts that leave a requirements file unread or unable to replace PyPI."""
+    """Tracked repository facts that leave a requirements file unable to replace PyPI."""
 
-    unread: bool = False  # whether a tracked .txt or .in file is not UTF-8 text
+    unread: bool = False  # whether a tracked .txt or .in file cannot be read or decoded
     aliases: frozenset[str] = frozenset()  # each repository path a tracked symlink resolves to
     pip_settings: bool = False  # whether a tracked file sets a pip setting outside a requirements file
     pip_options: frozenset[str] = frozenset()  # files with a pip index option, before the read set is known
+    texts: tuple[str, ...] = ()  # decoded text of each .txt or .in file a UTF-8 text search does not read
+
+
+# The BOMs pip strips, longest first so a UTF-32 BOM is not read as UTF-16.
+_BOM_CODECS = (
+    (codecs.BOM_UTF32_LE, "utf-32-le"),
+    (codecs.BOM_UTF32_BE, "utf-32-be"),
+    (codecs.BOM_UTF8, "utf-8"),
+    (codecs.BOM_UTF16_LE, "utf-16-le"),
+    (codecs.BOM_UTF16_BE, "utf-16-be"),
+)
 
 
 def _utf8_text(data: bytes) -> bool:
@@ -421,6 +438,20 @@ def _utf8_text(data: bytes) -> bool:
     return True
 
 
+def _pip_decode(data: bytes) -> str | None:
+    """`data` decoded as pip reads a requirements file, or None when its BOM-selected codec cannot decode it."""
+    for bom, codec in _BOM_CODECS:
+        if data.startswith(bom):
+            try:
+                return data[len(bom) :].decode(codec)
+            except UnicodeDecodeError:
+                return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("latin-1")
+
+
 def _symlink_target(path: str, target: str) -> str | None:
     """The repository path a symlink at `path` points to, or None when it is absolute or outside the tree."""
     if not target or target.startswith(("/", "~")) or "\\" in target:
@@ -430,12 +461,13 @@ def _symlink_target(path: str, target: str) -> str | None:
 
 
 def _repo_facts() -> _RepoFacts | None:
-    """The tracked-file facts that leave a requirements file unread or unable to replace PyPI.
+    """The tracked-file facts that leave a requirements file unable to replace PyPI.
 
-    A tracked .txt or .in file that is not UTF-8 text leaves every loaded requirements file unread, and a tracked
-    symlink whose target resolves to one leaves that file unread. A tracked pip.conf or pip.ini, a tracked file that
-    names a pip index environment variable or a pip config key, or a pip command with an index option outside the
-    requirements files the index check reads leaves every requirements file unable to replace PyPI.
+    A tracked .txt or .in file that text search cannot read is decoded as pip decodes it; its text matters only when
+    it names a loaded requirements file. A tracked symlink whose target resolves to a loaded file also matters. A
+    tracked pip.conf or pip.ini, a tracked file that names a pip index environment variable or a pip config key, or
+    a pip command with an index option outside the requirements files the index check reads leaves every
+    requirements file unable to replace PyPI. An unreadable file or a read over the size limit does the same.
     """
     entries = _git.tree()
     if entries is None:
@@ -450,6 +482,7 @@ def _repo_facts() -> _RepoFacts | None:
     settings = False
     aliases: set[str] = set()
     pip_options: set[str] = set()
+    texts: list[str] = []
     for path, mode in entries:
         if posixpath.basename(path) in _python_indexes.PIP_CONF_NAMES:
             settings = True
@@ -468,30 +501,59 @@ def _repo_facts() -> _RepoFacts | None:
                 aliases.add(resolved)
         elif path.endswith((".txt", ".in")) and mode.startswith("100"):
             data = blobs.get(path)
-            if data is None or not _utf8_text(data):
+            if data is None or (text := _pip_decode(data)) is None:
                 unread = True
+            elif not _utf8_text(data):
+                texts.append(text)
     for path in candidates:
         data = blobs.get(path)
-        if data is None or not _utf8_text(data):
+        if data is None:
             unread = True
             continue
-        found_settings, found_options = _python_indexes.pip_setting_flags(path, data.decode("utf-8"))
+        if path.endswith((".txt", ".in")):
+            text = _pip_decode(data)
+        else:
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                text = None
+        if text is None:
+            unread = True
+            continue
+        found_settings, found_options = _python_indexes.pip_setting_flags(path, text)
         settings = settings or found_settings
         if found_options:
             pip_options.add(path)
-    return _RepoFacts(unread, frozenset(aliases), settings, frozenset(pip_options))
+    return _RepoFacts(unread, frozenset(aliases), settings, frozenset(pip_options), tuple(texts))
 
 
 def _unread_requirements(loaded: frozenset[str], facts: _RepoFacts | None) -> frozenset[str]:
-    """The loaded requirements files a repository-wide fact leaves unread."""
+    """The loaded requirements files a repository-wide fact leaves unable to replace PyPI.
+
+    A fact that leaves every file unable to replace PyPI is reported by `_no_replace` instead.
+    """
     if facts is None or facts.unread:
-        return loaded
-    return frozenset(path for path in loaded if path in facts.aliases)
+        return frozenset()
+    return frozenset(
+        path
+        for path in loaded
+        if path in facts.aliases or any(posixpath.basename(path) in text for text in facts.texts)
+    )
 
 
 def _no_replace(loaded: frozenset[str], facts: _RepoFacts | None) -> bool:
-    """Whether a repository-wide pip setting leaves no requirements file able to replace PyPI."""
-    return facts is not None and (facts.pip_settings or bool(facts.pip_options - loaded))
+    """Whether a repository-wide fact leaves no requirements file able to replace PyPI."""
+    if facts is None or facts.unread:
+        return True
+    return facts.pip_settings or bool(facts.pip_options - loaded)
+
+
+def _replacement_possible(
+    indexes: dict[str, _python_indexes.DirectoryIndexes],
+    configured: _python_indexes.Indexes,
+) -> bool:
+    """Whether a configured index or a requirements file names a trusted index."""
+    return bool(configured.trusted) or any(fact.trusted for found in indexes.values() for _path, fact in found.files)
 
 
 def _verify_commit(rev: str) -> str:
@@ -599,7 +661,7 @@ def _plan(token: str = "") -> _diff.Plan | None:
     """
     base = _base_commit(token)
     changed = _changed_paths(base) if base else None
-    return None if changed is None else _diff.plan(changed, _git_text, base)
+    return None if changed is None else _diff.plan(changed, _read_text, base)
 
 
 def _warning(change: _diff.Change, reason: str) -> dict:
@@ -663,11 +725,12 @@ def _index_occurrences(change: _diff.Change, new: str, hashed: tuple[str, ...]) 
     """
     found = list(
         _ecosystems.locked_occurrences(
-            change.ecosystem, change.dir, change.name, new, lambda path: _git_text("HEAD", path), hashed
+            change.ecosystem, change.dir, change.name, new, lambda path: _read_text("HEAD", path), hashed
         )
     )
     for path, _kind in _ecosystems.beside(_ecosystems.PIP, _ecosystems.MANIFEST, change.dir):
-        if _manifest_python.mentions(_git_text("HEAD", path), change.name):
+        text = _git_text("HEAD", path)
+        if text is None or _manifest_python.mentions(text, change.name):
             found.append((path, ""))
     return tuple(found)
 
@@ -744,7 +807,7 @@ def _bind(change: _diff.Change, target: Target, record: dict, hashed: tuple[str,
         repo=target.repo.slug,
         commit=str(record.get("resolved_to") or ""),
         locked=_ecosystems.locked(
-            change.ecosystem, change.dir, target.package, target.new, lambda path: _git_text("HEAD", path), hashed
+            change.ecosystem, change.dir, target.package, target.new, lambda path: _read_text("HEAD", path), hashed
         ),
     )
     return _ecosystems.bind(change.ecosystem, subject)
@@ -890,20 +953,35 @@ def main() -> None:
     changes, warnings = _split(plan)
     configured = _python_indexes.configured(_git_text)
     pip_dirs = sorted({change.dir for change in changes if change.ecosystem == "pip"})
-    facts = _repo_facts() if pip_dirs else _RepoFacts()
 
-    def unread(loaded: frozenset[str]) -> frozenset[str]:
-        return _unread_requirements(loaded, facts)
+    def build(
+        unread_files: Callable[[frozenset[str]], frozenset[str]],
+        no_replace: Callable[[frozenset[str]], bool],
+    ) -> dict[str, _python_indexes.DirectoryIndexes]:
+        return {
+            directory: _python_indexes.for_directory(
+                directory, configured, _git_text, _git_files, _git_grep, unread_files, no_replace
+            )
+            for directory in pip_dirs
+        }
 
-    def no_replace(loaded: frozenset[str]) -> bool:
-        return _no_replace(loaded, facts)
+    def no_repo_facts(_loaded: frozenset[str]) -> frozenset[str]:
+        return frozenset()
 
-    indexes = {
-        directory: _python_indexes.for_directory(
-            directory, configured, _git_text, _git_files, _git_grep, unread, no_replace
-        )
-        for directory in pip_dirs
-    }
+    def replace_allowed(_loaded: frozenset[str]) -> bool:
+        return False
+
+    indexes = build(no_repo_facts, replace_allowed)
+    if _replacement_possible(indexes, configured):
+        facts = _repo_facts()
+
+        def repo_unread(loaded: frozenset[str]) -> frozenset[str]:
+            return _unread_requirements(loaded, facts)
+
+        def repo_no_replace(loaded: frozenset[str]) -> bool:
+            return _no_replace(loaded, facts)
+
+        indexes = build(repo_unread, repo_no_replace)
     exact = _exact_all(changes, indexes, configured, plan.hashed)
     trusted = tuple({**item.change._asdict(), "index": item.index} for item in exact if item.index)
     exact = [item for item in exact if not item.index]

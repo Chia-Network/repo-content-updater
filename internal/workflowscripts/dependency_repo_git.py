@@ -65,15 +65,15 @@ def bytes_at(rev: str, path: str) -> bytes | None:
     return None if proc.returncode != 0 else proc.stdout
 
 
-def text_at(rev: str, path: str) -> str:
-    """The text of `path` at `rev`, or "" when git cannot read it or it is not UTF-8."""
+def text_at(rev: str, path: str) -> str | None:
+    """The text of `path` at `rev`, "" when git cannot read it, or None when it is not UTF-8."""
     data = bytes_at(rev, path)
     if data is None:
         return ""
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError:
-        return ""
+        return None
 
 
 def tree() -> list[tuple[str, str]] | None:

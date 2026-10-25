@@ -326,6 +326,7 @@ class IndexOptions(NamedTuple):
 
     options: tuple[IndexOption, ...] = ()
     unread: bool = False  # whether a line may name another package source the review does not read
+    unread_includes: tuple[str, ...] = ()  # each line that may name an include the review cannot read
 
 
 INDEX = "index"  # an --index-url option
@@ -374,59 +375,39 @@ def _pip_options(line: str) -> list[_Option] | None:
     return found
 
 
-def requirements_includes(text: str) -> list[str] | None:
-    """The file of every include option a requirements file names, in pip's order, or None when one cannot be read.
-
-    A leading UTF-8 BOM is ignored. Every include option on a joined line counts, including an abbreviation pip
-    accepts and a short option joined to its value. A line pip fills from the environment, an option whose
-    abbreviation is ambiguous, and an include without a value leave the result unread.
-    """
-    found: list[str] = []
-    for line, original in _pip_lines(text):
-        if not line:
-            if _ENV_VAR_RE.search(original):
-                return None
-            continue
-        if not line.startswith("-"):
-            continue
-        options = _pip_options(line)
-        if options is None:
-            return None
-        for option in options:
-            if option.name is None:
-                if option.unread:
-                    return None
-            elif option.name in _PIP_INCLUDES:
-                if option.value is None:
-                    return None
-                found.append(option.value)
-    return found
-
-
 def requirements_index_options(text: str) -> IndexOptions:
     """The package source options a requirements file names, read in pip's order.
 
-    A line whose options cannot be read sets `unread`; the options already read, and the includes on later lines,
-    still say which files the install reads.
+    A line whose options cannot be read sets `unread`, and each line that could name an include is also recorded in
+    `unread_includes`. The options already read, and the includes on later lines, still say which files the install
+    reads.
     """
     found: list[IndexOption] = []
     unread = False
+    unread_includes: list[str] = []
     for line, original in _pip_lines(text):
         if not line.startswith("-"):
             # A line pip fills from the environment may be any option; only a plain requirement line is read.
             if not line and _ENV_VAR_RE.search(original) and not _REQ_RE.match(original.strip()):
                 unread = True
+                if original.strip().startswith("-"):
+                    unread_includes.append(original.strip())
             continue
         options = _pip_options(line)
         if options is None:
             unread = True
+            unread_includes.append(line)
             continue
         for option in options:
             if option.name is None:
                 unread = unread or option.unread
+                if option.unread:
+                    unread_includes.append(line)
                 continue
             if option.value is None or option.name in _PIP_OTHER_SOURCES:
                 unread = True
+                if option.name in _PIP_INCLUDES and option.value is None:
+                    unread_includes.append(line)
                 continue
             if option.name == "--index-url":
                 found.append(IndexOption(INDEX, option.value))
@@ -434,4 +415,4 @@ def requirements_index_options(text: str) -> IndexOptions:
                 found.append(IndexOption(EXTRA, option.value))
             elif option.name in _PIP_INCLUDES:
                 found.append(IndexOption(INCLUDE, option.value))
-    return IndexOptions(tuple(found), unread)
+    return IndexOptions(tuple(found), unread, tuple(unread_includes))

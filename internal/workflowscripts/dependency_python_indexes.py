@@ -21,7 +21,7 @@ import dependency_cursor_review_ecosystems as _ecosystems
 import dependency_cursor_review_upstream as _upstream
 import dependency_manifest_python as _python
 
-_Read = Callable[[str, str], str]
+_Read = Callable[[str, str], str | None]
 _ListFiles = Callable[[str], list[tuple[str, str]] | None]
 _Search = Callable[[str], list[str] | None]
 _UnreadFiles = Callable[[frozenset[str]], frozenset[str]]
@@ -74,14 +74,6 @@ _PIP_CONFIG_KEY_RE = re.compile(r"^\s*(?:index-url|extra-index-url|find-links)\s
 _SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
 
 
-def _no_unread(_loaded: frozenset[str]) -> frozenset[str]:
-    return frozenset()
-
-
-def _never_replace(_loaded: frozenset[str]) -> bool:
-    return False
-
-
 def _registry_scalar(value: str) -> str | None:
     """The scalar value of a registry field, or None when it is a flow mapping or a list."""
     value = value.strip()
@@ -129,14 +121,16 @@ def _merge(*items: Indexes) -> Indexes:
     return Indexes(trusted, other)
 
 
-def _dependabot_indexes(text: str) -> Indexes:
+def _dependabot_indexes(text: str | None) -> Indexes:
     """The python-index registries of one Dependabot config. Only a URL in TRUSTED_PYTHON_INDEXES is trusted.
 
     Inside `registries:` every line must be a registry key or a recognised field under one, and every mention of
     `python-index` must be a parsed type field. A field written twice under one registry is ambiguous, and anything
-    else that is not read leaves the config unread. `replaces-base` is not recorded: only a requirements file's
-    effective index replaces PyPI for pip.
+    else that is not read, including a config that is not UTF-8 text, leaves the config unread. `replaces-base` is
+    not recorded: only a requirements file's effective index replaces PyPI for pip.
     """
+    if text is None:
+        return Indexes(other=True)
     in_registries = False
     fields: dict[str, str] | None = None
     blocks: list[dict[str, str]] = []
@@ -312,12 +306,14 @@ class _Requirements:
         self._no_replace = no_replace
         self._replace_blocked = False
         self._listings: dict[str, list[tuple[str, str]] | None] = {}
-        self._texts: dict[str, str] = {}
+        self._texts: dict[str, str | None] = {}
         self._options: dict[str, _python.IndexOptions] = {}
         self._included: dict[str, tuple[str | None, ...]] = {}
         self._effective: dict[str, _Effective] = {}
         self._parents: dict[str, set[str]] = {}  # each included path and the files that include it
         self._broken: set[str] = set()
+        # Each loaded file a repository-wide fact leaves unable to replace PyPI.
+        self._no_replace_files: set[str] = set()
         self._loaded: set[str] = set()
         self._searched: dict[str, list[str] | None] = {}
 
@@ -339,14 +335,17 @@ class _Requirements:
         mode = self._mode(included)
         return included if mode is not None and _is_blob(mode) else None
 
-    def _text(self, path: str) -> str:
+    def _text(self, path: str) -> str | None:
         if path not in self._texts:
             self._texts[path] = self._read("HEAD", path)
         return self._texts[path]
 
     def _options_for(self, path: str) -> _python.IndexOptions:
         if path not in self._options:
-            self._options[path] = _python.requirements_index_options(self._text(path))
+            text = self._text(path)
+            self._options[path] = (
+                _python.IndexOptions(unread=True) if text is None else _python.requirements_index_options(text)
+            )
         return self._options[path]
 
     def _resolve_includes(self, path: str) -> tuple[str | None, ...]:
@@ -376,42 +375,35 @@ class _Requirements:
     def _consider(self, candidate: str, path: str, roots: set[str], pending: list[str]) -> None:
         """Add `candidate` to `roots` when it includes `path`; ignore it when no include option names `path`.
 
-        A candidate that names `path` in an include option but cannot be read, parsed or resolved leaves `path`
-        unread.
+        A candidate that cannot be read, or that may name `path` on a line whose options cannot be read, leaves
+        `path` unable to replace PyPI. Another unread line that does not name `path` is ignored.
         """
         if candidate == path:
             return
         mode = self._mode(candidate)
-        if mode is None or not _is_blob(mode) or not (text := self._text(candidate)):
-            self._broken.add(path)
-            return
-        values = _python.requirements_includes(text)
-        if values is None:
-            self._broken.add(path)
+        if mode is None or not _is_blob(mode) or self._text(candidate) is None:
+            self._no_replace_files.add(path)
             return
         options = self._options_for(candidate)
         included = self._resolve_includes(candidate)
         includes = [option for option in options.options if option.kind == _python.INCLUDE]
         resolved = [_include_text(posixpath.dirname(candidate), option.value) for option in includes]
-        if path not in resolved and not any(
+        named = path in resolved or any(
             target is None and self._through_symlink(value) for value, target in zip(resolved, included)
-        ):
+        )
+        if not named:
+            if any(posixpath.basename(path) in line for line in options.unread_includes):
+                self._no_replace_files.add(path)
+            return
+        if any(item is None for item in included) or options.unread:
+            self._no_replace_files.add(path)
             return
         if path in included:
-            if options.unread or any(item is None for item in included):
-                self._broken.add(path)
-            elif candidate not in roots:
+            if candidate not in roots:
                 roots.add(candidate)
                 pending.append(candidate)
             return
-        if any(
-            target is None and _inside(_include_text(posixpath.dirname(candidate), option.value))
-            for option, target in zip(includes, included)
-        ):
-            self._broken.add(path)
-            return
-        if options.unread:
-            self._broken.add(path)
+        self._no_replace_files.add(path)
 
     def load(self, roots: set[str]) -> bool:
         """Read every requirements file `roots` reaches and every tracked file that includes one.
@@ -437,11 +429,11 @@ class _Requirements:
                     pending.append(included)
             candidates = self._candidates(path)
             if candidates is None:
-                self._broken.add(path)
+                self._no_replace_files.add(path)
                 continue
             for candidate in candidates:
                 self._consider(candidate, path, roots, pending)
-        self._broken.update(self._unread_files(frozenset(self._loaded)))
+        self._no_replace_files.update(self._unread_files(frozenset(self._loaded)))
         self._replace_blocked = self._no_replace(frozenset(self._loaded))
         return True
 
@@ -450,6 +442,8 @@ class _Requirements:
             return self._effective[path]
         if path in stack or path in self._broken:
             return _Effective(other=True)
+        if path in self._no_replace_files:
+            return _Effective(extra=True)
         index: str | None = None
         extra = False
         trusted = set(self._configured.trusted)
@@ -529,18 +523,18 @@ def for_directory(
     read: _Read,
     list_files: _ListFiles,
     search: _Search,
-    unread_files: _UnreadFiles = _no_unread,
-    no_replace: _NoReplace = _never_replace,
+    unread_files: _UnreadFiles,
+    no_replace: _NoReplace,
 ) -> DirectoryIndexes:
     """The index facts of each requirements file in `directory` at HEAD.
 
     A file listing that fails, a requirements file that is not a blob, a reachable set of requirements files
     larger than `_MAX_REQUIREMENTS_FILES`, or more than `_MAX_INCLUDER_CANDIDATES` candidates for one name trusts
     none in the directory. An include that is not a plain repository path, an include cycle, or another package
-    source leaves that file unread, and an unread file leaves every replacement unread. A file keeps its replacing
-    index only when every tracked file in the repository that includes it, directly or through other includes, ends
+    source leaves that file unable to replace PyPI, so the change is scanned. A file keeps its replacing index
+    only when every tracked file in the repository that includes it, directly or through other includes, ends
     with that same index and names no extra source. `unread_files` names the files a repository-wide fact leaves
-    unread, and `no_replace` says whether a repository-wide fact leaves no file able to replace PyPI.
+    unable to replace PyPI, and `no_replace` says whether a repository-wide fact leaves no file able to.
     """
     files = list_files(directory)
     if files is None:

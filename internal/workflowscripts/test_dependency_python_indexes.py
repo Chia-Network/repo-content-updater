@@ -31,8 +31,26 @@ def _requirements(mode: str = "100644"):
     return lambda directory: [(f"{directory}/requirements.txt", mode)]
 
 
+def _for_directory(
+    directory: str,
+    configured: indexes.Indexes,
+    read,
+    tree,
+    search,
+) -> indexes.DirectoryIndexes:
+    return indexes.for_directory(
+        directory,
+        configured,
+        read,
+        tree,
+        search,
+        lambda _loaded: frozenset(),
+        lambda _loaded: False,
+    )
+
+
 def _facts(directory: str, configured: indexes.Indexes, texts: dict[str, str], tree) -> indexes.Indexes:
-    found = indexes.for_directory(directory, configured, _read(texts), tree, _search(texts))
+    found = _for_directory(directory, configured, _read(texts), tree, _search(texts))
     return found.for_path(f"{directory}/requirements.txt")
 
 
@@ -75,7 +93,7 @@ class PythonIndexesTest(unittest.TestCase):
             indexes.Indexes(frozenset({_CHIA, _DOWNLOAD}), index=_CHIA),
         )
         self.assertTrue(
-            indexes.for_directory("plain", indexes.Indexes(other=True), _read(texts), tree, _search(texts))
+            _for_directory("plain", indexes.Indexes(other=True), _read(texts), tree, _search(texts))
             .for_path("plain/requirements.txt")
             .other
         )
@@ -182,7 +200,7 @@ class PythonIndexesTest(unittest.TestCase):
                     "app/requirements-dev.txt": outer,
                 }
                 tree = _listing("app/requirements.txt", "app/requirements-dev.txt")
-                found = indexes.for_directory("app", indexes.Indexes(), _read(texts), tree, _search(texts))
+                found = _for_directory("app", indexes.Indexes(), _read(texts), tree, _search(texts))
                 self.assertEqual(found.for_path("app/requirements.txt"), expected)
 
     def test_every_tracked_file_that_includes_a_requirements_file_constrains_it(self) -> None:
@@ -201,7 +219,7 @@ class PythonIndexesTest(unittest.TestCase):
                     includer: f"{include}--extra-index-url {_PYPI}\n",
                 }
                 tree = _listing(base, includer)
-                found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree, _search(texts))
+                found = _for_directory(".", indexes.Indexes(), _read(texts), tree, _search(texts))
                 self.assertEqual(found.for_path(base), indexes.Indexes(frozenset({_CHIA})))
 
     def test_an_includer_that_adds_no_source_keeps_the_replacing_index(self) -> None:
@@ -210,7 +228,7 @@ class PythonIndexesTest(unittest.TestCase):
             "dev-requirements.txt": "-r requirements.txt\n",
         }
         tree = _listing("requirements.txt", "dev-requirements.txt")
-        found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree, _search(texts))
+        found = _for_directory(".", indexes.Indexes(), _read(texts), tree, _search(texts))
         self.assertEqual(found.for_path("requirements.txt"), indexes.Indexes(frozenset({_CHIA}), index=_CHIA))
 
     def test_every_form_pip_reads_finds_the_includer(self) -> None:
@@ -230,11 +248,9 @@ class PythonIndexesTest(unittest.TestCase):
                     "dev.txt": include,
                 }
                 tree = _listing("requirements.txt", "dev.txt")
-                found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree, _search(texts))
+                found = _for_directory(".", indexes.Indexes(), _read(texts), tree, _search(texts))
                 expected = (
-                    indexes.Indexes(other=True)
-                    if label == "parent path"
-                    else indexes.Indexes(frozenset({_CHIA}), index=_CHIA)
+                    indexes.Indexes() if label == "parent path" else indexes.Indexes(frozenset({_CHIA}), index=_CHIA)
                 )
                 self.assertEqual(found.for_path("requirements.txt"), expected)
 
@@ -245,45 +261,46 @@ class PythonIndexesTest(unittest.TestCase):
             "README.md": "Run `pip install -r requirements.txt` to install.\n",
         }
         tree = _listing(*texts)
-        found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree, _search(texts))
+        found = _for_directory(".", indexes.Indexes(), _read(texts), tree, _search(texts))
         self.assertEqual(
             found.for_path("requirements.txt"),
             indexes.Indexes(frozenset({_CHIA}), index=_CHIA),
         )
 
-    def test_more_includer_candidates_than_the_cap_leaves_the_base_unread(self) -> None:
+    def test_more_includer_candidates_than_the_cap_leaves_the_base_unable_to_replace(self) -> None:
         base = "requirements.txt"
         candidates = [f"dev{i}.txt" for i in range(indexes._MAX_INCLUDER_CANDIDATES + 1)]
         texts = {base: f"-i {_CHIA}\nchiapos==2.0.4\n", **{name: "attrs==1.0\n" for name in candidates}}
         tree = _listing(base, *candidates)
         search = lambda needle: candidates if needle == base else []
-        found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree, search)
-        self.assertEqual(found.for_path(base), indexes.Indexes(other=True))
+        found = _for_directory(".", indexes.Indexes(), _read(texts), tree, search)
+        self.assertEqual(found.for_path(base), indexes.Indexes())
 
-    def test_an_unresolved_include_in_a_candidate_leaves_the_base_unread(self) -> None:
+    def test_an_unresolved_include_in_a_candidate_leaves_the_base_unable_to_replace(self) -> None:
         texts = {
             "requirements.txt": f"-i {_CHIA}\nchiapos==2.0.4\n",
             "dev.txt": "-r sub/../requirements.txt\n",
         }
         tree = _listing("requirements.txt", "dev.txt")
-        found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree, _search(texts))
-        self.assertEqual(found.for_path("requirements.txt"), indexes.Indexes(other=True))
+        found = _for_directory(".", indexes.Indexes(), _read(texts), tree, _search(texts))
+        self.assertEqual(found.for_path("requirements.txt"), indexes.Indexes())
 
-    def test_an_include_through_a_linked_directory_leaves_the_base_unread(self) -> None:
+    def test_an_include_through_a_linked_directory_leaves_the_base_unable_to_replace(self) -> None:
         texts = {
             "requirements.txt": f"-i {_CHIA}\nchiapos==2.0.4\n",
             "dev.txt": "-r link/requirements.txt\n",
         }
         tree = {".": [("requirements.txt", "100644"), ("dev.txt", "100644"), ("link", "120000")]}
-        found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree.get, _search(texts))
-        self.assertEqual(found.for_path("requirements.txt"), indexes.Indexes(other=True))
+        found = _for_directory(".", indexes.Indexes(), _read(texts), tree.get, _search(texts))
+        self.assertEqual(found.for_path("requirements.txt"), indexes.Indexes())
 
-    def test_a_candidate_that_cannot_be_read_leaves_the_base_unread(self) -> None:
+    def test_a_candidate_that_cannot_be_read_leaves_the_base_unable_to_replace(self) -> None:
         texts = {"requirements.txt": f"-i {_CHIA}\nchiapos==2.0.4\n"}
         tree = {".": [("requirements.txt", "100644"), ("dev.txt", "100644")]}
         search = lambda needle: ["dev.txt"] if needle == "requirements.txt" else []
-        found = indexes.for_directory(".", indexes.Indexes(), _read(texts), tree.get, search)
-        self.assertEqual(found.for_path("requirements.txt"), indexes.Indexes(other=True))
+        read = lambda _rev, path: None if path == "dev.txt" else texts.get(path, "")
+        found = _for_directory(".", indexes.Indexes(), read, tree.get, search)
+        self.assertEqual(found.for_path("requirements.txt"), indexes.Indexes())
 
     def test_an_unread_requirements_file_leaves_every_replacement_unread(self) -> None:
         texts = {
@@ -291,7 +308,7 @@ class PythonIndexesTest(unittest.TestCase):
             "app/requirements-dev.txt": "--find-links wheels\n",
         }
         tree = _listing("app/requirements.txt", "app/requirements-dev.txt")
-        found = indexes.for_directory("app", indexes.Indexes(), _read(texts), tree, _search(texts))
+        found = _for_directory("app", indexes.Indexes(), _read(texts), tree, _search(texts))
         self.assertEqual(found.for_path("app/requirements.txt"), indexes.Indexes(frozenset({_CHIA})))
 
     def test_a_diamond_include_is_read_once(self) -> None:
@@ -308,7 +325,7 @@ class PythonIndexesTest(unittest.TestCase):
             return texts[path]
 
         tree = _listing(*texts)
-        found = indexes.for_directory("app", indexes.Indexes(), read, tree, _search(texts))
+        found = _for_directory("app", indexes.Indexes(), read, tree, _search(texts))
         self.assertEqual(found.for_path("app/requirements.txt").index, _CHIA)
         self.assertEqual(reads.count("app/shared.txt"), 1)
 
@@ -317,7 +334,7 @@ class PythonIndexesTest(unittest.TestCase):
         texts = {"app/requirements.txt": "".join(f"-r {name}\n" for name in names)}
         texts.update((f"app/{name}", "") for name in names)
         tree = _listing(*texts)
-        found = indexes.for_directory("app", indexes.Indexes(), _read(texts), tree, _search(texts))
+        found = _for_directory("app", indexes.Indexes(), _read(texts), tree, _search(texts))
         self.assertTrue(found.for_path("app/requirements.txt").other)
 
     def test_a_source_option_the_review_cannot_read_leaves_the_file_unread(self) -> None:
@@ -493,7 +510,7 @@ class PythonIndexesTest(unittest.TestCase):
             "app/requirements.txt": f"-i {_CHIA}\nattrs==23.2.0\n",
             "app/requirements-dev.txt": "attrs==23.2.0\n",
         }
-        found = indexes.for_directory("app", indexes.Indexes(), _read(texts), tree, _search(texts))
+        found = _for_directory("app", indexes.Indexes(), _read(texts), tree, _search(texts))
         self.assertEqual(
             found.for_path("app/requirements.txt"),
             indexes.Indexes(frozenset({_CHIA}), index=_CHIA),

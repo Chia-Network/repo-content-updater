@@ -25,7 +25,6 @@ from dependency_manifest_python import (
     poetry_lock_hashes,
     requirements,
     requirements_hashes,
-    requirements_includes,
     requirements_index_options,
     requirements_txt,
 )
@@ -662,40 +661,29 @@ class RequirementsIndexOptionsTest(unittest.TestCase):
                 (index, IndexOption("include", "base.txt"), extra)
             ),
         }
-        unread = (
-            "-i",
-            "--index-url ${URL}",
-            "${OPT} https://example.com/simple",
-            "--find-links ./wheels",
-            "-f x",
-            "--no-index",
-            "--extra-index-url 'a",
-        )
-        for text, expected in cases.items():
-            with self.subTest(text=text):
-                self.assertEqual(requirements_index_options(text), expected)
-        for text in unread:
-            with self.subTest(text=text):
-                self.assertEqual(requirements_index_options(text), IndexOptions(unread=True))
-
-
-class RequirementsIncludesTest(unittest.TestCase):
-    def test_every_include_option_on_a_joined_line_is_returned(self) -> None:
-        cases = {
-            "-r \\\nrequirements.txt\n": ["requirements.txt"],
-            "--requirem x\n": ["x"],
-            "--cons x\n": ["x"],
-            "--pre -r x\n": ["x"],
-            "\ufeff-r x\n": ["x"],
-            "-r a\n-c b\n": ["a", "b"],
-            "-r ./sub/../requirements.txt\n": ["./sub/../requirements.txt"],
-            "-r requirements.txt/\n": ["requirements.txt/"],
+        unread = {
+            "-i": IndexOptions(unread=True),
+            "--index-url ${URL}": IndexOptions(unread=True, unread_includes=("--index-url ${URL}",)),
+            "${OPT} https://example.com/simple": IndexOptions(unread=True),
+            "--find-links ./wheels": IndexOptions(unread=True),
+            "-f x": IndexOptions(unread=True),
+            "--no-index": IndexOptions(unread=True),
+            "--extra-index-url 'a": IndexOptions(unread=True, unread_includes=("--extra-index-url 'a",)),
         }
         for text, expected in cases.items():
             with self.subTest(text=text):
-                self.assertEqual(requirements_includes(text), expected)
-
-    def test_an_include_the_parser_cannot_read_is_none(self) -> None:
-        for text in ("-r\n", "--req x\n", "${OPT} -r x\n", "--extra-index-url 'a\n"):
+                self.assertEqual(requirements_index_options(text), expected)
+        for text, expected in unread.items():
             with self.subTest(text=text):
-                self.assertIsNone(requirements_includes(text))
+                self.assertEqual(requirements_index_options(text), expected)
+
+    def test_a_line_that_may_name_an_unread_include_is_recorded(self) -> None:
+        cases = {
+            "--req x\n": ("--req x",),
+            "-r\n": ("-r",),
+            "-r \\\nbase.txt\n": (),
+            "-r base.txt\n": (),
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(requirements_index_options(text).unread_includes, expected)

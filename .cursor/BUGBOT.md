@@ -45,5 +45,8 @@ adversarial.
 - An includer whose base filename is split across a continuation or built
   from quoted pieces is not detected. That limitation is documented in
   `AGENTS.md`.
+- A requirements file left unable to replace PyPI by an unreadable include, a
+  symlink alias, or a size or candidate cap is looked up and scanned, not
+  left inconclusive. Only an unreadable Dependabot config is inconclusive.
 - A `-i` or `-f` option of a non-pip command (`sed -i`, `grep -i`, `rm -f`),
   or prose that names an index option without a pip command.
