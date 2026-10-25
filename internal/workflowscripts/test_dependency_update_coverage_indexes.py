@@ -18,7 +18,6 @@ _WHEEL = b"chiapos wheel"
 _SDIST_URL = "https://download.chia.net/files/chiapos-2.0.4.tar.gz"
 _WHEEL_URL = "https://download.chia.net/files/chiapos-2.0.4-cp312-cp312-manylinux_2_28_x86_64.whl"
 _PAGE = f'<a href="{_SDIST_URL}">s</a>\n<a href="{_WHEEL_URL}">w</a>\n'.encode()
-_CONFIG = "registries:\n  chia:\n    type: python-index\n    url: https://pypi.chia.net/simple/\n"
 
 
 def _sha(data: bytes) -> str:
@@ -71,8 +70,6 @@ class DependencyUpdateCoverageIndexTest(unittest.TestCase):
         self,
         texts: dict[str, str],
         hashed: tuple[str, ...],
-        *,
-        config: str = "",
     ) -> tuple[dict, str, list[str], list[str]]:
         """coverage.main() over one pip change with the trusted index page and both files mocked."""
         looked_up: list[str] = []
@@ -87,12 +84,9 @@ class DependencyUpdateCoverageIndexTest(unittest.TestCase):
             answers = {_PAGE_URL: _PAGE, _SDIST_URL: _SDIST, _WHEEL_URL: _WHEEL}
             return _Connection(), _Response(answers.get(url, b""), 200 if url in answers else 404)
 
-        all_texts = {**texts}
-        if config:
-            all_texts[".github/dependabot.yml"] = config
         plan = _plan(("pip", ".", "chiapos", "2.0.3", "2.0.4"), hashed=hashed)
         with (
-            patch.object(coverage, "_git_text", lambda _rev, path: all_texts.get(path, "")),
+            patch.object(coverage, "_git_text", lambda _rev, path: texts.get(path, "")),
             patch.object(upstream, "_get_response", get_response),
         ):
             report, summary, _output = _run_main(
@@ -122,7 +116,7 @@ class DependencyUpdateCoverageIndexTest(unittest.TestCase):
 
     def test_an_unhashed_occurrence_is_never_trusted_even_beside_a_trusted_index(self) -> None:
         report, _summary, looked_up, requested = self.run_http(
-            {"requirements.txt": f"-i {_CHIA}\nchiapos==2.0.4\n"}, ("requirements.txt",), config=_CONFIG
+            {"requirements.txt": f"-i {_CHIA}\nchiapos==2.0.4\n"}, ("requirements.txt",)
         )
         self.assertEqual(looked_up, ["chiapos"])
         self.assertEqual(report["trusted_packages"], [])
@@ -143,14 +137,33 @@ class DependencyUpdateCoverageIndexTest(unittest.TestCase):
         )
         self.assertEqual(looked_up, ["chiapos"])
         self.assertEqual(report["trusted_packages"], [])
-        self.assertEqual(requested[:2], [_PAGE_URL, _SDIST_URL])
+        self.assertEqual(
+            requested,
+            [
+                _PAGE_URL,
+                _SDIST_URL,
+                _WHEEL_URL,
+                "https://download.chia.net/simple/chiapos/",
+                "https://pypi.org/pypi/chiapos/2.0.4/json",
+            ],
+        )
 
     def test_a_pypi_only_wheel_hash_is_scanned(self) -> None:
-        report, _summary, looked_up, _requested = self.run_http(
+        report, _summary, looked_up, requested = self.run_http(
             {"requirements.txt": _pin(_sha(b"pypi-only wheel"))}, ("requirements.txt",)
         )
         self.assertEqual(looked_up, ["chiapos"])
         self.assertEqual(report["trusted_packages"], [])
+        self.assertEqual(
+            requested,
+            [
+                _PAGE_URL,
+                _SDIST_URL,
+                _WHEEL_URL,
+                "https://download.chia.net/simple/chiapos/",
+                "https://pypi.org/pypi/chiapos/2.0.4/json",
+            ],
+        )
 
     def test_a_sha512_hash_is_scanned_without_reading_the_index(self) -> None:
         report, _summary, looked_up, requested = self.run_http(
@@ -182,21 +195,21 @@ class DependencyUpdateCoverageIndexTest(unittest.TestCase):
             "poetry.lock": _poetry_lock(_sha(_SDIST)),
             "pyproject.toml": '[project]\ndependencies = ["chiapos==2.0.4"]\n',
         }
-        report, _summary, looked_up, requested = self.run_http(texts, (), config=_CONFIG)
+        report, _summary, looked_up, requested = self.run_http(texts, ())
         self.assertEqual(looked_up, [])
         self.assertEqual(
             [(item["name"], item["index"]) for item in report["trusted_packages"]], [("chiapos", "pypi.chia.net")]
         )
         self.assertEqual(requested, [_PAGE_URL, _SDIST_URL])
 
-    def test_an_untrusted_requirements_index_does_not_make_the_change_inconclusive(self) -> None:
-        report, summary, looked_up, _requested = self.run_http(
+    def test_an_unhashed_index_url_line_is_scanned_without_a_request(self) -> None:
+        report, _summary, looked_up, requested = self.run_http(
             {"requirements.txt": "--index-url https://example.com/simple/\nchiapos==2.0.4\n"},
             ("requirements.txt",),
         )
         self.assertEqual(looked_up, ["chiapos"])
-        self.assertNotIn("configured_index", summary)
         self.assertEqual(report["trusted_packages"], [])
+        self.assertEqual(requested, [])
 
 
 if __name__ == "__main__":
