@@ -13,6 +13,7 @@
 default_files:
   - dependabot-actions
   - dependency-cursor-review
+  - dep-review
 
 # Groups allow inheriting a potentially evolving set of templates for a particular project type without needing to
 # constantly update the list of files in the repo settings
@@ -205,6 +206,7 @@ files:
   - name: dep-review
     template_name: dependency-review.yml
     repo_path: .github/workflows/dependency-review.yml
+    adoption_marker: "repo-content-updater:dependency-review"
     alternate_paths:
       - .github/workflows/dependency-review.yaml
 
@@ -296,6 +298,7 @@ variables:
   DEPENDABOT_CARGO_REBASE_STRATEGY: "auto"
   DEPENDABOT_CARGO_GROUP_UPDATES: "0"
   DEPENDENCY_REVIEW_ALLOW_DEPENDENCIES_LICENSES: pkg:pypi/pyinstaller
+  DEPENDENCY_REVIEW_FAIL_ON_SEVERITY: "high"
   DEPENDABOT_SWIFT_DIRECTORY: '["/"]'
   DEPENDABOT_SWIFT_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_SWIFT_REBASE_STRATEGY: "auto"

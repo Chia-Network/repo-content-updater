@@ -1,10 +1,14 @@
-# Managed by repo-content-updater
+# This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back
+# inline with the upstream template, unless you add !dep-review to the repo's managed-files property
 # Dependency Review Action
 #
 # This Action will scan dependency manifest files that change as part of a Pull Request, surfacing known-vulnerable versions of the packages declared or updated in the PR. Once installed, if the workflow run is marked as required, PRs introducing known-vulnerable packages will be blocked from merging.
 #
 # Source repository: https://github.com/actions/dependency-review-action
 # Public documentation: https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/about-dependency-review#dependency-review-enforcement
+# {{- if .ADOPTION_MARKER }}
+# {{ .ADOPTION_MARKER }}
+# {{- end }}
 name: "🚨 Dependency Review"
 on: [pull_request]
 
@@ -22,5 +26,20 @@ jobs:
       - name: "Dependency Review"
         uses: actions/dependency-review-action@v5.0.0
         with:
+          fail-on-severity: "{{ .DEPENDENCY_REVIEW_FAIL_ON_SEVERITY }}"
           allow-dependencies-licenses: "{{ .DEPENDENCY_REVIEW_ALLOW_DEPENDENCIES_LICENSES }}"
           deny-licenses: "{{ .DEPENDABOT_DENY_LICENSES }}"
+
+  osv-scanner:
+    if: github.repository_owner == 'Chia-Network'
+    permissions:
+      contents: read
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v2.7.0
+    with:
+      # Recursively scan every lockfile in the PR, including transitive dependencies.
+      scan-args: |-
+        -r
+        ./
+      # Findings fail the job through annotations; uploading SARIF would need
+      # security-events: write, which this job does not require.
+      upload-sarif: false

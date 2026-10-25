@@ -142,26 +142,33 @@ func TestResolveManagedFileSelection(t *testing.T) {
 		assert.Empty(t, selection.Explicit)
 		cursorBundle, err := cfg.EnsureCompanionFiles([]string{"dependency-cursor-review"})
 		assert.Nil(t, err)
-		assert.Equal(t, append([]string{"dependabot-actions"}, cursorBundle...), defaultNames(selection))
-		if assert.Len(t, selection.Defaults, 2) {
+		expectedDefaults := append([]string{"dependabot-actions"}, cursorBundle...)
+		expectedDefaults = append(expectedDefaults, "dep-review")
+		assert.Equal(t, expectedDefaults, defaultNames(selection))
+		if assert.Len(t, selection.Defaults, 3) {
 			assert.Equal(t, config.DefaultBundle{Root: "dependabot-actions", Files: []string{"dependabot-actions"}}, selection.Defaults[0])
 			assert.Equal(t, config.DefaultBundle{Root: "dependency-cursor-review", Files: cursorBundle}, selection.Defaults[1])
+			assert.Equal(t, config.DefaultBundle{Root: "dep-review", Files: []string{"dep-review"}}, selection.Defaults[2])
 		}
 	})
 
 	t.Run("opting out of a review companion drops the whole review bundle", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", []string{"!malware-verdict-formatter"})
-		assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
+		assert.Equal(t, []string{"dependabot-actions", "dep-review"}, defaultNames(selection))
 	})
 
 	t.Run("default resolves to the manifest-aware dependabot template", func(t *testing.T) {
-		assert.Equal(t, []string{"dependabot-actions", "dependency-cursor-review"}, cfg.DefaultFiles)
+		assert.Equal(t, []string{"dependabot-actions", "dependency-cursor-review", "dep-review"}, cfg.DefaultFiles)
 		file := cfg.GetFileInfo("dependabot-actions")
 		if assert.NotNil(t, file) {
 			assert.Equal(t, "dependabot.yml", file.TemplateName)
 			assert.Equal(t, ".github/dependabot.yml", file.RepoPath)
 			assert.Equal(t, []string{".github/dependabot.yaml"}, file.AlternatePaths)
 			assert.Equal(t, []string{".github/workflows"}, file.RequiresPaths)
+		}
+		depReview := cfg.GetFileInfo("dep-review")
+		if assert.NotNil(t, depReview) {
+			assert.Equal(t, "repo-content-updater:dependency-review", depReview.AdoptionMarker)
 		}
 	})
 
@@ -172,15 +179,22 @@ func TestResolveManagedFileSelection(t *testing.T) {
 			names := defaultNames(selection)
 			assert.NotContains(t, names, "dependabot-actions")
 			assert.Contains(t, names, "dependency-cursor-review")
+			assert.Contains(t, names, "dep-review")
 		})
 	}
 
 	for _, optOut := range []string{"!dependency-cursor-review", "!dependabot-cursor-review"} {
 		t.Run(optOut+" removes the review bundle and keeps the dependabot default", func(t *testing.T) {
 			selection := cfg.ResolveManagedFileSelection("repo", []string{optOut})
-			assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
+			assert.Equal(t, []string{"dependabot-actions", "dep-review"}, defaultNames(selection))
 		})
 	}
+
+	t.Run("opt-out of the dependency review default removes it", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!dep-review"})
+		assert.NotContains(t, defaultNames(selection), "dep-review")
+		assert.Contains(t, defaultNames(selection), "dependabot-actions")
+	})
 
 	t.Run("opt-out removes an explicitly selected file", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", []string{"group:base", "!dependabot", "!dependency-cursor-review"})
@@ -192,13 +206,13 @@ func TestResolveManagedFileSelection(t *testing.T) {
 	t.Run("opt-out removes an explicit file and its companions", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-cursor-review", "!dependency-cursor-review", "!dependabot"})
 		assert.Empty(t, selection.Explicit)
-		assert.Empty(t, selection.Defaults)
+		assert.Equal(t, []string{"dep-review"}, defaultNames(selection))
 	})
 
 	t.Run("explicit review suppresses the review bundle", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-cursor-review"})
 		assert.Contains(t, selection.Explicit, "upstream-release-checkout")
-		assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
+		assert.Equal(t, []string{"dependabot-actions", "dep-review"}, defaultNames(selection))
 	})
 
 	t.Run("an explicit companion stays explicit inside the review bundle", func(t *testing.T) {
