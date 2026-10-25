@@ -21,8 +21,7 @@ environment, so every entry is top; its text is its whole record, and
 residue is the document left once the records and the manifest's content hash
 are taken out (the manifest beside the lock is read on its own). A package
 locked from anywhere but the package index keeps its version with the source
-appended, so the diff never reads it as an exact index version; lock_version
-reads the bare version for a hash check. poetry_lock_hashes and
+appended, so it is never read as an exact PyPI version. poetry_lock_hashes and
 pipfile_lock_hashes read the file hashes a record locks. A lock from Poetry
 before 1.2 keeps each package's files in `[metadata.files]`; each package's
 table there joins its record, so it changes with the version.
@@ -211,29 +210,6 @@ def _locked_hashes(hashes: object) -> str:
     return " ".join(sorted(set(hashes)))
 
 
-def _sourced(version: str, source: object) -> str:
-    """A lock version with the source it was installed from appended, so it is never an exact index version."""
-    return f"{version} ({_residue(source)})"
-
-
-def lock_version(version: str) -> str:
-    """The bare version of a poetry_lock or pipfile_lock entry, or "" when its source suffix is not readable.
-
-    A package installed from anywhere but the index keeps its source after its version (see _sourced). The source
-    is not part of the version, so a comparison against an exact version reads only the part before it.
-    """
-    bare, separator, suffix = version.strip().partition(" (")
-    if not separator:
-        return version.strip()
-    if not suffix.endswith(")"):
-        return ""
-    try:
-        source = json.loads(suffix[:-1])
-    except (ValueError, RecursionError):
-        return ""
-    return bare if isinstance(source, dict) else ""
-
-
 def poetry_lock(text: str) -> Parsed | None:
     if not text.strip():
         return [], ""
@@ -262,7 +238,7 @@ def poetry_lock(text: str) -> Parsed | None:
         version = str(item.get("version") or "")
         source = item.get("source")
         if source is not None:
-            version = _sourced(version, source)
+            version = f"{version} ({_residue(source)})"
         entries.append((name, version, True, _record("package", item)))
     return entries, _residue(doc)
 
@@ -299,7 +275,7 @@ def pipfile_lock(text: str) -> Parsed | None:
             if record.get("index", "pypi") != "pypi":
                 source["index"] = record["index"]
             if source:
-                version = _sourced(version, source)
+                version = f"{version} ({_residue(source)})"
             entries.append((_requirement_name(name), version, True, _record(section, {name: record})))
     if isinstance(doc.get("_meta"), dict):
         doc["_meta"].pop("hash", None)
