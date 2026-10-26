@@ -30,7 +30,9 @@ All defaults require `.github/workflows` containing at least one `.yml`/`.yaml` 
 
 `dep-review` remains the default for every eligible repo: it ships the dependency
 review license and severity gate plus OSV scanning of the PR's lockfiles,
-including transitive dependencies.
+including transitive dependencies. It is adopt-only: a repo whose existing
+`.github/workflows/dependency-review.yml` lacks the adoption marker keeps that
+file unless it lists `dep-review` explicitly.
 
 `dependency-artifact-review` is a separate, opt-in workflow. It reviews the
 published bytes for npm (`npm_and_yarn`), PyPI (`pip`), Go modules (`gomod`) and
@@ -45,10 +47,10 @@ example:
 group:base,dependency-artifact-review
 ```
 
-The workflow's publish job id is `dependency-review`, the same job id used by
-the default dependency review workflow. Their workflow names are different
-(`Dependency Artifact Review` versus `🚨 Dependency Review`), so required-check
-names remain unambiguous when both are enabled.
+The workflow's publish job id is `dependency-artifact-review`, which no other
+managed workflow uses. A repo that opts in can require the
+`Dependency Artifact Review / dependency-artifact-review` check without it
+colliding with the default dependency review workflow's check.
 
 The agent output must start with one `MALWARE_REVIEW_VERDICT:` line. For a
 manual `workflow_dispatch` validation run, supply both `pr_number` and the

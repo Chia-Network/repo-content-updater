@@ -37,9 +37,10 @@ jobs:
       pull-requests: read
     outputs:
       pr_number: ${{`{{ steps.pr.outputs.number }}`}}
+      reviewable: ${{`{{ steps.fetch.outputs.reviewable }}`}}
     steps:
       - name: Checkout trusted review scripts
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{`{{ github.event.repository.default_branch }}`}}
           path: .trusted-dcr-scripts
@@ -70,7 +71,7 @@ jobs:
       - name: Fetch dependency metadata
         id: metadata
         if: github.event_name == 'pull_request'
-        uses: dependabot/fetch-metadata@v2
+        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2
         with:
           github-token: ${{`{{ github.token }}`}}
 
@@ -89,12 +90,13 @@ jobs:
           python-version: "3.12"
 
       - name: Fetch published artifacts
+        id: fetch
         env:
           UPDATED_DEPENDENCIES_JSON: >-
             ${{`{{ github.event_name == 'workflow_dispatch' && github.event.inputs.updated_dependencies_json || steps.metadata.outputs['updated-dependencies-json'] }}`}}
           PR_DIFF_PATH: ${{`{{ runner.temp }}`}}/pr-diff/pr.diff
           DCR_OUT: ${{`{{ runner.temp }}`}}/dcr-review
-          DCR_HEAD_REF: ${{`{{ github.head_ref || steps.pr.outputs.head_ref }}`}}
+          DCR_HEAD_REF: ${{`{{ github.event.pull_request.head.ref || steps.pr.outputs.head_ref }}`}}
           DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS: >-
             {{ .DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS }}
         run: |
@@ -103,33 +105,49 @@ jobs:
           cp .trusted-dcr-scripts/.github/scripts/dcr_prompt.md "${DCR_OUT}/dcr_prompt.md"
 
       - name: Upload review inputs
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: dcr-artifact-review-${{`{{ github.run_id }}`}}
+          name: dcr-review-input-${{`{{ github.run_id }}`}}
           retention-days: 1
           if-no-files-found: error
           path: ${{`{{ runner.temp }}`}}/dcr-review
 
+      - name: Upload review metadata
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: dcr-verdict-meta-${{`{{ github.run_id }}`}}
+          retention-days: 1
+          if-no-files-found: error
+          path: ${{`{{ runner.temp }}`}}/dcr-review/meta.json
+
   agent:
     needs: prepare
+    if: ${{`{{ needs.prepare.outputs.reviewable == 'true' }}`}}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
     steps:
       - name: Download review inputs
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: dcr-artifact-review-${{`{{ github.run_id }}`}}
+          name: dcr-review-input-${{`{{ github.run_id }}`}}
           path: dcr-review
 
       - name: Install Cursor CLI
+        env:
+          CURSOR_CLI_VERSION: "{{ .CURSOR_CLI_VERSION }}"
+          CURSOR_CLI_SHA256: "{{ .CURSOR_CLI_SHA256 }}"
         run: |
-          installer="$(mktemp)"
-          trap 'rm -f "$installer"' EXIT
-          curl https://cursor.com/install -fsSL -o "$installer"
-          bash "$installer"
-          printf '%s\n' "$HOME/.local/bin" "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/cursor-cli"
+          tarball="${RUNNER_TEMP}/cursor-cli.tar.gz"
+          mkdir -p "$install_dir"
+          curl -fsSL "https://downloads.cursor.com/lab/${CURSOR_CLI_VERSION}/linux/x64/agent-cli-package.tar.gz" -o "$tarball"
+          printf '%s  %s\n' "$CURSOR_CLI_SHA256" "$tarball" | sha256sum -c -
+          tar --strip-components=1 -xzf "$tarball" -C "$install_dir"
+          ln -s "$install_dir/cursor-agent" "$install_dir/agent"
+          printf '%s\n' "$install_dir" >> "$GITHUB_PATH"
 
       - name: Run Cursor agent
         timeout-minutes: 10
@@ -155,19 +173,20 @@ jobs:
             [split("\n")[] | fromjson? | select(type == "object")]
             | (map(select(.type == "result") | .result) | last // "") as $result
             | if $result != "" then $result
-              else (map(select(.type == "assistant") | [.message.content[]? | .text // ""] | join("")) | last // "")
+              else (map(select(.type == "assistant") | [.message.content[]? | .text // ""] | join(""))
+                    | map(select(length > 0)) | last // "")
               end
           ' "$stream_file" > "${out}/agent_output.txt"
 
       - name: Upload agent output
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: dcr-artifact-agent-${{`{{ github.run_id }}`}}
+          name: dcr-verdict-agent-${{`{{ github.run_id }}`}}
           retention-days: 1
           if-no-files-found: error
           path: ${{`{{ runner.temp }}`}}/dcr-agent/agent_output.txt
 
-  dependency-review:
+  dependency-artifact-review:
     needs:
       - prepare
       - agent
@@ -181,14 +200,9 @@ jobs:
       MALWARE_WARN_ONLY: >-
         {{ .DEPENDABOT_CURSOR_MALWARE_WARN_ONLY }}
     steps:
-      - name: Fail closed when prepare or agent failed
-        if: ${{`{{ needs.prepare.result != 'success' || needs.agent.result != 'success' }}`}}
-        run: |
-          echo "prepare=${{`{{ needs.prepare.result }}`}} agent=${{`{{ needs.agent.result }}`}}" >&2
-          exit 1
-
       - name: Checkout trusted verdict script
-        uses: actions/checkout@v7
+        if: ${{`{{ always() }}`}}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{`{{ github.event.repository.default_branch }}`}}
           path: .trusted-dcr-scripts
@@ -198,18 +212,22 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
+        if: ${{`{{ always() }}`}}
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
-      - name: Download review outputs
-        uses: actions/download-artifact@v8
+      - name: Download verdict inputs
+        if: ${{`{{ always() }}`}}
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: dcr-artifact-*
+          pattern: dcr-verdict-*
           merge-multiple: true
           path: dcr-output
 
       - name: Decide and compose comment
+        if: ${{`{{ always() }}`}}
         id: verdict
         env:
           DCR_META: ${{`{{ github.workspace }}`}}/dcr-output/meta.json
@@ -221,9 +239,10 @@ jobs:
           python3 -I .trusted-dcr-scripts/.github/scripts/dcr_verdict.py
 
       - name: Post or update PR comment
-        uses: actions/github-script@v9
+        if: ${{`{{ always() }}`}}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
-          PR_NUMBER: ${{`{{ needs.prepare.outputs.pr_number }}`}}
+          PR_NUMBER: ${{`{{ needs.prepare.outputs.pr_number || github.event.pull_request.number || github.event.inputs.pr_number }}`}}
           COMMENT_PATH: ${{`{{ github.workspace }}`}}/dcr-comment.md
           REVIEW_MARKER: ${{`{{ steps.verdict.outputs.marker }}`}}
         with:
@@ -241,7 +260,12 @@ jobs:
               per_page: 100,
             });
             const ours = comments
-              .filter((comment) => comment.body?.includes('<!-- dcr-artifact-review sha256:'))
+              .filter(
+                (comment) =>
+                  comment.user?.type === 'Bot' &&
+                  comment.user?.login === 'github-actions[bot]' &&
+                  comment.body?.includes('<!-- dcr-artifact-review sha256:')
+              )
               .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
             if (marker && ours.some((comment) => comment.body.includes(marker))) {
               core.info('This artifact review is already recorded.');
@@ -252,7 +276,7 @@ jobs:
             await github.rest.issues.updateComment({ ...issue, comment_id: ours.at(-1).id });
 
       - name: Set the check result
-        if: ${{`{{ steps.verdict.outputs.conclusion != 'success' }}`}}
+        if: ${{`{{ always() && steps.verdict.outputs.conclusion != 'success' }}`}}
         run: |
-          echo "Artifact review conclusion: ${{`{{ steps.verdict.outputs.conclusion }}`}}" >&2
+          echo "Artifact review conclusion: ${{`{{ steps.verdict.outputs.conclusion || 'missing' }}`}}" >&2
           exit 1
