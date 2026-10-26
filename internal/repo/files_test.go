@@ -116,32 +116,31 @@ func TestExistingFileState(t *testing.T) {
 	}
 }
 
-// TestAdoptableDefaults covers the adopt-only rules for both default
-// bundles as selected from config.yaml.
+// TestAdoptableDefaults covers the adopt-only rules for the default bundles
+// selected from config.yaml.
 func TestAdoptableDefaults(t *testing.T) {
 	cfg := loadDependabotTestConfig(t)
 	t.Chdir(t.TempDir())
 	workflow := filepath.Join(".github", "workflows", "ci.yml")
 	actionsMarker := "# " + cfg.GetFileInfo("dependabot-actions").AdoptionMarker + "\nversion: 2\n"
-	reviewMarker := "# " + cfg.GetFileInfo("dependency-cursor-review").AdoptionMarker + "\nname: x\n"
-	reviewPath := cfg.GetFileInfo("dependency-cursor-review").RepoPath
-	companionPath := cfg.GetFileInfo("upstream-release-checkout").RepoPath
+	depReview := cfg.GetFileInfo("dep-review")
+	depReviewMarker := "# " + depReview.AdoptionMarker + "\nname: x\n"
 
 	tests := []struct {
-		name    string
-		files   map[string]string
-		actions bool
-		review  bool
+		name      string
+		files     map[string]string
+		actions   bool
+		depReview bool
 	}{
 		{name: "nothing", files: map[string]string{"notes.txt": ""}},
 		{name: "workflows dir without workflow files", files: map[string]string{".github/workflows/notes.txt": ""}},
-		{name: "workflows only", files: map[string]string{workflow: ""}, actions: true, review: true},
-		{name: "marked dependabot is upgraded", files: map[string]string{workflow: "", ".github/dependabot.yml": actionsMarker}, actions: true, review: true},
-		{name: "marked alternate dependabot is upgraded", files: map[string]string{workflow: "", ".github/dependabot.yaml": actionsMarker}, actions: true, review: true},
-		{name: "unmarked dependabot is left alone", files: map[string]string{workflow: "", ".github/dependabot.yml": "version: 2\n"}, review: true},
-		{name: "unmarked review workflow is left alone", files: map[string]string{workflow: "", reviewPath: "name: x\n"}, actions: true},
-		{name: "occupied companion path blocks a new bundle", files: map[string]string{workflow: "", companionPath: "#!/bin/sh\n"}, actions: true},
-		{name: "owned bundle updates existing companions", files: map[string]string{workflow: "", reviewPath: reviewMarker, companionPath: "#!/bin/sh\n"}, actions: true, review: true},
+		{name: "workflows only", files: map[string]string{workflow: ""}, actions: true, depReview: true},
+		{name: "marked dependabot is upgraded", files: map[string]string{workflow: "", ".github/dependabot.yml": actionsMarker}, actions: true, depReview: true},
+		{name: "marked alternate dependabot is upgraded", files: map[string]string{workflow: "", ".github/dependabot.yaml": actionsMarker}, actions: true, depReview: true},
+		{name: "unmarked dependabot is left alone", files: map[string]string{workflow: "", ".github/dependabot.yml": "version: 2\n"}, depReview: true},
+		{name: "unmarked dependency review workflow is left alone", files: map[string]string{workflow: "", depReview.RepoPath: "name: x\n"}, actions: true},
+		{name: "occupied alternate dependency review path blocks a new bundle", files: map[string]string{workflow: "", depReview.AlternatePaths[0]: "name: x\n"}, actions: true},
+		{name: "marked dependency review workflow is updated", files: map[string]string{workflow: "", depReview.RepoPath: depReviewMarker}, actions: true, depReview: true},
 	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -161,8 +160,8 @@ func TestAdoptableDefaults(t *testing.T) {
 				}
 				adopted[file.Name] = true
 			}
-			if adopted["dependabot-actions"] != tt.actions || adopted["dependency-cursor-review"] != tt.review {
-				t.Fatalf("adopted = %v, want dependabot-actions=%v dependency-cursor-review=%v", adopted, tt.actions, tt.review)
+			if adopted["dependabot-actions"] != tt.actions || adopted["dep-review"] != tt.depReview {
+				t.Fatalf("adopted = %v, want dependabot-actions=%v dep-review=%v", adopted, tt.actions, tt.depReview)
 			}
 		})
 	}

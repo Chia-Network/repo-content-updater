@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -13,21 +14,6 @@ import (
 	"github.com/chia-network/repo-content-updater/internal/config"
 )
 
-func dependencyCursorReviewCompanionFiles(t *testing.T) []string {
-	t.Helper()
-	raw, err := os.ReadFile("dcr_managed_companion_names.golden")
-	assert.Nil(t, err)
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			out = append(out, line)
-		}
-	}
-	return out
-}
-
 func TestConfigIsValid(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
@@ -38,99 +24,139 @@ func TestConfigIsValid(t *testing.T) {
 		assert.Equal(t, len(group.Templates), len(files))
 	}
 
-	dcrGroup, err := cfg.ExpandManagedFileEntries([]string{"group:dependency-cursor-review"})
-	assert.Nil(t, err)
-	for _, required := range []string{
-		"malware-verdict-formatter",
-		"upstream-malware-scan",
-		"dependency-cursor-review-prompts",
-		"dependency-cursor-review-combine-outputs",
-	} {
-		assert.Contains(t, dcrGroup, required)
-	}
-
-	// Extracted companions must ship with the group; the prose policy stack is gone.
-	for _, required := range []string{
-		"upstream-malware-scan-lib",
-		"upstream-malware-scan-findings",
-		"upstream-release-checkout",
-		"dependency-cursor-review-dependabot-context",
-	} {
-		assert.Contains(t, dcrGroup, required)
-	}
-	for _, removed := range []string{
-		"malware-verdict-policy",
-		"malware-verdict-policy-rules-select",
-		"malware-verdict-policy-predicates",
-		"malware-verdict-policy-analysis",
-		"malware-verdict-patterns",
-		"malware-verdict-patterns-regex",
-		"malware-verdict-patterns-structure",
-	} {
-		assert.NotContains(t, dcrGroup, removed)
-	}
-
-	expected := dependencyCursorReviewCompanionFiles(t)
-	expanded, err := cfg.ExpandManagedFileEntries([]string{"dependency-cursor-review"})
-	assert.Nil(t, err)
-	assert.Equal(t, expected, expanded)
-
-	groupExpanded, err := cfg.ExpandManagedFileEntries([]string{"group:dependency-cursor-review"})
-	assert.Nil(t, err)
-	assert.Equal(t, expected, groupExpanded)
-
-	mixed, err := cfg.ExpandManagedFileEntries([]string{"group:does-not-exist", "dependabot"})
-	assert.Nil(t, err)
-	assert.Equal(t, []string{"dependabot"}, mixed)
+	assert.Equal(t, []string{"dependabot-actions", "dep-review"}, cfg.DefaultFiles)
 }
 
-func TestManagedFileAliasesAndPathsIncludeCompanions(t *testing.T) {
+func TestDependencyReviewAcceptsEarlierHeaderMarkers(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	if !assert.Nil(t, err) {
+		return
+	}
+
+	file := cfg.GetFileInfo("dep-review")
+	if !assert.NotNil(t, file) {
+		return
+	}
+	assert.Equal(t, []string{"Managed by repo-content-updater"}, file.PreviousAdoptionMarkers)
+}
+
+// TestAdoptionMarkersDoNotMatchOtherTemplates checks that every marker names
+// only its own file, so a shared header line cannot adopt a different file.
+func TestAdoptionMarkersDoNotMatchOtherTemplates(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type markerCase struct {
+		file   *config.File
+		marker string
+	}
+	var cases []markerCase
+	for i := range cfg.Files {
+		file := &cfg.Files[i]
+		markers := append([]string{}, file.PreviousAdoptionMarkers...)
+		if marker := strings.TrimSpace(file.AdoptionMarker); marker != "" {
+			markers = append(markers, marker)
+		}
+		for _, marker := range markers {
+			marker = strings.TrimSpace(marker)
+			if marker == "" {
+				continue
+			}
+			cases = append(cases, markerCase{file: file, marker: marker})
+		}
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.file.Name+"/"+tt.marker, func(t *testing.T) {
+			want := "# " + tt.marker
+			for i := range cfg.Files {
+				other := &cfg.Files[i]
+				if other.Name == tt.file.Name {
+					continue
+				}
+				raw, err := readTemplateForTest(cfg, other.TemplateName)
+				if err != nil {
+					t.Fatalf("read template %s for %s: %v", other.TemplateName, other.Name, err)
+				}
+				if containsTrimmedLine(string(raw), want) {
+					t.Errorf("marker %q of %q appears as %q in template %q of %q", tt.marker, tt.file.Name, want, other.TemplateName, other.Name)
+				}
+			}
+		})
+	}
+}
+
+// readTemplateForTest reads the template, falling back to the canonical source
+// under internal/workflowscripts when the template is a generated companion.
+func readTemplateForTest(cfg *config.Config, templateName string) ([]byte, error) {
+	raw, err := os.ReadFile(filepath.Join("../../templates", templateName))
+	if err == nil {
+		return raw, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	canonical, ok := canonicalSourceForTemplate(cfg, templateName)
+	if !ok {
+		return nil, fmt.Errorf("template %s does not exist and has no canonical source", templateName)
+	}
+	raw, err = os.ReadFile(filepath.Join("../../internal/workflowscripts", canonical))
+	if err != nil {
+		return nil, fmt.Errorf("read canonical source %s: %w", canonical, err)
+	}
+	return raw, nil
+}
+
+// canonicalSourceForTemplate applies the same mapping as
+// sync_canonical_to_template: generated companions come from .github/scripts/
+// entries, with the basename of repo_path as the canonical filename.
+func canonicalSourceForTemplate(cfg *config.Config, templateName string) (string, bool) {
+	const canonicalOverride = "github_scripts_init.py"
+	for i := range cfg.Files {
+		file := &cfg.Files[i]
+		if file.TemplateName != templateName || !strings.HasPrefix(file.RepoPath, ".github/scripts/") {
+			continue
+		}
+		if templateName == "github-scripts-init.py" {
+			return canonicalOverride, true
+		}
+		return filepath.Base(file.RepoPath), true
+	}
+	return "", false
+}
+
+func TestDependencyArtifactReviewIsOptInOnly(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
 
-	expected := dependencyCursorReviewCompanionFiles(t)
-	for _, entry := range []string{
-		"dependabot-cursor-review",
-		".github/workflows/dependency-cursor-review.yml",
-		".github/workflows/dependabot-cursor-review.yml",
-	} {
-		expanded, err := cfg.ExpandManagedFileEntries([]string{entry})
-		assert.Nil(t, err, entry)
-		assert.Equal(t, expected, expanded, entry)
-	}
-}
+	assert.NotContains(t, cfg.DefaultFiles, "dependency-artifact-review")
+	selection := cfg.ResolveManagedFileSelection("repo", nil)
+	assert.NotContains(t, defaultNames(selection), "dependency-artifact-review")
 
-func TestRenamedVersionsCompanionKeepsItsOldNameAndPath(t *testing.T) {
-	cfg, err := config.LoadConfig("../../config.yaml")
+	expanded, err := cfg.ExpandManagedFileEntries([]string{"dependency-artifact-review"})
 	assert.Nil(t, err)
+	assert.Equal(t, []string{
+		"dependency-artifact-review",
+		"github-scripts-init",
+		"dependency-artifact-review-fetch",
+		"dependency-artifact-review-verdict",
+		"dependency-artifact-review-prompt",
+	}, expanded)
 
-	for _, entry := range []string{
-		"dependency-manifest-versions",
-		".github/scripts/dependency_manifest_versions.py",
-		".github/scripts/dependency_cursor_review_versions.py",
-	} {
-		canonical, ok := cfg.ResolveManagedFileName(entry)
-		assert.True(t, ok, entry)
-		assert.Equal(t, "dependency-cursor-review-versions", canonical, entry)
-	}
-	file := cfg.GetFileInfo("dependency-cursor-review-versions")
+	groupExpanded, err := cfg.ExpandManagedFileEntries([]string{"group:dependency-artifact-review"})
+	assert.Nil(t, err)
+	assert.Equal(t, expanded, groupExpanded)
+
+	file := cfg.GetFileInfo("dependency-artifact-review")
 	if assert.NotNil(t, file) {
-		assert.Equal(t, []string{".github/scripts/dependency_manifest_versions.py"}, file.AlternatePaths)
+		assert.Equal(t, "dependency-artifact-review.yml", file.TemplateName)
+		assert.Equal(t, ".github/workflows/dependency-artifact-review.yml", file.RepoPath)
+		assert.Equal(t, "repo-content-updater:dependency-artifact-review", file.AdoptionMarker)
+		assert.Equal(t, []string{".github/workflows"}, file.RequiresPaths)
 	}
-}
-
-func TestEnsureCompanionFilesPairsWorkflowWithFormatter(t *testing.T) {
-	cfg, err := config.LoadConfig("../../config.yaml")
-	assert.Nil(t, err)
-
-	expected := dependencyCursorReviewCompanionFiles(t)
-	finalized, err := cfg.EnsureCompanionFiles([]string{"dependency-cursor-review"})
-	assert.Nil(t, err)
-	assert.Equal(t, expected, finalized)
-
-	legacyFinalized, err := cfg.EnsureCompanionFiles([]string{"dependabot-cursor-review"})
-	assert.Nil(t, err)
-	assert.Equal(t, expected, legacyFinalized)
 }
 
 func TestResolveManagedFileSelection(t *testing.T) {
@@ -140,22 +166,14 @@ func TestResolveManagedFileSelection(t *testing.T) {
 	t.Run("defaults are added to every repo", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", nil)
 		assert.Empty(t, selection.Explicit)
-		cursorBundle, err := cfg.EnsureCompanionFiles([]string{"dependency-cursor-review"})
-		assert.Nil(t, err)
-		assert.Equal(t, append([]string{"dependabot-actions"}, cursorBundle...), defaultNames(selection))
+		assert.Equal(t, []string{"dependabot-actions", "dep-review"}, defaultNames(selection))
 		if assert.Len(t, selection.Defaults, 2) {
 			assert.Equal(t, config.DefaultBundle{Root: "dependabot-actions", Files: []string{"dependabot-actions"}}, selection.Defaults[0])
-			assert.Equal(t, config.DefaultBundle{Root: "dependency-cursor-review", Files: cursorBundle}, selection.Defaults[1])
+			assert.Equal(t, config.DefaultBundle{Root: "dep-review", Files: []string{"dep-review"}}, selection.Defaults[1])
 		}
 	})
 
-	t.Run("opting out of a review companion drops the whole review bundle", func(t *testing.T) {
-		selection := cfg.ResolveManagedFileSelection("repo", []string{"!malware-verdict-formatter"})
-		assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
-	})
-
 	t.Run("default resolves to the manifest-aware dependabot template", func(t *testing.T) {
-		assert.Equal(t, []string{"dependabot-actions", "dependency-cursor-review"}, cfg.DefaultFiles)
 		file := cfg.GetFileInfo("dependabot-actions")
 		if assert.NotNil(t, file) {
 			assert.Equal(t, "dependabot.yml", file.TemplateName)
@@ -163,56 +181,41 @@ func TestResolveManagedFileSelection(t *testing.T) {
 			assert.Equal(t, []string{".github/dependabot.yaml"}, file.AlternatePaths)
 			assert.Equal(t, []string{".github/workflows"}, file.RequiresPaths)
 		}
+		depReview := cfg.GetFileInfo("dep-review")
+		if assert.NotNil(t, depReview) {
+			assert.Equal(t, "repo-content-updater:dependency-review", depReview.AdoptionMarker)
+			assert.Equal(t, []string{".github/workflows"}, depReview.RequiresPaths)
+		}
 	})
 
 	for _, optOut := range []string{"!dependabot", "!go-dependabot", "!dependabot-actions"} {
-		t.Run(optOut+" removes the dependabot default and keeps the review bundle", func(t *testing.T) {
+		t.Run(optOut+" removes the dependabot default and keeps the review default", func(t *testing.T) {
 			selection := cfg.ResolveManagedFileSelection("repo", []string{optOut})
 			assert.Empty(t, selection.Explicit)
 			names := defaultNames(selection)
 			assert.NotContains(t, names, "dependabot-actions")
-			assert.Contains(t, names, "dependency-cursor-review")
+			assert.Contains(t, names, "dep-review")
 		})
 	}
 
-	for _, optOut := range []string{"!dependency-cursor-review", "!dependabot-cursor-review"} {
-		t.Run(optOut+" removes the review bundle and keeps the dependabot default", func(t *testing.T) {
-			selection := cfg.ResolveManagedFileSelection("repo", []string{optOut})
-			assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
-		})
-	}
+	t.Run("opt-out of the dependency review default removes it", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"!dep-review"})
+		assert.NotContains(t, defaultNames(selection), "dep-review")
+		assert.Contains(t, defaultNames(selection), "dependabot-actions")
+	})
 
 	t.Run("opt-out removes an explicitly selected file", func(t *testing.T) {
-		selection := cfg.ResolveManagedFileSelection("repo", []string{"group:base", "!dependabot", "!dependency-cursor-review"})
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"group:base", "!dependabot", "!dep-review"})
 		assert.NotContains(t, selection.Explicit, "dependabot")
-		assert.Contains(t, selection.Explicit, "dep-review")
+		assert.NotContains(t, selection.Explicit, "dep-review")
 		assert.Empty(t, selection.Defaults)
 	})
 
-	t.Run("opt-out removes an explicit file and its companions", func(t *testing.T) {
-		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-cursor-review", "!dependency-cursor-review", "!dependabot"})
-		assert.Empty(t, selection.Explicit)
-		assert.Empty(t, selection.Defaults)
-	})
-
-	t.Run("explicit review suppresses the review bundle", func(t *testing.T) {
-		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-cursor-review"})
-		assert.Contains(t, selection.Explicit, "upstream-release-checkout")
-		assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
-	})
-
-	t.Run("an explicit companion stays explicit inside the review bundle", func(t *testing.T) {
-		selection := cfg.ResolveManagedFileSelection("repo", []string{"upstream-release-checkout"})
-		assert.Equal(t, []string{"upstream-release-checkout"}, selection.Explicit)
-		names := defaultNames(selection)
-		assert.Contains(t, names, "dependency-cursor-review")
-		assert.NotContains(t, names, "upstream-release-checkout")
-	})
-
-	t.Run("opt-out of a required companion is rejected", func(t *testing.T) {
-		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-cursor-review", "!malware-verdict-formatter"})
-		assert.Contains(t, selection.Explicit, "dependency-cursor-review")
-		assert.Contains(t, selection.Explicit, "malware-verdict-formatter")
+	t.Run("explicit artifact review keeps the defaults", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-artifact-review"})
+		assert.Contains(t, selection.Explicit, "dependency-artifact-review")
+		assert.Contains(t, selection.Explicit, "dependency-artifact-review-fetch")
+		assert.Equal(t, []string{"dependabot-actions", "dep-review"}, defaultNames(selection))
 	})
 
 	t.Run("go-dependabot suppresses the default via its shared repo path", func(t *testing.T) {
@@ -422,29 +425,32 @@ files:
 	}
 }
 
-func TestRetiredDependencyCursorReviewPathsAreNoLongerManaged(t *testing.T) {
+func TestRetiredLegacyDependencyReviewPathsAreNoLongerManaged(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
 
-	file := cfg.GetFileInfo("dependency-cursor-review")
+	file := cfg.GetFileInfo("dep-review")
 	if !assert.NotNil(t, file) {
 		return
 	}
-	// The trusted loader stack and the trusted checkout action, removed with their config entries.
-	assert.Equal(t, []string{
+	for _, retired := range []string{
+		".github/workflows/dependency-cursor-review.yml",
+		".github/workflows/dependency-cursor-review.yaml",
+		".github/workflows/dependabot-cursor-review.yml",
+		".github/workflows/dependabot-cursor-review.yaml",
 		".github/actions/trusted-git-path-checkout/action.yml",
-		".github/scripts/dependency-cursor-review-trusted-scripts.paths",
-		".github/scripts/formatter_runtime_bundle.py",
-		".github/scripts/isolated_module_exec.py",
-		".github/scripts/scripts_dir_disk_exec.py",
-		".github/scripts/scripts_dir_path_scrub.py",
-		".github/scripts/trusted_formatter_loader.py",
-		".github/scripts/trusted_formatter_loader_cold_start.py",
-	}, file.RetiredPaths)
+		".github/scripts/malware_verdict_formatter.py",
+		".github/scripts/upstream_malware_scan.sh",
+		".github/scripts/dependency_manifest_versions.py",
+		".github/scripts/upstream_release_checkout.sh",
+	} {
+		assert.Contains(t, file.RetiredPaths, retired)
+	}
 	for _, retired := range file.RetiredPaths {
 		_, ok := cfg.ResolveManagedFileName(retired)
 		assert.False(t, ok, retired)
 	}
+	assert.NotContains(t, file.RetiredPaths, ".github/scripts/__init__.py")
 }
 
 func TestLoadConfigRejectsInvalidRetiredPaths(t *testing.T) {
@@ -613,4 +619,17 @@ files:
 
 	_, err = config.LoadConfig(path)
 	assert.ErrorContains(t, err, "adoption_marker")
+}
+
+func containsTrimmedLine(content, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return false
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
 }

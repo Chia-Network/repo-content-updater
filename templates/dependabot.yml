@@ -78,6 +78,8 @@ updates:
       - github_actions
       - "Changed"
     reviewers: "{{ .DEPENDABOT_ACTIONS_REVIEWERS }}"
+    exclude-paths:
+      - ".github/workflows/dependency-artifact-review.yml"
     # {{- if eq .DEPENDABOT_ACTIONS_GROUP_UPDATES "1" }}
     groups:
       global:

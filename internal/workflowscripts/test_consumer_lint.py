@@ -1,4 +1,4 @@
-"""Lint synced dependency-cursor-review scripts as a consumer repository would.
+"""Lint synced managed review scripts as a consumer repository would.
 
 Builds `.github/scripts` from the canonical modules (the bytes
 `sync_malware_formatter_templates.py` emits) and runs chia-blockchain's ruff
@@ -172,16 +172,7 @@ class ConsumerLintTest(unittest.TestCase):
             py_files = [path for path in written if path.suffix == ".py"]
             sh_files = [path for path in written if path.suffix == ".sh"]
             self.assertGreater(len(py_files), 0)
-            self.assertEqual(
-                {path.name for path in sh_files},
-                {
-                    "check_node_runtime.sh",
-                    "upstream_malware_scan.sh",
-                    "upstream_malware_scan_lib.sh",
-                    "upstream_malware_scan_findings.sh",
-                    "upstream_release_checkout.sh",
-                },
-            )
+            self.assertEqual({path.name for path in sh_files}, {"check_node_runtime.sh"})
             for path in written:
                 data = path.read_bytes()
                 executable = bool(path.stat().st_mode & stat.S_IXUSR)

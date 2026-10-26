@@ -146,7 +146,9 @@ func TestExpandLeavesUnmarkedTemplates(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := expandYAMLSafeActions(string(raw))
-		rewritten := name == "dependabot.yml" || name == "dependency-review.yml" || name == "dependency-cursor-review.yml"
+		rewritten := name == "dependabot.yml" ||
+			name == "dependency-review.yml" ||
+			name == "dependency-artifact-review.yml"
 		if rewritten {
 			if got == string(raw) {
 				t.Errorf("%s: expected YAML-safe actions to expand", name)
@@ -244,32 +246,6 @@ func TestActionVersionBehind(t *testing.T) {
 	}
 	if _, ok := parseActionVersion("main"); ok {
 		t.Fatal("branch refs are not versions")
-	}
-}
-
-func TestTemplateUsesPinsAreVisible(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "templates", "dependency-cursor-review.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pins := usesValues(t, raw)
-	found := map[string]bool{}
-	for _, pin := range pins {
-		found[pin] = true
-	}
-	for _, want := range []string{
-		"actions/checkout@v7",
-		"actions/github-script@v9",
-		"actions/upload-artifact@v7",
-		"actions/download-artifact@v8",
-		"actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-	} {
-		if !found[want] {
-			t.Errorf("parsed uses missing %s", want)
-		}
-	}
-	if found["actions/download-artifact@v7"] {
-		t.Error("download-artifact@v7 is still visible")
 	}
 }
 

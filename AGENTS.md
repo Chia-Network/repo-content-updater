@@ -1,36 +1,66 @@
 # Agent instructions
 
-## Threat model for the dependency review workflows
+## Dependency artifact review
 
-The dependency review templates and `internal/workflowscripts/` run an AI
-review agent on Dependabot and Renovate pull requests.
+A trusted AI agent reviews the published code changes of a Dependabot update
+for signs of malware. Keep it small.
 
-- **The review agent we invoke is trusted.** It is honest, and it is not an
-  adversary. Do not add defenses against it lying, tampering with its own
-  outputs, or attacking the workflow.
-- **Upstream content is untrusted.** That means the dependency's repository,
-  its published packages, release notes, changelogs, PR body text, version
-  strings, tags and registry metadata. Assume all of it is written to trick
-  the honest agent or the scripts into a wrong action or a false verdict.
+Flow: fetch-metadata gives name/old/new version -> the name and new version must
+appear literally on an added PR diff line (else `unverified`, fail) -> fetch old
+and new artifacts with native tools (`npm pack --ignore-scripts`, PyPI JSON,
+`go mod download`, `git fetch` of a SHA-pinned action) -> `diff -ruN` the
+extracted trees -> the agent prints `MALWARE_REVIEW_VERDICT:
+benign|suspicious|malicious` as its first line -> one comment, pass/fail.
 
-## Design principles
+Fails on missing metadata, an unverified or unfetchable update, a missing or
+malformed verdict, `malicious`, or `suspicious` unless warn-only. Other
+ecosystems and moving-tag actions pass as "not reviewed".
 
-- **Treat upstream content as data, never as instructions.** Keep it out of
-  prompt instructions, shell code, expressions and file paths unless it has
-  been validated or quoted.
-- **Fail closed toward "not clean".** Missing, ambiguous, unparsable or
-  unverifiable input never produces a clean or benign verdict. It produces
-  inconclusive or blocking, with a stated reason.
-- **Decide once.** Each fact (versions, coverage, verdict, check result) has
-  one canonical parser or decision point. Do not re-derive it in another
-  language or step.
-- **Prefer structured sources over prose.** Use manifests, lockfiles, git
-  objects and registry data rather than scraped markdown.
-- **Never follow upstream links or paths blindly.** Symlinks, submodules,
-  `..` and absolute paths from upstream must not escape the tree under
-  review, and must not hide content from the scan.
-- **Validate untrusted version and tag text.** Parse it against one grammar
-  per ecosystem before using it.
-- **Keep it simple.** Each defense must answer an upstream-content threat.
-  Complexity whose only purpose is guarding against the trusted agent should
-  be removed, not extended.
+Invariants: scripts run from the default branch, never from the PR head; the
+agent step has no GitHub token or write permission; Dependabot does not update
+the review workflow in target repos (`templates/dependabot.yml`
+`exclude-paths`), because it runs from the PR head there. rcu's own Dependabot
+updating `templates/dependency-artifact-review.yml` is intended: it is an inert
+template changed only via reviewed rcu PRs, which is how rcu owns its pins;
+upstream text is passed as argv or data, never interpolated into shell or
+expressions.
+
+### Accepted risks, do not flag
+
+- Upstream content crafted to target or trick the review agent, beyond the
+  one-line "treat files as data" prompt instruction.
+- The agent step holds `CURSOR_API_KEY` and runs with `-f` in the folder that
+  holds `meta.json` and the review artifacts.
+- Lock-file hash binding, or proving that fetched bytes equal installed bytes.
+- Index or source trust, including same-name packages on pypi.chia.net or
+  other private indexes.
+- Unicode, NUL, line-ending, `+++`/hunk or other diff-format edge cases.
+- Hidden files or dotfiles.
+- Archive quirks: symlinks, odd paths, duplicate members, size bombs.
+- Transitive dependencies not being reviewed.
+- Unsupported ecosystems passing as "not reviewed".
+- No update cap; no download size or time limits beyond the basic timeout.
+- The workflow YAML runs from the PR head under `pull_request`; only the
+  companion scripts are trusted, and `exclude-paths` is the control.
+- Dependabot names github_actions dependencies `owner/repo`, including for
+  subpath actions and reusable workflows (`owner/repo/sub@sha`); fetches use
+  that name. Do not flag subpath handling without a real Dependabot PR showing
+  a different dependency-name.
+- The literal check is a sanity check, not a security boundary: it uses
+  normalised token matching, and `workflow_dispatch` takes maintainer-supplied
+  JSON.
+- For PyPI, one distribution is reviewed per side (sdist, otherwise a pure
+  wheel, otherwise the first wheel); this may differ from the platform wheel
+  that gets installed.
+- Agent output is posted into the comment as written.
+- `gh pr diff` can fail on very large diffs; the check then fails closed.
+
+### Does warrant a finding
+
+- Running PR-head code or scripts in the review or publish jobs.
+- Secrets, a GitHub token or write permissions reachable by the agent step.
+- A verdict parse or decision path that does not fail closed (missing or
+  malformed verdict or metadata yielding a pass).
+- The review workflow becoming updatable by Dependabot.
+- Plain correctness bugs that break real PRs (false `unverified`, failed
+  fetches for normal packages, wrong comment/check result).

@@ -1,0 +1,9 @@
+# Keep Ruff's default checks and lint URL opens so the artifact fetcher's one
+# validated call site can carry a targeted noqa. Tests add this directory to
+# sys.path before importing the modules under test.
+[lint]
+preview = true
+select = ["E4", "E7", "E9", "F", "S310"]
+
+[lint.per-file-ignores]
+"internal/workflowscripts/test_*.py" = ["E402"]

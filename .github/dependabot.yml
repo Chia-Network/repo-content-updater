@@ -60,6 +60,8 @@ updates:
       - github_actions
       - "Changed"
     reviewers: ["cameroncooper", "emlowe"]
+    exclude-paths:
+      - ".github/workflows/dependency-artifact-review.yml"
   - package-ecosystem: "npm"
     directories: ["/"]
     schedule:

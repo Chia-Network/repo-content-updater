@@ -127,6 +127,32 @@ func TestApplySelection(t *testing.T) {
 		}
 	})
 
+	t.Run("the default dependency review removes retired legacy paths", func(t *testing.T) {
+		repoName := "retire-legacy"
+		writeDependabotTestFile(t, repoDir(repoName), workflow, "")
+		legacyWorkflow := ".github/workflows/dependency-cursor-review.yml"
+		legacyScript := ".github/scripts/upstream_malware_scan.sh"
+		keptScript := ".github/scripts/dcr_fetch.py"
+		writeDependabotTestFile(t, repoDir(repoName), legacyWorkflow, "name: legacy\n")
+		writeDependabotTestFile(t, repoDir(repoName), legacyScript, "#!/bin/sh\n")
+		writeDependabotTestFile(t, repoDir(repoName), keptScript, "keep\n")
+		selection := config.ManagedFileSelection{Defaults: []config.DefaultBundle{{
+			Root:  "dep-review",
+			Files: []string{"dep-review"},
+		}}}
+		if _, err := apply(t, repoName, selection); err != nil {
+			t.Fatal(err)
+		}
+		for _, retired := range []string{legacyWorkflow, legacyScript} {
+			if _, err := os.Lstat(filepath.Join(repoDir(repoName), retired)); !os.IsNotExist(err) {
+				t.Errorf("%s still exists: %v", retired, err)
+			}
+		}
+		if body, err := os.ReadFile(filepath.Join(repoDir(repoName), keptScript)); err != nil || string(body) != "keep\n" {
+			t.Errorf("kept script = %q, %v; want it unchanged", body, err)
+		}
+	})
+
 	t.Run("alternate cleanup never leaves the checkout", func(t *testing.T) {
 		repoName := "linked-github"
 		outside := t.TempDir()
@@ -162,7 +188,7 @@ func TestApplySelectionChecksEveryPathBeforeWriting(t *testing.T) {
 	if err := os.Symlink(t.TempDir(), filepath.Join(repoDir(repoName), ".github", "workflows")); err != nil {
 		t.Fatal(err)
 	}
-	selection := config.ManagedFileSelection{Explicit: []string{"dependabot", "dependency-cursor-review"}}
+	selection := config.ManagedFileSelection{Explicit: []string{"dependabot", "dep-review"}}
 	err = (&Content{templates: templates}).applySelection(repoName, selection, cfg, Config{}, func(string, []string) error { return nil })
 	if err == nil {
 		t.Fatal("expected an error for a linked workflows directory")
