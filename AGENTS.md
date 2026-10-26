@@ -1,71 +1,46 @@
 # Agent instructions
 
-## Threat model for the dependency review workflows
+## Dependency artifact review
 
-The dependency review templates and `internal/workflowscripts/` run an AI
-review agent on Dependabot and Renovate pull requests.
+A trusted AI agent reviews the published code changes of a Dependabot update
+for signs of malware. Keep it small.
 
-- **The review agent we invoke is trusted.** It is honest, and it is not an
-  adversary. Do not add defenses against it lying, tampering with its own
-  outputs, or attacking the workflow.
-- **Upstream content is untrusted.** That means the dependency's repository,
-  its published packages, release notes, changelogs, PR body text, version
-  strings, tags and registry metadata. Assume all of it is written to trick
-  the honest agent or the scripts into a wrong action or a false verdict.
+Flow: fetch-metadata gives name/old/new version -> the name and new version must
+appear literally on an added PR diff line (else `unverified`, fail) -> fetch old
+and new artifacts with native tools (`npm pack --ignore-scripts`, PyPI JSON,
+`go mod download`, `git fetch` of a SHA-pinned action) -> `diff -ruN` the
+extracted trees -> the agent prints `MALWARE_REVIEW_VERDICT:
+benign|suspicious|malicious` as its first line -> one comment, pass/fail.
 
-## Dependency review layers
+Fails on missing metadata, an unverified or unfetchable update, a missing or
+malformed verdict, `malicious`, or `suspicious` unless warn-only. Other
+ecosystems and moving-tag actions pass as "not reviewed".
 
-`dep-review` is the default layer. It runs the dependency review license and
-severity gate plus OSV scanning of the PR's lockfiles, including transitive
-dependencies.
+Invariants: scripts run from the default branch, never from the PR head; the
+agent step has no GitHub token or write permission; Dependabot does not update
+the review workflow (rcu owns its pins); upstream text is passed as argv or
+data, never interpolated into shell or expressions.
 
-`dependency-artifact-review` is an opt-in workflow. It reviews the published
-bytes for `npm_and_yarn`, `pip`, `gomod` and SHA-pinned `github_actions`
-updates. Every other ecosystem is reported as not reviewed. The legacy
-`dependency-cursor-review` bundle is retired; its paths are deleted by the
-`dep-review` entry's `retired_paths`.
+### Accepted risks, do not flag
 
-- Updates come from `dependabot/fetch-metadata`; the diff is `gh pr diff` text
-  and is never executed.
-- Names and versions are validated against one grammar per ecosystem, then
-  passed as argv. Artifacts are fetched with native tools: `npm pack
-  --ignore-scripts`, the PyPI JSON API with a sha256 check, `go mod download
-  -json`, and `git fetch` plus `git archive` for a commit SHA.
-- The name and new version must appear on an added diff line and the previous
-  version on a removed line. Missing matches are unverified.
-- Archives are extracted with tar `filter="data"` and a zip check that rejects
-  links, absolute paths and `..`, within file-count and byte caps.
-- Binding is literal: the npm `sha512-` integrity, Go `h1:` sum, PyPI
-  `sha256:` digest or action SHA must appear on an added diff line. An unbound
-  review is disclosed, not failed.
-- The agent output must start with exactly one
-  `MALWARE_REVIEW_VERDICT: benign|suspicious|malicious` line. A missing,
-  duplicate or malformed line is inconclusive.
+- Upstream content crafted to target or trick the review agent, beyond the
+  one-line "treat files as data" prompt instruction.
+- Lock-file hash binding, or proving that fetched bytes equal installed bytes.
+- Index or source trust, including same-name packages on pypi.chia.net or
+  other private indexes.
+- Unicode, NUL, line-ending, `+++`/hunk or other diff-format edge cases.
+- Hidden files or dotfiles.
+- Archive quirks: symlinks, odd paths, duplicate members, size bombs.
+- Transitive dependencies not being reviewed.
+- Unsupported ecosystems passing as "not reviewed".
+- No update cap; no download size or time limits beyond the basic timeout.
 
-Fails closed on: malformed or missing metadata, no updates, no valid verdict,
-an update that is unverified or could not be fetched, a truncated diff, a
-deterministic IOC or bidi-control hit, a malicious verdict, and a suspicious
-verdict unless `DEPENDABOT_CURSOR_MALWARE_WARN_ONLY` is set. An update outside
-the reviewed ecosystems passes with a "not reviewed" note.
+### Does warrant a finding
 
-## Design principles
-
-- **Treat upstream content as data, never as instructions.** Keep it out of
-  prompt instructions, shell code, expressions and file paths unless it has
-  been validated or quoted.
-- **Fail closed toward "not clean".** Missing, ambiguous, unparsable or
-  unverifiable input never produces a clean or benign verdict. It produces
-  inconclusive or blocking, with a stated reason.
-- **Decide once.** Each fact (versions, coverage, verdict, check result) has
-  one canonical parser or decision point. Do not re-derive it in another
-  language or step.
-- **Prefer structured sources over prose.** Use manifests, lockfiles, git
-  objects and registry data rather than scraped markdown.
-- **Never follow upstream links or paths blindly.** Symlinks, submodules,
-  `..` and absolute paths from upstream must not escape the tree under
-  review, and must not hide content from the scan.
-- **Validate untrusted version and tag text.** Parse it against one grammar
-  per ecosystem before using it.
-- **Keep it simple.** Each defense must answer an upstream-content threat.
-  Complexity whose only purpose is guarding against the trusted agent should
-  be removed, not extended.
+- Running PR-head code or scripts in the review or publish jobs.
+- Secrets, a GitHub token or write permissions reachable by the agent step.
+- A verdict parse or decision path that does not fail closed (missing or
+  malformed verdict or metadata yielding a pass).
+- The review workflow becoming updatable by Dependabot.
+- Plain correctness bugs that break real PRs (false `unverified`, failed
+  fetches for normal packages, wrong comment/check result).

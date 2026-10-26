@@ -27,16 +27,13 @@ All defaults require `.github/workflows` containing at least one `.yml`/`.yaml` 
 
 ### Artifact review (opt-in)
 
-`dep-review` remains the default for every eligible repo: it ships the dependency
-review license and severity gate plus OSV scanning of the PR's lockfiles,
-including transitive dependencies. It is adopt-only: a repo whose existing
-`.github/workflows/dependency-review.yml` lacks the adoption marker keeps that
-file unless it lists `dep-review` explicitly.
-
-`dependency-artifact-review` is a separate, opt-in workflow. It reviews the
-published bytes for npm (`npm_and_yarn`), PyPI (`pip`), Go modules (`gomod`) and
-SHA-pinned GitHub Actions (`github_actions`) updates. Other ecosystems are
-reported as not reviewed. It is **not** in `default_files`.
+`dependency-artifact-review` is a separate, opt-in workflow. A trusted AI agent
+reviews the published code changes of a Dependabot update for signs of malware:
+the dependency name and new version must appear literally on an added PR diff
+line, the old and new artifacts are fetched with native tools and diffed, the
+agent prints one `MALWARE_REVIEW_VERDICT:` line, and the result is one comment
+and a pass/fail check. Other ecosystems pass as "not reviewed". It is **not** in
+`default_files`.
 
 To enable it, add `dependency-artifact-review` (or
 `group:dependency-artifact-review`) to the repo's `managed-files` property, for
@@ -46,15 +43,9 @@ example:
 group:base,dependency-artifact-review
 ```
 
-The workflow's publish job id is `dependency-artifact-review`, which no other
-managed workflow uses. A repo that opts in can require the
-`Dependency Artifact Review / dependency-artifact-review` check without it
-colliding with the default dependency review workflow's check.
-
-The agent output must start with one `MALWARE_REVIEW_VERDICT:` line. For a
-manual `workflow_dispatch` validation run, supply both `pr_number` and the
-`updated_dependencies_json` string that `dependabot/fetch-metadata` reports for
-that PR.
+A repo that opts in can require the
+`Dependency Artifact Review / dependency-artifact-review` check; no other
+managed workflow uses that name.
 
 ## Config Format
 
