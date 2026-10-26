@@ -201,16 +201,16 @@ func validateRelativePaths(fileName, field string, entries []string) error {
 	return nil
 }
 
-// adoptionMarkerPattern keeps markers to one plain comment token: they are
-// rendered into templates and matched as a whole line.
-var adoptionMarkerPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
+// adoptionMarkerPattern keeps markers to one comment-safe line: earlier
+// markers may be header sentences, and all are matched as a whole line.
+var adoptionMarkerPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+(?: [A-Za-z0-9._:/-]+)*$`)
 
 func (c *Config) validateAdoptionMarkers() error {
 	type markerOwner struct{ field, file string }
 	seen := map[string]markerOwner{}
 	claim := func(field, marker, file string) error {
 		if !adoptionMarkerPattern.MatchString(marker) {
-			return fmt.Errorf("%s %q for %q must use only letters, digits and . _ : / -", field, marker, file)
+			return fmt.Errorf("%s %q for %q must use only letters, digits, spaces and . _ : / -", field, marker, file)
 		}
 		if owner, ok := seen[marker]; ok && owner.file != file {
 			return fmt.Errorf("%s %q of %q is already the %s of %q", field, marker, file, owner.field, owner.file)

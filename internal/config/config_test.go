@@ -25,6 +25,28 @@ func TestConfigIsValid(t *testing.T) {
 	assert.Equal(t, []string{"dependabot-actions", "dep-review"}, cfg.DefaultFiles)
 }
 
+func TestDependencyReviewAcceptsEarlierHeaderMarkers(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	if !assert.Nil(t, err) {
+		return
+	}
+
+	file := cfg.GetFileInfo("dep-review")
+	if !assert.NotNil(t, file) {
+		return
+	}
+	for _, tt := range []struct {
+		marker string
+	}{
+		{marker: "Managed by repo-content-updater"},
+		{marker: "This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back"},
+	} {
+		t.Run(tt.marker, func(t *testing.T) {
+			assert.Contains(t, file.PreviousAdoptionMarkers, tt.marker)
+		})
+	}
+}
+
 func TestDependencyArtifactReviewIsOptInOnly(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
