@@ -75,7 +75,7 @@ func TestApplySelection(t *testing.T) {
 		}
 	})
 
-	t.Run("the default actions policy is weekly with the shared reviewers", func(t *testing.T) {
+	t.Run("the default actions policy is weekly on tuesday", func(t *testing.T) {
 		repoName := "marked-actions"
 		writeDependabotTestFile(t, repoDir(repoName), ".github/dependabot.yml", actionsOnly)
 		writeDependabotTestFile(t, repoDir(repoName), workflow, "")
@@ -100,9 +100,9 @@ func TestApplySelection(t *testing.T) {
 		got := doc.Updates[0]
 		if got.Ecosystem != "github-actions" ||
 			!reflect.DeepEqual(got.Schedule, map[string]string{"interval": "weekly", "day": "tuesday"}) ||
-			!reflect.DeepEqual(got.Reviewers, []string{"cameroncooper", "emlowe"}) ||
+			got.Reviewers != nil ||
 			got.Groups != nil {
-			t.Fatalf("actions policy = %#v, want weekly on tuesday, reviewers cameroncooper and emlowe, ungrouped", got)
+			t.Fatalf("actions policy = %#v, want weekly on tuesday, no reviewers, ungrouped", got)
 		}
 	})
 

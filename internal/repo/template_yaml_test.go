@@ -330,7 +330,6 @@ func templateRenderCases(t *testing.T) []templateRenderCase {
 	custom := clone(base)
 	custom["DEPENDABOT_ACTIONS_DIRECTORIES"] = `["/", "/.github/actions/*", "/templates"]`
 	custom["DEPENDABOT_GOMOD_PULL_REQUEST_LIMIT"] = "3"
-	custom["DEPENDABOT_GOMOD_REVIEWERS"] = `["alice"]`
 	custom["DEPENDENCY_REVIEW_ALLOW_DEPENDENCIES_LICENSES"] = "pkg:pypi/example"
 	custom["DEPENDABOT_DENY_LICENSES"] = "GPL-3.0-only, MIT"
 	return []templateRenderCase{

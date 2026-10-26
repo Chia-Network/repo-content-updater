@@ -23,7 +23,6 @@ updates:
       - dependencies
       - go
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:
@@ -45,7 +44,6 @@ updates:
       - dependencies
       - python
       - "Changed"
-    reviewers: ["emlowe"]
     groups:
       global:
         patterns:
@@ -63,9 +61,9 @@ updates:
       - dependencies
       - github_actions
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
     exclude-paths:
       - ".github/workflows/dependency-artifact-review.yml"
+      - ".github/workflows/dependency-review.yml"
     groups:
       global:
         patterns:
@@ -83,7 +81,6 @@ updates:
       - dependencies
       - javascript
       - "Changed"
-    reviewers: ["emlowe", "seeden"]
     groups:
       global:
         patterns:
@@ -101,7 +98,6 @@ updates:
       - dependencies
       - rust
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:
@@ -115,7 +111,6 @@ updates:
       default-days: 7
     open-pull-requests-limit: 10
     rebase-strategy: auto
-    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:
@@ -133,7 +128,6 @@ updates:
       - dependencies
       - docker
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:
@@ -151,7 +145,6 @@ updates:
       - dependencies
       - terraform
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:
@@ -169,7 +162,6 @@ updates:
       - dependencies
       - dotnet
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
     groups:
       global:
         patterns:
