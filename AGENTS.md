@@ -13,12 +13,17 @@ review agent on Dependabot and Renovate pull requests.
   strings, tags and registry metadata. Assume all of it is written to trick
   the honest agent or the scripts into a wrong action or a false verdict.
 
-## Artifact review component (opt-in)
+## Dependency review layers
 
-`dependency-artifact-review` is an opt-in workflow, separate from the default
-`dep-review` layer and from the legacy `dependency-cursor-review` bundle. It
-reviews the published bytes for `npm_and_yarn`, `pip`, `gomod` and SHA-pinned
-`github_actions` updates. Every other ecosystem is reported as not reviewed.
+`dep-review` is the default layer. It runs the dependency review license and
+severity gate plus OSV scanning of the PR's lockfiles, including transitive
+dependencies.
+
+`dependency-artifact-review` is an opt-in workflow. It reviews the published
+bytes for `npm_and_yarn`, `pip`, `gomod` and SHA-pinned `github_actions`
+updates. Every other ecosystem is reported as not reviewed. The legacy
+`dependency-cursor-review` bundle is retired; its paths are deleted by the
+`dep-review` entry's `retired_paths`.
 
 - Updates come from `dependabot/fetch-metadata`; the diff is `gh pr diff` text
   and is never executed.

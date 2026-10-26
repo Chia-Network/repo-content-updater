@@ -12,7 +12,6 @@
 # out of the default.
 default_files:
   - dependabot-actions
-  - dependency-cursor-review
   - dep-review
 
 # Groups allow inheriting a potentially evolving set of templates for a particular project type without needing to
@@ -36,10 +35,6 @@ groups:
       - go-test
 
   # The workflow's companion_files bring in every script it needs.
-  - name: dependency-cursor-review
-    templates:
-      - dependency-cursor-review
-
   - name: dependency-artifact-review
     templates:
       - dependency-artifact-review
@@ -63,152 +58,9 @@ files:
     template_name: check-node-runtime.sh
     repo_path: .github/scripts/check_node_runtime.sh
 
-  # Legacy bundle: still a default during the transition. It is replaced by
-  # dep-review (default) plus the opt-in dependency-artifact-review. A later
-  # change removes it from default_files and moves its paths to retired_paths.
-  - name: dependency-cursor-review
-    template_name: dependency-cursor-review.yml
-    repo_path: .github/workflows/dependency-cursor-review.yml
-    adoption_marker: "repo-content-updater:dependency-cursor-review"
-    requires_paths:
-      - .github/workflows
-    aliases:
-      - dependabot-cursor-review
-    companion_files:
-      - github-scripts-init
-      - malware-verdict-formatter
-      - upstream-malware-scan
-      - dependency-update-coverage
-      - dependency-manifest-diff
-      - dependency-cursor-review-versions
-      - dependency-cursor-review-ecosystems
-      - dependency-cursor-review-upstream
-      - dependency-cursor-review-binding
-      - dependency-cursor-review-certificate
-      - dependency-manifest-go
-      - dependency-manifest-npm
-      - dependency-manifest-python
-      - dependency-manifest-lines
-      - dependency-manifest-pep508
-      - dependency-cursor-review-prompts
-      - dependency-cursor-review-combine-outputs
-      - dependency-cursor-review-dependabot-context
-      - dependency-cursor-review-post-comment
-      - dependency-cursor-review-target-pr
-      - upstream-malware-scan-lib
-      - upstream-malware-scan-findings
-      - upstream-release-checkout
-    alternate_paths:
-      - .github/workflows/dependabot-cursor-review.yaml
-      - .github/workflows/dependabot-cursor-review.yml
-      - .github/workflows/dependency-cursor-review.yaml
-    # Files earlier versions of this workflow installed and no longer use.
-    # Writing the workflow deletes any that a repo still has.
-    retired_paths:
-      - .github/actions/trusted-git-path-checkout/action.yml
-      - .github/scripts/dependency-cursor-review-trusted-scripts.paths
-      - .github/scripts/formatter_runtime_bundle.py
-      - .github/scripts/isolated_module_exec.py
-      - .github/scripts/scripts_dir_disk_exec.py
-      - .github/scripts/scripts_dir_path_scrub.py
-      - .github/scripts/trusted_formatter_loader.py
-      - .github/scripts/trusted_formatter_loader_cold_start.py
-
   - name: github-scripts-init
     template_name: github-scripts-init.py
     repo_path: .github/scripts/__init__.py
-
-  - name: malware-verdict-formatter
-    template_name: malware-verdict-formatter.py
-    repo_path: .github/scripts/malware_verdict_formatter.py
-
-  - name: upstream-malware-scan
-    template_name: upstream-malware-scan.sh
-    repo_path: .github/scripts/upstream_malware_scan.sh
-
-  - name: dependency-update-coverage
-    template_name: dependency-cursor-review-update-coverage.py
-    repo_path: .github/scripts/dependency_update_coverage.py
-
-  - name: dependency-manifest-diff
-    template_name: dependency-cursor-review-manifest-diff.py
-    repo_path: .github/scripts/dependency_manifest_diff.py
-
-  - name: dependency-cursor-review-versions
-    template_name: dependency-cursor-review-versions.py
-    repo_path: .github/scripts/dependency_cursor_review_versions.py
-    aliases:
-      - dependency-manifest-versions
-    alternate_paths:
-      - .github/scripts/dependency_manifest_versions.py
-
-  - name: dependency-cursor-review-ecosystems
-    template_name: dependency-cursor-review-ecosystems.py
-    repo_path: .github/scripts/dependency_cursor_review_ecosystems.py
-
-  - name: dependency-cursor-review-upstream
-    template_name: dependency-cursor-review-upstream.py
-    repo_path: .github/scripts/dependency_cursor_review_upstream.py
-
-  - name: dependency-cursor-review-binding
-    template_name: dependency-cursor-review-binding.py
-    repo_path: .github/scripts/dependency_cursor_review_binding.py
-
-  - name: dependency-cursor-review-certificate
-    template_name: dependency-cursor-review-certificate.py
-    repo_path: .github/scripts/dependency_cursor_review_certificate.py
-
-  - name: dependency-manifest-go
-    template_name: dependency-cursor-review-manifest-go.py
-    repo_path: .github/scripts/dependency_manifest_go.py
-
-  - name: dependency-manifest-npm
-    template_name: dependency-cursor-review-manifest-npm.py
-    repo_path: .github/scripts/dependency_manifest_npm.py
-
-  - name: dependency-manifest-python
-    template_name: dependency-cursor-review-manifest-python.py
-    repo_path: .github/scripts/dependency_manifest_python.py
-
-  - name: dependency-manifest-lines
-    template_name: dependency-cursor-review-manifest-lines.py
-    repo_path: .github/scripts/dependency_manifest_lines.py
-
-  - name: dependency-manifest-pep508
-    template_name: dependency-cursor-review-manifest-pep508.py
-    repo_path: .github/scripts/dependency_pep508.py
-
-  - name: dependency-cursor-review-prompts
-    template_name: dependency-cursor-review-prompts.py
-    repo_path: .github/scripts/dependency_cursor_review_prompts.py
-
-  - name: dependency-cursor-review-combine-outputs
-    template_name: dependency-cursor-review-combine-outputs.py
-    repo_path: .github/scripts/dependency_cursor_review_combine_outputs.py
-
-  - name: dependency-cursor-review-dependabot-context
-    template_name: dependency-cursor-review-dependabot-context.js
-    repo_path: .github/scripts/dependency-cursor-review-dependabot-context.js
-
-  - name: dependency-cursor-review-post-comment
-    template_name: dependency-cursor-review-post-comment.js
-    repo_path: .github/scripts/dependency-cursor-review-post-comment.js
-
-  - name: dependency-cursor-review-target-pr
-    template_name: dependency-cursor-review-target-pr.js
-    repo_path: .github/scripts/dependency-cursor-review-target-pr.js
-
-  - name: upstream-malware-scan-lib
-    template_name: upstream-malware-scan-lib.sh
-    repo_path: .github/scripts/upstream_malware_scan_lib.sh
-
-  - name: upstream-malware-scan-findings
-    template_name: upstream-malware-scan-findings.sh
-    repo_path: .github/scripts/upstream_malware_scan_findings.sh
-
-  - name: upstream-release-checkout
-    template_name: upstream-release-checkout.sh
-    repo_path: .github/scripts/upstream_release_checkout.sh
 
   - name: dependency-artifact-review
     template_name: dependency-artifact-review.yml
@@ -217,6 +69,7 @@ files:
     requires_paths:
       - .github/workflows
     companion_files:
+      - github-scripts-init
       - dependency-artifact-review-fetch
       - dependency-artifact-review-sources
       - dependency-artifact-review-lock
@@ -253,6 +106,44 @@ files:
       - .github/workflows
     alternate_paths:
       - .github/workflows/dependency-review.yaml
+    # The legacy dependency cursor review bundle. dep-review is its default
+    # replacement, so applying it removes the old workflow and its scripts.
+    retired_paths:
+      - .github/workflows/dependency-cursor-review.yml
+      - .github/workflows/dependency-cursor-review.yaml
+      - .github/workflows/dependabot-cursor-review.yml
+      - .github/workflows/dependabot-cursor-review.yaml
+      - .github/actions/trusted-git-path-checkout/action.yml
+      - .github/scripts/dependency-cursor-review-trusted-scripts.paths
+      - .github/scripts/formatter_runtime_bundle.py
+      - .github/scripts/isolated_module_exec.py
+      - .github/scripts/scripts_dir_disk_exec.py
+      - .github/scripts/scripts_dir_path_scrub.py
+      - .github/scripts/trusted_formatter_loader.py
+      - .github/scripts/trusted_formatter_loader_cold_start.py
+      - .github/scripts/malware_verdict_formatter.py
+      - .github/scripts/upstream_malware_scan.sh
+      - .github/scripts/dependency_update_coverage.py
+      - .github/scripts/dependency_manifest_diff.py
+      - .github/scripts/dependency_cursor_review_versions.py
+      - .github/scripts/dependency_manifest_versions.py
+      - .github/scripts/dependency_cursor_review_ecosystems.py
+      - .github/scripts/dependency_cursor_review_upstream.py
+      - .github/scripts/dependency_cursor_review_binding.py
+      - .github/scripts/dependency_cursor_review_certificate.py
+      - .github/scripts/dependency_manifest_go.py
+      - .github/scripts/dependency_manifest_npm.py
+      - .github/scripts/dependency_manifest_python.py
+      - .github/scripts/dependency_manifest_lines.py
+      - .github/scripts/dependency_pep508.py
+      - .github/scripts/dependency_cursor_review_prompts.py
+      - .github/scripts/dependency_cursor_review_combine_outputs.py
+      - .github/scripts/dependency-cursor-review-dependabot-context.js
+      - .github/scripts/dependency-cursor-review-post-comment.js
+      - .github/scripts/dependency-cursor-review-target-pr.js
+      - .github/scripts/upstream_malware_scan_lib.sh
+      - .github/scripts/upstream_malware_scan_findings.sh
+      - .github/scripts/upstream_release_checkout.sh
 
   - name: dependabot
     template_name: dependabot.yml

@@ -18,13 +18,12 @@ Looks for the `managed-files` custom property on a repo, and parses out a comma 
 
 For example, the value could be: `group:base,go-test`. This would pull in the base group of files and the go-test file.
 
-Files listed under `default_files` are applied to every non-archived, non-fork repo whose name does not contain "private" or end in "-dos", even when the repo has no `managed-files` property. The defaults are `dependabot-actions`, `dependency-cursor-review` and `dep-review`. Each default is a bundle: the default file (its root) plus its `companion_files`. The root's `requires_paths` and `adoption_marker` decide for the whole bundle; companions do not carry markers.
+Files listed under `default_files` are applied to every non-archived, non-fork repo whose name does not contain "private" or end in "-dos", even when the repo has no `managed-files` property. The defaults are `dependabot-actions` and `dep-review`. Each default is a bundle: the default file (its root) plus its `companion_files`. The root's `requires_paths` and `adoption_marker` decide for the whole bundle; companions do not carry markers.
 
 * `dependabot-actions` renders the same `dependabot.yml` template as the explicit `dependabot` file, with manifest detection: every detected ecosystem (gomod, pip, npm, cargo, swift, docker, terraform, nuget) is enabled, plus `github-actions`. A repo with only workflows gets an Actions-only config. Docker, terraform and nuget manifests are found anywhere in the tree (outside `.git` and `node_modules`) and each directory that holds one is listed under `directories`; a root `*.sln` covers the whole tree for nuget. `var_overrides` such as `DEPENDABOT_GOMOD_DIRECTORY` or `DEPENDABOT_DOCKER_DIRECTORIES` are honoured. The github-actions entry uses the shared template policy: weekly on Tuesday, ungrouped, reviewers `cameroncooper` and `emlowe`. A marked file is never rewritten in a way that drops an ecosystem, directory or target branch it already configures: update entries the rendered template does not cover are merged in from the existing file, and identical duplicate blocks collapse while two blocks that share a key but configure it differently leave the file untouched. If detection fails for the repository, the default is skipped and an existing file is left as it is (an explicit `dependabot` keeps the full config); if one ecosystem fails, that ecosystem stays enabled.
-* `dependency-cursor-review` ships the review workflow and its companion scripts.
 * `dep-review` ships the dependency review workflow: a license and severity gate plus OSV scanning of the PR's lockfiles, including transitive dependencies.
 
-All defaults require `.github/workflows` containing at least one `.yml`/`.yaml` file. Defaults are adopt-only: an existing root without the adoption marker line (`# <adoption_marker>`) is left untouched; a root carrying the marker is updated in place along with its companions; a new bundle is written only when the root and every companion path are absent. Each default root must declare a unique `adoption_marker`. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot-actions` or `!dependency-cursor-review`. Opting out of any member of a default bundle, companions included, drops the whole bundle. Opting out of any file that writes the same repo path also opts out of the default, so `!dependabot` and `!go-dependabot` both opt out of `dependabot-actions`. A default is not added when an explicitly selected file writes the same repo path. Managed paths are only read, removed and written when every parent directory is a real directory inside the checkout.
+All defaults require `.github/workflows` containing at least one `.yml`/`.yaml` file. Defaults are adopt-only: an existing root without the adoption marker line (`# <adoption_marker>`) is left untouched; a root carrying the marker is updated in place along with its companions; a new bundle is written only when the root and every companion path are absent. Each default root must declare a unique `adoption_marker`. Prefix an entry with `!` to remove that file from the repo, including a default; for example `!dependabot-actions` or `!dep-review`. Opting out of any member of a default bundle, companions included, drops the whole bundle. Opting out of any file that writes the same repo path also opts out of the default, so `!dependabot` and `!go-dependabot` both opt out of `dependabot-actions`. A default is not added when an explicitly selected file writes the same repo path. Managed paths are only read, removed and written when every parent directory is a real directory inside the checkout.
 
 ### Artifact review (opt-in)
 
@@ -62,7 +61,6 @@ that PR.
 ```yaml
 default_files:
   - dependabot-actions
-  - dependency-cursor-review
   - dep-review
 
 groups:
@@ -111,9 +109,11 @@ files:
 
 `default_files` lists files that are managed on every eligible repo unless the repo opts out with `!<name>` in its `managed-files` property. See above for detection, adoption and bundle rules.
 
-### Malware verdict formatter (canonical vs templates)
+### Managed companion scripts (canonical vs templates)
 
-The dependency-cursor-review and dependency-artifact-review workflows ship companion scripts from `templates/` into consumer repos (`.github/scripts/`). **Canonical edit location:** `internal/workflowscripts/*` only (Python modules, shell scan script, combine/prompt helpers). `make test` and `managed-files` run `sync_malware_formatter_templates.py` first, which **emit** byte-identical mirrors into `templates/` at apply time (formatter tests enforce sync). Generated `templates/malware-verdict-*.py`, `templates/github-scripts-init.py`, `templates/dcr-fetch.py`, `templates/dcr-verdict.py`, `templates/dcr-prompt.md`, and other sync companions are **gitignored** — do not commit or hand-edit them. The consumer package marker is canonical `internal/workflowscripts/github_scripts_init.py` (synced to `.github/scripts/__init__.py`). **Reviewable in git:** workflow YAML and `templates/GENERATED-FORMATTER-MIRRORS`. Edit canonical copies in `internal/workflowscripts/` only.
+The dependency-artifact-review workflow ships companion scripts from `templates/` into consumer repos (`.github/scripts/`). **Canonical edit location:** `internal/workflowscripts/*` only (Python modules and the prompt). `make test` and `managed-files` run `sync_malware_formatter_templates.py` first, which **emit** byte-identical mirrors into `templates/` at apply time (formatter tests enforce sync). Generated `templates/github-scripts-init.py`, `templates/dcr-*.py`, `templates/dcr-prompt.md`, and the other sync companions are **gitignored** — do not commit or hand-edit them. The consumer package marker is canonical `internal/workflowscripts/github_scripts_init.py` (synced to `.github/scripts/__init__.py`). **Reviewable in git:** workflow YAML and `templates/GENERATED-FORMATTER-MIRRORS`. Edit canonical copies in `internal/workflowscripts/` only.
+
+The legacy `dependency-cursor-review` bundle is retired. Its workflow and companion scripts are listed in the `dep-review` entry's `retired_paths`, so a sync removes them from repos that still carry them.
 
 * `name` is the name to reference the file by in groups or in the custom property.
 * `template_name` is the name of the template to use from the supplied templates directory
