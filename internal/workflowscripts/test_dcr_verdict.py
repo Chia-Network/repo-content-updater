@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
@@ -16,7 +15,7 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 import dcr_verdict
-from dcr_verdict import Facts, decide, parse_verdict
+from dcr_verdict import Decision, Facts, comment_digest, decide, parse_verdict
 
 
 def _update(status: str = "reviewed", bound: bool = True) -> dict[str, object]:
@@ -119,6 +118,15 @@ class DecisionTableTest(unittest.TestCase):
         self.assertIn("not reviewed", decision.reason)
         self.assertIn("outside the reviewed", decision.reason)
 
+    def test_not_reviewed_updates_pass_without_a_verdict(self) -> None:
+        decision = decide(_facts(updates=[_update("not_reviewed")], verdict=None))
+        self.assertEqual(decision.conclusion, "success")
+        self.assertIn("outside the reviewed", decision.reason)
+
+    def test_reviewed_update_still_requires_a_verdict(self) -> None:
+        facts = _facts(updates=[_update("reviewed"), _update("not_reviewed")], verdict=None)
+        self.assertEqual(decide(facts).conclusion, "failure")
+
     def test_no_updates_fails(self) -> None:
         self.assertEqual(decide(_facts(updates=[], verdict="benign")).conclusion, "failure")
 
@@ -149,13 +157,42 @@ class CommentTest(unittest.TestCase):
         self.assertLessEqual(len(body), dcr_verdict.MAX_COMMENT_CHARS)
         self.assertIn("Agent output truncated", body)
 
+    def test_agent_text_escapes_markup_inside_details(self) -> None:
+        facts = _facts()
+        body = dcr_verdict.comment_body("<!-- marker -->", facts, decide(facts), "a < b & c > d")
+        self.assertIn("a &lt; b &amp; c &gt; d", body)
+        self.assertNotIn("a < b", body)
+
+    def test_note_is_flattened_and_bounded(self) -> None:
+        update = _update()
+        update["note"] = "first\nsecond " + "x" * 500
+        facts = _facts(updates=[update])
+        body = dcr_verdict.comment_body("<!-- marker -->", facts, decide(facts), "")
+        self.assertNotIn("first\nsecond", body)
+        self.assertIn("`first second ", body)
+        self.assertNotIn("x" * 200, body)
+
+    def test_empty_agent_output_omits_the_details_block(self) -> None:
+        facts = _facts()
+        body = dcr_verdict.comment_body("<!-- marker -->", facts, decide(facts), "")
+        self.assertNotIn("<details>", body)
+
+
+class DigestTest(unittest.TestCase):
+    def test_digest_covers_decision_and_agent_output(self) -> None:
+        base = comment_digest(b"meta", Decision("success", "ok"), "agent")
+        self.assertNotEqual(base, comment_digest(b"meta", Decision("failure", "ok"), "agent"))
+        self.assertNotEqual(base, comment_digest(b"meta", Decision("success", "other"), "agent"))
+        self.assertNotEqual(base, comment_digest(b"meta", Decision("success", "ok"), "other"))
+        self.assertNotEqual(base, comment_digest(b"other", Decision("success", "ok"), "agent"))
+
 
 class MainTest(unittest.TestCase):
     def _run_main(
         self,
         tmp: Path,
         meta: dict[str, object] | None,
-        agent: str,
+        agent: str | None,
         *,
         warn_only: str = "",
     ) -> tuple[dict[str, object], str, str]:
@@ -163,7 +200,8 @@ class MainTest(unittest.TestCase):
         if meta is not None:
             meta_path.write_text(json.dumps(meta, sort_keys=True), encoding="utf-8")
         agent_path = tmp / "agent.txt"
-        agent_path.write_text(agent, encoding="utf-8")
+        if agent is not None:
+            agent_path.write_text(agent, encoding="utf-8")
         comment_path = tmp / "comment.md"
         verdict_path = tmp / "verdict.json"
         output_path = tmp / "github-output"
@@ -186,7 +224,9 @@ class MainTest(unittest.TestCase):
         raw = json.dumps(meta, sort_keys=True).encode()
         with tempfile.TemporaryDirectory() as tmp:
             payload, comment, output = self._run_main(Path(tmp), meta, "MALWARE_REVIEW_VERDICT: benign\nEVIDENCE: ok\n")
-        digest = hashlib.sha256(raw).hexdigest()
+        digest = comment_digest(
+            raw, Decision("success", "the agent verdict is benign"), "MALWARE_REVIEW_VERDICT: benign\nEVIDENCE: ok\n"
+        )
         self.assertEqual(payload["conclusion"], "success")
         self.assertEqual(payload["marker"], f"<!-- dcr-artifact-review sha256:{digest} -->")
         self.assertIn(payload["marker"], comment)
@@ -198,7 +238,10 @@ class MainTest(unittest.TestCase):
             payload, comment, _output = self._run_main(Path(tmp), None, "MALWARE_REVIEW_VERDICT: benign\n")
         self.assertEqual(payload["conclusion"], "failure")
         self.assertIn("malformed", payload["reason"])
-        self.assertIn("sha256:" + hashlib.sha256(b"").hexdigest(), comment)
+        digest = comment_digest(
+            b"", Decision("failure", "metadata is missing or malformed"), "MALWARE_REVIEW_VERDICT: benign\n"
+        )
+        self.assertIn(f"sha256:{digest}", comment)
 
     def test_malformed_meta_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -222,15 +265,65 @@ class MainTest(unittest.TestCase):
 
     def test_malformed_meta_shapes_fail_closed(self) -> None:
         cases = (
-            {"updates": "not a list", "ioc_hits": []},
-            {"updates": [], "ioc_hits": "not a list"},
-            {"updates": ["not a dict"], "ioc_hits": []},
-            {"updates": [], "ioc_hits": ["not a dict"]},
+            {"schema": 1, "truncated": False, "updates": "not a list", "ioc_hits": []},
+            {"schema": 1, "truncated": False, "updates": [], "ioc_hits": "not a list"},
+            {"schema": 1, "truncated": False, "updates": ["not a dict"], "ioc_hits": []},
+            {"schema": 1, "truncated": False, "updates": [], "ioc_hits": ["not a dict"]},
         )
         for meta in cases:
             with self.subTest(meta=meta), tempfile.TemporaryDirectory() as tmp:
                 payload, _comment, _output = self._run_main(Path(tmp), meta, "MALWARE_REVIEW_VERDICT: benign\n")
             self.assertEqual(payload["conclusion"], "failure")
+
+    def test_meta_schema_and_keys_are_required(self) -> None:
+        valid = {"schema": 1, "truncated": False, "updates": [_update()], "ioc_hits": []}
+        cases = (
+            {key: value for key, value in valid.items() if key != "schema"},
+            {**valid, "schema": 2},
+            {**valid, "schema": True},
+            {**valid, "schema": 1.0},
+            {key: value for key, value in valid.items() if key != "truncated"},
+            {key: value for key, value in valid.items() if key != "ioc_hits"},
+        )
+        for meta in cases:
+            with self.subTest(meta=meta), tempfile.TemporaryDirectory() as tmp:
+                payload, _comment, _output = self._run_main(Path(tmp), meta, "MALWARE_REVIEW_VERDICT: benign\n")
+            self.assertEqual(payload["conclusion"], "failure")
+            self.assertIn("metadata", payload["reason"])
+
+    def test_missing_meta_and_agent_write_a_short_failure_comment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            payload, comment, _output = self._run_main(Path(tmp), None, None)
+        self.assertEqual(payload["conclusion"], "failure")
+        self.assertIn("**Result:** failure", comment)
+        self.assertNotIn("<details>", comment)
+        self.assertLess(len(comment), 2000)
+
+    def test_missing_agent_output_with_reviewed_update_fails(self) -> None:
+        meta = {"schema": 1, "truncated": False, "updates": [_update()], "ioc_hits": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            payload, comment, _output = self._run_main(Path(tmp), meta, None)
+        self.assertEqual(payload["conclusion"], "failure")
+        self.assertNotIn("<details>", comment)
+
+    def test_not_reviewed_update_passes_without_agent_output(self) -> None:
+        meta = {"schema": 1, "truncated": False, "updates": [_update("not_reviewed")], "ioc_hits": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            payload, _comment, _output = self._run_main(Path(tmp), meta, None)
+        self.assertEqual(payload["conclusion"], "success")
+        self.assertIn("outside the reviewed", payload["reason"])
+
+    def test_marker_changes_with_the_agent_output(self) -> None:
+        meta = {"schema": 1, "truncated": False, "updates": [_update()], "ioc_hits": []}
+        markers = []
+        for evidence in ("first", "second"):
+            with tempfile.TemporaryDirectory() as tmp:
+                payload, _comment, _output = self._run_main(
+                    Path(tmp), meta, f"MALWARE_REVIEW_VERDICT: benign\nEVIDENCE: {evidence}\n"
+                )
+            self.assertEqual(payload["conclusion"], "success")
+            markers.append(payload["marker"])
+        self.assertNotEqual(markers[0], markers[1])
 
     def test_warn_only_allows_suspicious(self) -> None:
         meta = {"schema": 1, "truncated": False, "updates": [_update()], "ioc_hits": []}
