@@ -108,8 +108,8 @@ func TestDefaultDependabotKeepsUncoveredDirectories(t *testing.T) {
 
 func TestDefaultDependabotWritesOneActionsBlockPerKey(t *testing.T) {
 	updates := mergeDefaultDependabot(t, "actions",
-		"  - package-ecosystem: github-actions\n    directory: /extra\n    reviewers: [alice]\n"+
-			"  - package-ecosystem: github-actions\n    directory: /extra\n    reviewers: [alice]\n")
+		"  - package-ecosystem: github-actions\n    directory: /extra\n    labels: [extra]\n"+
+			"  - package-ecosystem: github-actions\n    directory: /extra\n    labels: [extra]\n")
 	actions := entriesFor(updates, "github-actions")
 	if len(actions) != 2 {
 		t.Fatalf("want the rendered block plus one /extra block, got %v", actions)
@@ -120,14 +120,17 @@ func TestDefaultDependabotWritesOneActionsBlockPerKey(t *testing.T) {
 			t.Fatalf("github-actions block not weekly: %v", u)
 		}
 	}
-	var extra []any
+	var extra int
 	for _, u := range actions {
 		if u["directory"] == "/extra" {
-			extra, _ = u["reviewers"].([]any)
+			extra++
+			if labels, ok := u["labels"].([]any); !ok || !slices.Equal(labels, []any{"extra"}) {
+				t.Fatalf("merged /extra block lost its labels: %v", u)
+			}
 		}
 	}
-	if !slices.Equal(extra, []any{"alice"}) {
-		t.Fatalf("merged /extra reviewers = %v, want [alice]", extra)
+	if extra != 1 {
+		t.Fatalf("merged /extra blocks = %d, want one", extra)
 	}
 }
 
@@ -426,7 +429,7 @@ func TestPostRenderForFileCarriesReferencedRegistries(t *testing.T) {
 
 // TestDefaultDependabotChiaGamingFixture renders the default for a repo with
 // npm, cargo and github-actions but no Python, exercising the marker rename,
-// per-block reviewers, registries pruning, and list-form directories.
+// registries pruning, and list-form directories.
 func TestDefaultDependabotChiaGamingFixture(t *testing.T) {
 	cfg := loadDependabotTestConfig(t)
 	templates, err := filepath.Abs(filepath.Join("..", "..", "templates"))
@@ -455,7 +458,6 @@ func TestDefaultDependabotChiaGamingFixture(t *testing.T) {
 			Directory   string         `yaml:"directory"`
 			Directories []string       `yaml:"directories"`
 			Schedule    map[string]any `yaml:"schedule"`
-			Reviewers   []string       `yaml:"reviewers"`
 		} `yaml:"updates"`
 	}
 	if err := yaml.Unmarshal(rendered, &doc); err != nil {
@@ -467,17 +469,9 @@ func TestDefaultDependabotChiaGamingFixture(t *testing.T) {
 	if got := renderedDependabotEcosystems(t, rendered); got != "github-actions,npm,cargo" {
 		t.Fatalf("ecosystems = %q, want github-actions,npm,cargo\n%s", got, rendered)
 	}
-	wantReviewers := map[string][]string{
-		"npm":            {"emlowe", "seeden"},
-		"cargo":          {"cameroncooper", "emlowe"},
-		"github-actions": {"cameroncooper", "emlowe"},
-	}
 	for _, update := range doc.Updates {
 		if update.Directory != "" || len(update.Directories) == 0 {
 			t.Fatalf("%s block does not use a directories list: %#v", update.Ecosystem, update)
-		}
-		if !slices.Equal(update.Reviewers, wantReviewers[update.Ecosystem]) {
-			t.Fatalf("%s reviewers = %v, want %v", update.Ecosystem, update.Reviewers, wantReviewers[update.Ecosystem])
 		}
 		if update.Ecosystem == "github-actions" && update.Schedule["interval"] != "weekly" {
 			t.Fatalf("github-actions interval = %v, want weekly", update.Schedule["interval"])

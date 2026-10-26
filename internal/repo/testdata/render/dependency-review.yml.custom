@@ -37,6 +37,7 @@ jobs:
     with:
       # Recursively scan every lockfile in the PR, including transitive dependencies.
       scan-args: |-
+        --allow-no-lockfiles
         -r
         ./
       # The reusable workflow declares actions: read, contents: read and

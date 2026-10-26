@@ -27,7 +27,6 @@ updates:
       - dependencies
       - go
       - "Changed"
-    reviewers: "{{ .DEPENDABOT_GOMOD_REVIEWERS }}"
     # {{- if eq .DEPENDABOT_GOMOD_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -54,7 +53,6 @@ updates:
       - dependencies
       - python
       - "Changed"
-    reviewers: "{{ .DEPENDABOT_PIP_REVIEWERS }}"
     # {{- if eq .DEPENDABOT_PIP_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -77,9 +75,9 @@ updates:
       - dependencies
       - github_actions
       - "Changed"
-    reviewers: "{{ .DEPENDABOT_ACTIONS_REVIEWERS }}"
     exclude-paths:
       - ".github/workflows/dependency-artifact-review.yml"
+      - ".github/workflows/dependency-review.yml"
     # {{- if eq .DEPENDABOT_ACTIONS_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -102,7 +100,6 @@ updates:
       - dependencies
       - javascript
       - "Changed"
-    reviewers: "{{ .DEPENDABOT_NPM_REVIEWERS }}"
     # {{- if eq .DEPENDABOT_NPM_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -125,7 +122,6 @@ updates:
       - dependencies
       - rust
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_CARGO_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -144,7 +140,6 @@ updates:
       default-days: 7
     open-pull-requests-limit: "{{ .DEPENDABOT_SWIFT_PULL_REQUEST_LIMIT }}"
     rebase-strategy: "{{ .DEPENDABOT_SWIFT_REBASE_STRATEGY }}"
-    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_SWIFT_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -167,7 +162,6 @@ updates:
       - dependencies
       - docker
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_DOCKER_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -190,7 +184,6 @@ updates:
       - dependencies
       - terraform
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_TERRAFORM_GROUP_UPDATES "1" }}
     groups:
       global:
@@ -213,7 +206,6 @@ updates:
       - dependencies
       - dotnet
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
     # {{- if eq .DEPENDABOT_NUGET_GROUP_UPDATES "1" }}
     groups:
       global:

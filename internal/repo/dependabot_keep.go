@@ -338,9 +338,9 @@ func setDirectories(entry *yaml.Node, dirs []string) {
 	setMapValue(entry, "directories", stringSeq(dirs))
 }
 
-// setActionsDefaults keeps a github-actions entry on a weekly interval. Its
-// reviewers are left alone: the rendered template sets them and merged entries
-// keep their own.
+// setActionsDefaults keeps a github-actions entry on a weekly interval. Merged
+// entries keep their own settings, including any reviewers an existing file
+// lists.
 func setActionsDefaults(entry *yaml.Node) {
 	schedule := mapValue(entry, "schedule")
 	if schedule == nil || schedule.Kind != yaml.MappingNode {

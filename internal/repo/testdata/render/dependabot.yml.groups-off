@@ -23,7 +23,6 @@ updates:
       - dependencies
       - go
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
   - package-ecosystem: "pip"
     registries:
       - chia-pypi
@@ -41,7 +40,6 @@ updates:
       - dependencies
       - python
       - "Changed"
-    reviewers: ["emlowe"]
   - package-ecosystem: "github-actions"
     directories: ["/", "/.github/actions/*"]
     schedule:
@@ -55,9 +53,9 @@ updates:
       - dependencies
       - github_actions
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
     exclude-paths:
       - ".github/workflows/dependency-artifact-review.yml"
+      - ".github/workflows/dependency-review.yml"
   - package-ecosystem: "npm"
     directories: ["/"]
     schedule:
@@ -71,7 +69,6 @@ updates:
       - dependencies
       - javascript
       - "Changed"
-    reviewers: ["emlowe", "seeden"]
   - package-ecosystem: cargo
     directories: ["/"]
     schedule:
@@ -85,7 +82,6 @@ updates:
       - dependencies
       - rust
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
   - package-ecosystem: swift
     directories: ["/"]
     schedule:
@@ -95,7 +91,6 @@ updates:
       default-days: 7
     open-pull-requests-limit: 10
     rebase-strategy: auto
-    reviewers: ["cameroncooper", "emlowe"]
   - package-ecosystem: docker
     directories: ["/"]
     schedule:
@@ -109,7 +104,6 @@ updates:
       - dependencies
       - docker
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
   - package-ecosystem: terraform
     directories: ["/"]
     schedule:
@@ -123,7 +117,6 @@ updates:
       - dependencies
       - terraform
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
   - package-ecosystem: nuget
     directories: ["/"]
     schedule:
@@ -137,4 +130,3 @@ updates:
       - dependencies
       - dotnet
       - "Changed"
-    reviewers: ["cameroncooper", "emlowe"]
