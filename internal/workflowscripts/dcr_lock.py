@@ -1,24 +1,15 @@
 """Inspect the PR diff for changed file paths and literal review changes.
 
 The diff text is untrusted data and is never executed. Paths come from the
-`diff --git` headers, and the same module owns the literal diff checks, the
-diff bundle and its IOC scan.
+`diff --git` headers, and the same module owns the literal diff checks.
 """
 
 from __future__ import annotations
 
-import json
-import os
 import re
 import shlex
-import subprocess
 from collections.abc import Sequence
-from pathlib import Path
 
-from dcr_sources import FetchError
-
-MAX_DIFF_BYTES = 2 * 1024 * 1024
-BIDI_CONTROL = re.compile(r"[\u202a-\u202e\u2066-\u2069]")
 URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+")
 SHA256_VALUE = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 NAME_CHARS = r"A-Za-z0-9._~-"
@@ -109,64 +100,3 @@ def diff_lines(text: str) -> tuple[list[str], list[str]]:
         [line[1:] for line in lines if line.startswith("+") and not line.startswith("+++")],
         [line[1:] for line in lines if line.startswith("-") and not line.startswith("---")],
     )
-
-
-def write_diff(out_dir: Path) -> bool:
-    """Write changes.diff and report whether the 2 MiB cap truncated it."""
-    (out_dir / "old").mkdir(exist_ok=True)
-    (out_dir / "new").mkdir(exist_ok=True)
-    try:
-        result = subprocess.run(["diff", "-ruNa", "old", "new"], cwd=out_dir, check=False, capture_output=True)
-    except OSError as exc:
-        raise FetchError(f"diff could not run: {exc}") from exc
-    if result.returncode not in {0, 1}:
-        stderr = result.stderr
-        detail = stderr if isinstance(stderr, str) else stderr.decode("utf-8", "replace")
-        raise FetchError(f"diff exited {result.returncode}: {detail.strip()[:500]}")
-    data = result.stdout
-    truncated = len(data) > MAX_DIFF_BYTES
-    if truncated:
-        data = data[:MAX_DIFF_BYTES] + b"\n[changes.diff truncated at 2 MiB]\n"
-    (out_dir / "changes.diff").write_text(data.decode("utf-8", "replace"), encoding="utf-8")
-    return truncated
-
-
-def write_file_list(out_dir: Path) -> list[str]:
-    """Write and return every artifact path except the bundle's own outputs."""
-    paths = sorted(path.relative_to(out_dir).as_posix() for path in out_dir.rglob("*") if path.is_file())
-    paths = [path for path in paths if path not in {"meta.json", "changes.diff", "files.txt"}]
-    (out_dir / "files.txt").write_text("\n".join(paths) + ("\n" if paths else ""), encoding="utf-8")
-    return paths
-
-
-def ioc_patterns() -> list[tuple[str, re.Pattern[str]]]:
-    """The configured IOC regexes, or a failure when the configuration is not usable."""
-    raw = os.environ.get("DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS", "")
-    try:
-        patterns = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise SystemExit("DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS is not valid JSON") from exc
-    if not isinstance(patterns, list) or not patterns or not all(isinstance(p, str) and p for p in patterns):
-        raise SystemExit("DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS must be a non-empty list of non-empty strings")
-    try:
-        return [(pattern, re.compile(pattern)) for pattern in patterns]
-    except re.error as exc:
-        raise SystemExit("an IOC pattern is not a valid regex") from exc
-
-
-def scan_diff(path: Path, patterns: Sequence[tuple[str, re.Pattern[str]]]) -> list[dict[str, object]]:
-    """IOC and bidi-control hits on the added lines of a diff file."""
-    hits: list[dict[str, object]] = []
-    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
-    for number, line in enumerate(text.splitlines(), 1):
-        if not line.startswith("+") or line.startswith("+++"):
-            continue
-        body = line[1:]
-        hits.extend(
-            {"kind": "ioc", "pattern": source, "line": number, "match": match.group(0)[:80]}
-            for source, pattern in patterns
-            if (match := pattern.search(body)) is not None
-        )
-        if BIDI_CONTROL.search(body) is not None:
-            hits.append({"kind": "bidi", "pattern": "bidi-control", "line": number})
-    return hits

@@ -197,7 +197,7 @@ class LiteralPresenceTest(unittest.TestCase):
 
     def test_header_lines_do_not_count(self) -> None:
         update = _update()
-        added, removed = dcr_fetch._diff_lines("--- left-pad@1.0.1\n+++ left-pad@1.0.1\n--- left-pad@1.0.0\n")
+        added, removed = dcr_fetch.diff_lines("--- left-pad@1.0.1\n+++ left-pad@1.0.1\n--- left-pad@1.0.0\n")
         with tempfile.TemporaryDirectory() as tmp:
             result = _process(update, Path(tmp), added, removed)
             self.assertEqual(result.status, "unverified")
@@ -505,7 +505,7 @@ class SafeExtractionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / "package.zip"
             archive.write_bytes(payload)
-            dcr_fetch._extract(archive, Path(tmp) / "out")
+            dcr_fetch.extract(archive, Path(tmp) / "out")
 
     def test_zip_parent_traversal_is_rejected(self) -> None:
         with self.assertRaises(FetchError):
@@ -535,7 +535,7 @@ class SafeExtractionTest(unittest.TestCase):
             archive = Path(tmp) / "package.tgz"
             archive.write_bytes(buffer.getvalue())
             with self.assertRaises(FetchError):
-                dcr_fetch._extract(archive, Path(tmp) / "out")
+                dcr_fetch.extract(archive, Path(tmp) / "out")
 
     def test_file_count_cap(self) -> None:
         payload = _zip_bytes({f"file-{index}": b"x" for index in range(3)})
@@ -552,7 +552,7 @@ class SafeExtractionTest(unittest.TestCase):
             archive = Path(tmp) / "package.tar"
             archive.write_bytes(_tar_bytes({"file": b"x"}))
             with self.assertRaises(FetchError):
-                dcr_fetch._extract(archive, Path(tmp) / "out", "zip")
+                dcr_fetch.extract(archive, Path(tmp) / "out", "zip")
 
 
 class DiffAndIocTest(unittest.TestCase):
@@ -564,7 +564,7 @@ class DiffAndIocTest(unittest.TestCase):
                 encoding="utf-8",
             )
             patterns = [("axios", re.compile(r"axios@1\.14\.1"))]
-            hits = dcr_fetch._scan_diff(path, patterns)
+            hits = dcr_fetch.scan_diff(path, patterns)
             self.assertEqual([hit["kind"] for hit in hits], ["ioc", "bidi"])
 
     def test_file_list_keeps_artifact_files_with_output_names(self) -> None:
@@ -575,7 +575,7 @@ class DiffAndIocTest(unittest.TestCase):
             (out / "new").mkdir()
             (out / "new" / "files.txt").write_text("package file", encoding="utf-8")
             (out / "meta.json").write_text("{}", encoding="utf-8")
-            paths = dcr_fetch._write_file_list(out)
+            paths = dcr_fetch.write_file_list(out)
             self.assertEqual(paths, ["new/files.txt", "old/pkg/meta.json"])
 
     def test_empty_ioc_list_is_an_error(self) -> None:
@@ -583,25 +583,25 @@ class DiffAndIocTest(unittest.TestCase):
             mock.patch.dict(os.environ, {"DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": "[]"}),
             self.assertRaises(SystemExit),
         ):
-            dcr_fetch._ioc_patterns()
+            dcr_fetch.ioc_patterns()
 
     def test_invalid_ioc_regex_is_an_error(self) -> None:
         with (
             mock.patch.dict(os.environ, {"DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["("]'}),
             self.assertRaises(SystemExit),
         ):
-            dcr_fetch._ioc_patterns()
+            dcr_fetch.ioc_patterns()
 
     def test_diff_is_written_and_truncated_at_the_cap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             with mock.patch.object(dcr_sources.subprocess, "run", side_effect=_diff_runner(b"+small\n")):
-                self.assertFalse(dcr_fetch._write_diff(out))
+                self.assertFalse(dcr_fetch.write_diff(out))
             self.assertEqual((out / "changes.diff").read_text(encoding="utf-8"), "+small\n")
 
             big = b"+" + b"x" * (dcr_fetch.MAX_DIFF_BYTES + 1)
             with mock.patch.object(dcr_sources.subprocess, "run", side_effect=_diff_runner(big)):
-                self.assertTrue(dcr_fetch._write_diff(out))
+                self.assertTrue(dcr_fetch.write_diff(out))
             self.assertIn("truncated", (out / "changes.diff").read_text(encoding="utf-8"))
 
     def test_diff_failure_is_a_fetch_failure(self) -> None:
@@ -614,7 +614,23 @@ class DiffAndIocTest(unittest.TestCase):
             ),
             self.assertRaises(FetchError),
         ):
-            dcr_fetch._write_diff(Path(tmp))
+            dcr_fetch.write_diff(Path(tmp))
+
+
+class WriteDiffTest(unittest.TestCase):
+    def test_nul_byte_file_content_is_scanned_as_text(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["EVIL_MARKER"]'}),
+        ):
+            out = Path(tmp)
+            (out / "new" / "pkg").mkdir(parents=True)
+            (out / "new" / "pkg" / "x.js").write_bytes(b"safe\x00line\nEVIL_MARKER\n")
+            self.assertFalse(dcr_fetch.write_diff(out))
+            text = (out / "changes.diff").read_text(encoding="utf-8")
+            self.assertNotIn("Binary files", text)
+            hits = dcr_fetch.scan_diff(out / "changes.diff", dcr_fetch.ioc_patterns())
+            self.assertEqual([hit["kind"] for hit in hits], ["ioc"])
 
 
 class ParseUpdatesTest(unittest.TestCase):
@@ -663,8 +679,8 @@ class FileScopeTest(unittest.TestCase):
         }
         with (
             mock.patch.dict(os.environ, env),
-            mock.patch.object(dcr_fetch, "_write_diff", return_value=False),
-            mock.patch.object(dcr_fetch, "_scan_diff", return_value=[]),
+            mock.patch.object(dcr_fetch, "write_diff", return_value=False),
+            mock.patch.object(dcr_fetch, "scan_diff", return_value=[]),
             mock.patch.object(dcr_sources.subprocess, "run", side_effect=runner),
         ):
             self.assertEqual(dcr_fetch.main(), 0)
@@ -824,10 +840,10 @@ class MainTest(unittest.TestCase):
                 mock.patch.dict(os.environ, env),
                 mock.patch.object(
                     dcr_fetch,
-                    "_write_diff",
+                    "write_diff",
                     return_value=False,
                 ),
-                mock.patch.object(dcr_fetch, "_scan_diff", return_value=[]),
+                mock.patch.object(dcr_fetch, "scan_diff", return_value=[]),
             ):
                 self.assertEqual(dcr_fetch.main(), 0)
             meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
@@ -868,8 +884,8 @@ class MainTest(unittest.TestCase):
             }
             with (
                 mock.patch.dict(os.environ, env),
-                mock.patch.object(dcr_fetch, "_write_diff", return_value=False),
-                mock.patch.object(dcr_fetch, "_scan_diff", return_value=[]),
+                mock.patch.object(dcr_fetch, "write_diff", return_value=False),
+                mock.patch.object(dcr_fetch, "scan_diff", return_value=[]),
             ):
                 self.assertEqual(dcr_fetch.main(), 0)
             meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
@@ -934,8 +950,8 @@ class MainTest(unittest.TestCase):
             }
             with (
                 mock.patch.dict(os.environ, env),
-                mock.patch.object(dcr_fetch, "_write_diff", return_value=False),
-                mock.patch.object(dcr_fetch, "_scan_diff", return_value=[]),
+                mock.patch.object(dcr_fetch, "write_diff", return_value=False),
+                mock.patch.object(dcr_fetch, "scan_diff", return_value=[]),
                 mock.patch.object(
                     dcr_sources.subprocess,
                     "run",
@@ -977,8 +993,8 @@ class MainTest(unittest.TestCase):
                 }
                 with (
                     mock.patch.dict(os.environ, env),
-                    mock.patch.object(dcr_fetch, "_write_diff", return_value=False),
-                    mock.patch.object(dcr_fetch, "_scan_diff", return_value=[]),
+                    mock.patch.object(dcr_fetch, "write_diff", return_value=False),
+                    mock.patch.object(dcr_fetch, "scan_diff", return_value=[]),
                 ):
                     self.assertEqual(dcr_fetch.main(), 0)
                 meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
