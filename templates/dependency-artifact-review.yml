@@ -1,11 +1,8 @@
 # This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back
-# inline with the upstream template, unless you add !dependency-artifact-review to the repo's managed-files property
 # {{- if .ADOPTION_MARKER }}
 # {{ .ADOPTION_MARKER }}
 # {{- end }}
-# Opt-in review of published artifacts for npm, PyPI, Go modules and SHA-pinned Actions.
 name: Dependency Artifact Review
-
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -19,25 +16,17 @@ on:
         description: "fetch-metadata updated-dependencies-json for the PR"
         required: false
         type: string
-
 concurrency:
   group: ${{`{{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number || github.event.pull_request.number }}`}}
   cancel-in-progress: true
-
-permissions:
-  contents: read
-
 jobs:
-  prepare:
+  review:
     if: github.repository_owner == 'Chia-Network' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'))
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: read
-    outputs:
-      pr_number: ${{`{{ steps.pr.outputs.number }}`}}
-      reviewable: ${{`{{ steps.fetch.outputs.reviewable }}`}}
+    outputs: {pr_number: "${{`{{ steps.pr.outputs.number }}`}}"}
     steps:
       - name: Checkout trusted review scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -48,8 +37,7 @@ jobs:
             .github/scripts/
           sparse-checkout-cone-mode: false
           persist-credentials: false
-
-      - name: Resolve and validate target PR
+      - name: Resolve target PR and collect diff
         id: pr
         env:
           GH_TOKEN: ${{`{{ github.token }}`}}
@@ -63,79 +51,32 @@ jobs:
             echo "PR author is not dependabot[bot]." >&2
             exit 1
           fi
-          head_ref="$(gh pr view "$number" --json headRefName --jq '.headRefName')"
-          [[ -n "$head_ref" ]] || { echo "The PR has no head branch." >&2; exit 1; }
           echo "number=${number}" >> "$GITHUB_OUTPUT"
-          echo "head_ref=${head_ref}" >> "$GITHUB_OUTPUT"
-
+          mkdir -p "${RUNNER_TEMP}/pr-diff"
+          gh pr diff "$number" > "${RUNNER_TEMP}/pr-diff/pr.diff"
       - name: Fetch dependency metadata
         id: metadata
         if: github.event_name == 'pull_request'
         uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2
         with:
           github-token: ${{`{{ github.token }}`}}
-
-      - name: Collect PR diff
-        env:
-          GH_TOKEN: ${{`{{ github.token }}`}}
-          PR_NUMBER: ${{`{{ steps.pr.outputs.number }}`}}
-        run: |
-          set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/pr-diff"
-          gh pr diff "$PR_NUMBER" > "${RUNNER_TEMP}/pr-diff/pr.diff"
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" --jq '.[] | [.filename, (.previous_filename // empty)] | .[]' > "${RUNNER_TEMP}/pr-diff/files.txt"
-
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-
       - name: Fetch published artifacts
         id: fetch
         env:
           UPDATED_DEPENDENCIES_JSON: >-
             ${{`{{ github.event_name == 'workflow_dispatch' && github.event.inputs.updated_dependencies_json || steps.metadata.outputs['updated-dependencies-json'] }}`}}
           PR_DIFF_PATH: ${{`{{ runner.temp }}`}}/pr-diff/pr.diff
-          PR_FILES_PATH: ${{`{{ runner.temp }}`}}/pr-diff/files.txt
           DCR_OUT: ${{`{{ runner.temp }}`}}/dcr-review
-          DCR_HEAD_REF: ${{`{{ github.event.pull_request.head.ref || steps.pr.outputs.head_ref }}`}}
         run: |
           set -euo pipefail
           python3 -I .trusted-dcr-scripts/.github/scripts/dcr_fetch.py
           cp .trusted-dcr-scripts/.github/scripts/dcr_prompt.md "${DCR_OUT}/dcr_prompt.md"
-
-      - name: Upload review inputs
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: dcr-review-input-${{`{{ github.run_id }}`}}
-          retention-days: 1
-          if-no-files-found: error
-          include-hidden-files: true
-          path: ${{`{{ runner.temp }}`}}/dcr-review
-
-      - name: Upload review metadata
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: dcr-verdict-meta-${{`{{ github.run_id }}`}}
-          retention-days: 1
-          if-no-files-found: error
-          path: ${{`{{ runner.temp }}`}}/dcr-review/meta.json
-
-  agent:
-    needs: prepare
-    if: ${{`{{ needs.prepare.outputs.reviewable == 'true' }}`}}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: Download review inputs
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: dcr-review-input-${{`{{ github.run_id }}`}}
-          path: dcr-review
-
       - name: Install Cursor CLI
+        if: steps.fetch.outputs.reviewable == 'true'
         env:
           CURSOR_CLI_VERSION: "{{ .CURSOR_CLI_VERSION }}"
           CURSOR_CLI_SHA256: "{{ .CURSOR_CLI_SHA256 }}"
@@ -149,9 +90,8 @@ jobs:
           tar --strip-components=1 -xzf "$tarball" -C "$install_dir"
           ln -s "$install_dir/cursor-agent" "$install_dir/agent"
           printf '%s\n' "$install_dir" >> "$GITHUB_PATH"
-
       - name: Run Cursor agent
-        timeout-minutes: 10
+        if: steps.fetch.outputs.reviewable == 'true'
         env:
           CURSOR_API_KEY: ${{`{{ secrets.CURSOR_API_KEY }}`}}
           GITHUB_TOKEN: ""
@@ -161,15 +101,15 @@ jobs:
           ACTIONS_RUNTIME_TOKEN: ""
         run: |
           set -euo pipefail
-          out="${RUNNER_TEMP}/dcr-agent"
-          mkdir "$out"
+          out="${RUNNER_TEMP}/dcr-review"
+          mkdir -p "$out"
           if [ -z "$CURSOR_API_KEY" ]; then
             echo "CURSOR_API_KEY is not set; the review was skipped." >"${out}/agent_output.txt"
             exit 0
           fi
           stream_file="$(mktemp)"
           trap 'rm -f "$stream_file"' EXIT
-          (cd dcr-review && agent -f --mode ask -p --output-format stream-json < dcr_prompt.md) > "$stream_file"
+          (cd "$out" && agent -f --mode ask -p --output-format stream-json < dcr_prompt.md) > "$stream_file"
           jq -rRs '
             [split("\n")[] | fromjson? | select(type == "object")]
             | (map(select(.type == "result") | .result) | last // "") as $result
@@ -178,22 +118,19 @@ jobs:
                     | map(select(length > 0)) | last // "")
               end
           ' "$stream_file" > "${out}/agent_output.txt"
-
-      - name: Upload agent output
+      - name: Upload review results
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: dcr-verdict-agent-${{`{{ github.run_id }}`}}
+          name: dcr-review-${{`{{ github.run_id }}`}}
           retention-days: 1
           if-no-files-found: error
-          path: ${{`{{ runner.temp }}`}}/dcr-agent/agent_output.txt
-
+          path: |
+            ${{`{{ runner.temp }}`}}/dcr-review/meta.json
+            ${{`{{ runner.temp }}`}}/dcr-review/agent_output.txt
   dependency-artifact-review:
-    needs:
-      - prepare
-      - agent
-    if: ${{`{{ always() && !cancelled() && needs.prepare.result != 'skipped' }}`}}
+    needs: review
+    if: ${{`{{ always() && !cancelled() && needs.review.result != 'skipped' }}`}}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
@@ -211,22 +148,13 @@ jobs:
             .github/scripts/
           sparse-checkout-cone-mode: false
           persist-credentials: false
-
-      - name: Set up Python
-        if: ${{`{{ always() }}`}}
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.12"
-
-      - name: Download verdict inputs
+      - name: Download review results
         if: ${{`{{ always() }}`}}
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: dcr-verdict-*
-          merge-multiple: true
+          name: dcr-review-${{`{{ github.run_id }}`}}
           path: dcr-output
-
       - name: Decide and compose comment
         if: ${{`{{ always() }}`}}
         id: verdict
@@ -234,48 +162,29 @@ jobs:
           DCR_META: ${{`{{ github.workspace }}`}}/dcr-output/meta.json
           DCR_AGENT_OUTPUT: ${{`{{ github.workspace }}`}}/dcr-output/agent_output.txt
           DCR_COMMENT: ${{`{{ github.workspace }}`}}/dcr-comment.md
-          DCR_VERDICT_JSON: ${{`{{ github.workspace }}`}}/dcr-verdict.json
         run: |
           set -euo pipefail
           python3 -I .trusted-dcr-scripts/.github/scripts/dcr_verdict.py
-
       - name: Post or update PR comment
         if: ${{`{{ always() }}`}}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
-          PR_NUMBER: ${{`{{ needs.prepare.outputs.pr_number || github.event.pull_request.number || github.event.inputs.pr_number }}`}}
+          PR_NUMBER: ${{`{{ needs.review.outputs.pr_number || github.event.pull_request.number || github.event.inputs.pr_number }}`}}
           COMMENT_PATH: ${{`{{ github.workspace }}`}}/dcr-comment.md
-          REVIEW_MARKER: ${{`{{ steps.verdict.outputs.marker }}`}}
         with:
           script: |
             const fs = require('fs');
             const body = fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
-            const marker = process.env.REVIEW_MARKER || '';
             const number = Number(process.env.PR_NUMBER || '0');
             if (!number) return core.setFailed('No PR number was resolved.');
             const { owner, repo } = context.repo;
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number: number,
-              per_page: 100,
-            });
+            const marker = '<!-- dcr-artifact-review -->';
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 });
             const ours = comments
-              .filter(
-                (comment) =>
-                  comment.user?.type === 'Bot' &&
-                  comment.user?.login === 'github-actions[bot]' &&
-                  comment.body?.includes('<!-- dcr-artifact-review sha256:')
-              )
-              .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-            if (marker && ours.some((comment) => comment.body.includes(marker))) {
-              core.info('This artifact review is already recorded.');
-              return;
-            }
-            const issue = { owner, repo, issue_number: number, body };
-            if (!ours.length) return github.rest.issues.createComment(issue);
-            await github.rest.issues.updateComment({ ...issue, comment_id: ours.at(-1).id });
-
+              .filter((c) => c.user?.type === 'Bot' && c.user?.login === 'github-actions[bot]' && c.body?.includes(marker))
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            if (ours.length) return github.rest.issues.updateComment({ owner, repo, comment_id: ours[0].id, body });
+            return github.rest.issues.createComment({ owner, repo, issue_number: number, body });
       - name: Set the check result
         if: ${{`{{ always() && steps.verdict.outputs.conclusion != 'success' }}`}}
         run: |

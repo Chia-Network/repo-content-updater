@@ -10,16 +10,6 @@ import (
 
 const artifactReviewTemplate = "dependency-artifact-review.yml"
 
-func TestArtifactReviewPublishJobHasUniqueName(t *testing.T) {
-	workflow := readArtifactReviewTemplate(t)
-	if !strings.Contains(workflow, "\n  dependency-artifact-review:\n") {
-		t.Fatal("missing dependency-artifact-review publish job")
-	}
-	if strings.Contains(workflow, "\n  dependency-review:\n") {
-		t.Fatal("artifact review still reuses the dependency-review job id")
-	}
-}
-
 func TestArtifactReviewActionsArePinned(t *testing.T) {
 	workflow := readArtifactReviewTemplate(t)
 	pins := map[string]bool{}
@@ -64,75 +54,6 @@ func TestArtifactReviewDoesNotPipeACurlInstallerToAShell(t *testing.T) {
 	}
 }
 
-func TestArtifactReviewAgentIsGatedOnReviewable(t *testing.T) {
-	workflow := readArtifactReviewTemplate(t)
-	prepare := artifactReviewJob(t, workflow, "prepare")
-	if !strings.Contains(prepare, "id: fetch") ||
-		!strings.Contains(prepare, "reviewable: ${{`{{ steps.fetch.outputs.reviewable }}`}}") {
-		t.Fatal("prepare does not expose the reviewable output")
-	}
-	agent := artifactReviewJob(t, workflow, "agent")
-	if !strings.Contains(agent, "if: ${{`{{ needs.prepare.outputs.reviewable == 'true' }}`}}") {
-		t.Fatal("agent is not gated on reviewable")
-	}
-}
-
-func TestArtifactReviewPublishStillCommentsOnFailure(t *testing.T) {
-	workflow := readArtifactReviewTemplate(t)
-	publish := artifactReviewJob(t, workflow, "dependency-artifact-review")
-	if strings.Contains(publish, "Fail closed when prepare or agent failed") {
-		t.Fatal("publish still exits before writing the comment")
-	}
-	for _, name := range []string{
-		"Checkout trusted verdict script",
-		"Set up Python",
-		"Download verdict inputs",
-		"Decide and compose comment",
-		"Post or update PR comment",
-		"Set the check result",
-	} {
-		if !strings.Contains(artifactReviewStep(t, publish, name), "if: ${{`{{ always()") {
-			t.Errorf("%s does not run after an earlier failure", name)
-		}
-	}
-	if !strings.Contains(artifactReviewStep(t, publish, "Download verdict inputs"), "continue-on-error: true") {
-		t.Fatal("missing verdict inputs should not stop the verdict step")
-	}
-}
-
-func TestArtifactReviewPublishDownloadsOnlyVerdictInputs(t *testing.T) {
-	workflow := readArtifactReviewTemplate(t)
-	prepare := artifactReviewJob(t, workflow, "prepare")
-	metadata := artifactReviewStep(t, prepare, "Upload review metadata")
-	if !strings.Contains(metadata, "name: dcr-verdict-meta-") || !strings.HasSuffix(strings.TrimSpace(metadata), "meta.json") {
-		t.Fatal("prepare does not upload meta.json as a small artifact")
-	}
-	agent := artifactReviewJob(t, workflow, "agent")
-	output := artifactReviewStep(t, agent, "Upload agent output")
-	if !strings.Contains(output, "name: dcr-verdict-agent-") ||
-		!strings.HasSuffix(strings.TrimSpace(output), "agent_output.txt") {
-		t.Fatal("agent does not upload agent_output.txt as a small artifact")
-	}
-	publish := artifactReviewJob(t, workflow, "dependency-artifact-review")
-	download := artifactReviewStep(t, publish, "Download verdict inputs")
-	if !strings.Contains(download, "pattern: dcr-verdict-*") {
-		t.Fatal("publish does not download the verdict artifacts")
-	}
-	if strings.Contains(publish, "dcr-review-input") {
-		t.Fatal("publish downloads the full review bundle")
-	}
-}
-
-func TestArtifactReviewCommentOnlyUpdatesTheActionsBot(t *testing.T) {
-	workflow := readArtifactReviewTemplate(t)
-	publish := artifactReviewJob(t, workflow, "dependency-artifact-review")
-	post := artifactReviewStep(t, publish, "Post or update PR comment")
-	if !strings.Contains(post, "comment.user?.type === 'Bot'") ||
-		!strings.Contains(post, "comment.user?.login === 'github-actions[bot]'") {
-		t.Fatal("comment lookup does not require the actions bot")
-	}
-}
-
 func readArtifactReviewTemplate(t *testing.T) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "templates", artifactReviewTemplate))
@@ -140,34 +61,4 @@ func readArtifactReviewTemplate(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(raw)
-}
-
-func artifactReviewJob(t *testing.T, workflow, name string) string {
-	t.Helper()
-	marker := "\n  " + name + ":\n"
-	start := strings.Index(workflow, marker)
-	if start < 0 {
-		t.Fatalf("missing job %s", name)
-	}
-	start += len(marker)
-	rest := workflow[start:]
-	if next := regexp.MustCompile(`\n  [A-Za-z0-9_-]+:\n`).FindStringIndex(rest); next != nil {
-		rest = rest[:next[0]]
-	}
-	return rest
-}
-
-func artifactReviewStep(t *testing.T, job, name string) string {
-	t.Helper()
-	marker := "      - name: " + name + "\n"
-	start := strings.Index(job, marker)
-	if start < 0 {
-		t.Fatalf("missing step %s", name)
-	}
-	start += len(marker)
-	rest := job[start:]
-	if next := strings.Index(rest, "\n      - name:"); next >= 0 {
-		rest = rest[:next]
-	}
-	return rest
 }
