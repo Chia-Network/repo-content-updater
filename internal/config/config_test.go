@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -75,7 +76,7 @@ func TestAdoptionMarkersDoNotMatchOtherTemplates(t *testing.T) {
 				if other.Name == tt.file.Name {
 					continue
 				}
-				raw, err := os.ReadFile(filepath.Join("../../templates", other.TemplateName))
+				raw, err := readTemplateForTest(cfg, other.TemplateName)
 				if err != nil {
 					t.Fatalf("read template %s for %s: %v", other.TemplateName, other.Name, err)
 				}
@@ -85,6 +86,46 @@ func TestAdoptionMarkersDoNotMatchOtherTemplates(t *testing.T) {
 			}
 		})
 	}
+}
+
+// readTemplateForTest reads the template, falling back to the canonical source
+// under internal/workflowscripts when the template is a generated companion.
+func readTemplateForTest(cfg *config.Config, templateName string) ([]byte, error) {
+	raw, err := os.ReadFile(filepath.Join("../../templates", templateName))
+	if err == nil {
+		return raw, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	canonical, ok := canonicalSourceForTemplate(cfg, templateName)
+	if !ok {
+		return nil, fmt.Errorf("template %s does not exist and has no canonical source", templateName)
+	}
+	raw, err = os.ReadFile(filepath.Join("../../internal/workflowscripts", canonical))
+	if err != nil {
+		return nil, fmt.Errorf("read canonical source %s: %w", canonical, err)
+	}
+	return raw, nil
+}
+
+// canonicalSourceForTemplate applies the same mapping as
+// sync_canonical_to_template: generated companions come from .github/scripts/
+// entries, with the basename of repo_path as the canonical filename.
+func canonicalSourceForTemplate(cfg *config.Config, templateName string) (string, bool) {
+	const canonicalOverride = "github_scripts_init.py"
+	for i := range cfg.Files {
+		file := &cfg.Files[i]
+		if file.TemplateName != templateName || !strings.HasPrefix(file.RepoPath, ".github/scripts/") {
+			continue
+		}
+		if templateName == "github-scripts-init.py" {
+			return canonicalOverride, true
+		}
+		return filepath.Base(file.RepoPath), true
+	}
+	return "", false
 }
 
 func TestDependencyArtifactReviewIsOptInOnly(t *testing.T) {

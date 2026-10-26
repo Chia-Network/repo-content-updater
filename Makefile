@@ -67,8 +67,8 @@ test-race:    ARGS=-race         ## Run tests with race detector
 $(TEST_TARGETS): NAME=$(MAKECMDGOALS:test-%=%)
 $(TEST_TARGETS): test
 check test tests: fmt lint vet staticcheck errcheck vulncheck; $(info $(M) running $(NAME:%=% )tests…) @ ## Run tests
-	$Q $(GO) test -timeout $(TIMEOUT)s $(ARGS) $(TESTPKGS)
 	$Q python3 internal/workflowscripts/sync_malware_formatter_templates.py
+	$Q $(GO) test -timeout $(TIMEOUT)s $(ARGS) $(TESTPKGS)
 	$Q python3 -m unittest discover -s internal/workflowscripts -p 'test_*.py'
 	$Q node --test internal/workflowscripts/*.test.js
 
