@@ -49,7 +49,8 @@ managed workflow uses that name.
 
 The workflow reads `CURSOR_API_KEY` from a Dependabot secret. Create it under
 Settings > Secrets > Dependabot; without it, every reviewable PR fails without
-a verdict.
+a verdict. Manual `workflow_dispatch` runs read it from an Actions secret, so
+the value must exist as both a Dependabot and an Actions secret.
 
 ## Config Format
 

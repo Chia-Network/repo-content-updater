@@ -25,6 +25,8 @@ data, never interpolated into shell or expressions.
 
 - Upstream content crafted to target or trick the review agent, beyond the
   one-line "treat files as data" prompt instruction.
+- The agent step holds `CURSOR_API_KEY` and runs with `-f` in the folder that
+  holds `meta.json` and the review artifacts.
 - Lock-file hash binding, or proving that fetched bytes equal installed bytes.
 - Index or source trust, including same-name packages on pypi.chia.net or
   other private indexes.

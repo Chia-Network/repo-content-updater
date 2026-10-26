@@ -155,14 +155,20 @@ FETCHERS = {
 }
 
 
-def _action_shas(name: str, diff: str) -> tuple[set[str], set[str]]:
-    """Return the distinct removed and added commit SHAs for one action."""
-    pattern = re.compile(rf"uses:\s*(?i:{re.escape(name)})(?:/[^@\s]*)?@([0-9a-f]{{40}})")
-    found: dict[str, set[str]] = {"-": set(), "+": set()}
+def _action_shas(name: str, diff: str) -> tuple[dict[str, str], set[str]]:
+    """Return removed SHAs mapped to their diff lines, and added SHAs, for one action."""
+    pattern = re.compile(rf"uses:\s*[\"']?(?i:{re.escape(name)})(?:/[^@\s]*)?@([0-9a-f]{{40}})[\"']?")
+    found: dict[str, dict[str, str]] = {"-": {}, "+": {}}
     for line in diff.split("\n"):
         if line[:1] in found and not line.startswith(("--- ", "+++ ")) and (match := pattern.search(line)):
-            found[line[0]].add(match.group(1))
-    return found["-"], found["+"]
+            found[line[0]].setdefault(match.group(1), line)
+    return found["-"], set(found["+"])
+
+
+def _prev_sha(old: dict[str, str], version: str) -> str:
+    wanted, comment = version.removeprefix("v"), re.compile(r"#\s*v?(\S+)")
+    matches = (sha for sha, line in old.items() if (match := comment.search(line)) and match.group(1) == wanted)
+    return next(matches, sorted(old)[0])
 
 
 def _status(update: Update, diff: str) -> Update:
@@ -170,8 +176,8 @@ def _status(update: Update, diff: str) -> Update:
         return replace(update, status="not_reviewed", note="ecosystem is not reviewed")
     if update.ecosystem == "github_actions":
         old, new = _action_shas(update.name, diff)
-        if len(old) == len(new) == 1:
-            update = replace(update, prev_version=old.pop(), new_version=new.pop())
+        if len(new) == 1 and old:
+            update = replace(update, prev_version=_prev_sha(old, update.prev_version), new_version=new.pop())
         elif new:
             return replace(update, status="unverified", note="the diff does not identify one old and one new SHA")
         elif not ACTION_SHA.fullmatch(update.new_version):
@@ -199,11 +205,13 @@ def extract(source: Path, dest: Path) -> None:
                 handle.extractall(dest, filter="data")
     except (tarfile.TarError, zipfile.BadZipFile, OSError) as exc:
         raise FetchError(f"extraction failed: {exc}") from exc
-    entries = list(dest.iterdir())
-    if len(entries) == 1 and entries[0].is_dir():
-        for child in list(entries[0].iterdir()):
+    while len(entries := list(dest.iterdir())) == 1 and entries[0].is_dir():
+        top, placeholder = entries[0], Path(tempfile.mkdtemp(dir=dest, prefix=".collapse-"))
+        placeholder.rmdir()
+        top.rename(placeholder)
+        for child in list(placeholder.iterdir()):
             child.rename(dest / child.name)
-        entries[0].rmdir()
+        placeholder.rmdir()
 
 
 def write_diff(out_dir: Path) -> None:

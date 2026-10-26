@@ -209,6 +209,27 @@ class ExtractTest(unittest.TestCase):
                 dcr_fetch.extract(source, dest)
                 self.assertEqual((dest / leaf).read_bytes(), expected)
 
+    def test_go_module_prefix_with_slashes_is_flattened(self):
+        members = {
+            "github.com/org/mod@v1.2.3/go.mod": b"1",
+            "github.com/org/mod@v1.2.3/pkg/file.go": b"2",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "mod.zip"
+            source.write_bytes(_zip_bytes(members))
+            dcr_fetch.extract(source, root / "out")
+            self.assertEqual((root / "out" / "go.mod").read_bytes(), b"1")
+            self.assertEqual((root / "out" / "pkg" / "file.go").read_bytes(), b"2")
+
+    def test_collapse_handles_a_folder_matching_its_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "pkg.zip"
+            source.write_bytes(_zip_bytes({"pkg/pkg/file": b"1"}))
+            dcr_fetch.extract(source, root / "out")
+            self.assertEqual((root / "out" / "file").read_bytes(), b"1")
+
 
 class ActionDiffTest(unittest.TestCase):
     def _review(self, diff, update):
@@ -233,6 +254,32 @@ class ActionDiffTest(unittest.TestCase):
             with self.subTest(status=status):
                 result = self._review(f"--- a\n+++ b\n{body}", update)
                 self.assertEqual((result["status"], result["prev_version"], result["new_version"]), (status, prev, new))
+
+    def test_matching_comment_selects_the_old_sha(self):
+        old_a, old_b, new = "a" * 40, "b" * 40, "c" * 40
+        body = (
+            f"- uses: owner/repo@{old_a} # v3.0.0\n"
+            f"- uses: owner/repo@{old_b} # v4.1.0\n"
+            f"+ uses: owner/repo@{new} # v5.0.0\n"
+        )
+        result = self._review(f"--- a\n+++ b\n{body}", _dep("owner/repo", "github_actions", "v4.1.0", "5.0.0"))
+        self.assertEqual((result["status"], result["prev_version"], result["new_version"]), ("reviewed", old_b, new))
+
+    def test_first_sorted_sha_is_used_without_a_matching_comment(self):
+        old_a, old_b, new = "a" * 40, "b" * 40, "c" * 40
+        body = (
+            f"- uses: owner/repo@{old_b} # v1.0.0\n"
+            f"- uses: owner/repo@{old_a} # v2.0.0\n"
+            f"+ uses: owner/repo@{new} # v5.0.0\n"
+        )
+        result = self._review(f"--- a\n+++ b\n{body}", _dep("owner/repo", "github_actions", "v4.1.0", "5.0.0"))
+        self.assertEqual((result["status"], result["prev_version"], result["new_version"]), ("reviewed", old_a, new))
+
+    def test_quoted_uses_lines_are_matched(self):
+        old, new = "a" * 40, "b" * 40
+        body = f'- uses: "owner/repo@{old}" # v1\n+ uses: "owner/repo@{new}" # v2\n'
+        result = self._review(f"--- a\n+++ b\n{body}", _dep("owner/repo", "github_actions", "v1", "2"))
+        self.assertEqual((result["status"], result["prev_version"], result["new_version"]), ("reviewed", old, new))
 
 
 class MainTest(unittest.TestCase):
