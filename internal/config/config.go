@@ -202,7 +202,7 @@ func validateRelativePaths(fileName, field string, entries []string) error {
 }
 
 // adoptionMarkerPattern keeps markers to one comment-safe line: earlier
-// markers may be header sentences, and all are matched as a whole line.
+// markers may be header lines with spaces, and all are matched as a whole line.
 var adoptionMarkerPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+(?: [A-Za-z0-9._:/-]+)*$`)
 
 func (c *Config) validateAdoptionMarkers() error {

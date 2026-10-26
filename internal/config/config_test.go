@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,14 +36,53 @@ func TestDependencyReviewAcceptsEarlierHeaderMarkers(t *testing.T) {
 	if !assert.NotNil(t, file) {
 		return
 	}
-	for _, tt := range []struct {
+	assert.Equal(t, []string{"Managed by repo-content-updater"}, file.PreviousAdoptionMarkers)
+}
+
+// TestAdoptionMarkersDoNotMatchOtherTemplates checks that every marker names
+// only its own file, so a shared header line cannot adopt a different file.
+func TestAdoptionMarkersDoNotMatchOtherTemplates(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type markerCase struct {
+		file   *config.File
 		marker string
-	}{
-		{marker: "Managed by repo-content-updater"},
-		{marker: "This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back"},
-	} {
-		t.Run(tt.marker, func(t *testing.T) {
-			assert.Contains(t, file.PreviousAdoptionMarkers, tt.marker)
+	}
+	var cases []markerCase
+	for i := range cfg.Files {
+		file := &cfg.Files[i]
+		markers := append([]string{}, file.PreviousAdoptionMarkers...)
+		if marker := strings.TrimSpace(file.AdoptionMarker); marker != "" {
+			markers = append(markers, marker)
+		}
+		for _, marker := range markers {
+			marker = strings.TrimSpace(marker)
+			if marker == "" {
+				continue
+			}
+			cases = append(cases, markerCase{file: file, marker: marker})
+		}
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.file.Name+"/"+tt.marker, func(t *testing.T) {
+			want := "# " + tt.marker
+			for i := range cfg.Files {
+				other := &cfg.Files[i]
+				if other.Name == tt.file.Name {
+					continue
+				}
+				raw, err := os.ReadFile(filepath.Join("../../templates", other.TemplateName))
+				if err != nil {
+					t.Fatalf("read template %s for %s: %v", other.TemplateName, other.Name, err)
+				}
+				if containsTrimmedLine(string(raw), want) {
+					t.Errorf("marker %q of %q appears as %q in template %q of %q", tt.marker, tt.file.Name, want, other.TemplateName, other.Name)
+				}
+			}
 		})
 	}
 }
@@ -540,4 +580,17 @@ files:
 
 	_, err = config.LoadConfig(path)
 	assert.ErrorContains(t, err, "adoption_marker")
+}
+
+func containsTrimmedLine(content, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return false
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
 }

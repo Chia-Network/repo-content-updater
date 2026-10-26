@@ -102,10 +102,9 @@ files:
     template_name: dependency-review.yml
     repo_path: .github/workflows/dependency-review.yml
     adoption_marker: "repo-content-updater:dependency-review"
-    # Header lines of earlier renders of this template.
+    # Header line of earlier releases of this template.
     previous_adoption_markers:
       - "Managed by repo-content-updater"
-      - "This file is managed by the repo-content-updater project. Manual changes here will result in a PR to bring back"
     requires_paths:
       - .github/workflows
     alternate_paths:
