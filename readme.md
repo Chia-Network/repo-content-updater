@@ -47,6 +47,10 @@ A repo that opts in can require the
 `Dependency Artifact Review / dependency-artifact-review` check; no other
 managed workflow uses that name.
 
+The workflow reads `CURSOR_API_KEY` from a Dependabot secret. Create it under
+Settings > Secrets > Dependabot; without it, every reviewable PR fails without
+a verdict.
+
 ## Config Format
 
 ```yaml

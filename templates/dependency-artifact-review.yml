@@ -119,6 +119,7 @@ jobs:
               end
           ' "$stream_file" > "${out}/agent_output.txt"
       - name: Upload review results
+        if: ${{`{{ always() }}`}}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: dcr-review-${{`{{ github.run_id }}`}}
@@ -169,7 +170,7 @@ jobs:
         if: ${{`{{ always() }}`}}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
-          PR_NUMBER: ${{`{{ needs.review.outputs.pr_number || github.event.pull_request.number || github.event.inputs.pr_number }}`}}
+          PR_NUMBER: ${{`{{ needs.review.outputs.pr_number }}`}}
           COMMENT_PATH: ${{`{{ github.workspace }}`}}/dcr-comment.md
         with:
           script: |

@@ -66,6 +66,16 @@ class ArtifactReviewTemplateTest(unittest.TestCase):
         self.assertIn("steps.verdict.outputs.conclusion != 'success'", final)
         self.assertIn("exit 1", final)
 
+    def test_upload_runs_even_when_the_agent_fails(self) -> None:
+        upload = _step(self.review, "Upload review results")
+        self.assertIn("if: ${{`{{ always() }}`}}", upload)
+
+    def test_comment_uses_only_the_review_pr_number(self) -> None:
+        comment = _step(self.publish, "Post or update PR comment")
+        self.assertIn("PR_NUMBER: ${{`{{ needs.review.outputs.pr_number }}`}}", comment)
+        self.assertNotIn("github.event.pull_request.number", comment)
+        self.assertNotIn("github.event.inputs.pr_number", comment)
+
 
 if __name__ == "__main__":
     unittest.main()

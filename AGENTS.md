@@ -34,6 +34,16 @@ data, never interpolated into shell or expressions.
 - Transitive dependencies not being reviewed.
 - Unsupported ecosystems passing as "not reviewed".
 - No update cap; no download size or time limits beyond the basic timeout.
+- The workflow YAML runs from the PR head under `pull_request`; only the
+  companion scripts are trusted, and `exclude-paths` is the control.
+- The literal check is a sanity check, not a security boundary: it uses
+  normalised token matching, and `workflow_dispatch` takes maintainer-supplied
+  JSON.
+- For PyPI, one distribution is reviewed per side (sdist, otherwise a pure
+  wheel, otherwise the first wheel); this may differ from the platform wheel
+  that gets installed.
+- Agent output is posted into the comment as written.
+- `gh pr diff` can fail on very large diffs; the check then fails closed.
 
 ### Does warrant a finding
 
