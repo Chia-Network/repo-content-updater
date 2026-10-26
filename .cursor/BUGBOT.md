@@ -13,3 +13,8 @@ Raise only:
 - A verdict or metadata path that passes when it should fail.
 - The review workflow becoming updatable by Dependabot.
 - Correctness bugs that break real Dependabot PRs.
+- Before raising a correctness bug, ground it in actual Dependabot or
+  fetch-metadata behaviour (dependency-name, version formats), not a
+  hypothetical input. A finding whose failure mode is "the check fails closed"
+  on an input Dependabot does not produce is not a finding. "Updatable by
+  Dependabot" applies only to the target-repo workflow, not to rcu's templates.

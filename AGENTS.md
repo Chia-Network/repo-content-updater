@@ -18,8 +18,12 @@ ecosystems and moving-tag actions pass as "not reviewed".
 
 Invariants: scripts run from the default branch, never from the PR head; the
 agent step has no GitHub token or write permission; Dependabot does not update
-the review workflow (rcu owns its pins); upstream text is passed as argv or
-data, never interpolated into shell or expressions.
+the review workflow in target repos (`templates/dependabot.yml`
+`exclude-paths`), because it runs from the PR head there. rcu's own Dependabot
+updating `templates/dependency-artifact-review.yml` is intended: it is an inert
+template changed only via reviewed rcu PRs, which is how rcu owns its pins;
+upstream text is passed as argv or data, never interpolated into shell or
+expressions.
 
 ### Accepted risks, do not flag
 
@@ -38,6 +42,10 @@ data, never interpolated into shell or expressions.
 - No update cap; no download size or time limits beyond the basic timeout.
 - The workflow YAML runs from the PR head under `pull_request`; only the
   companion scripts are trusted, and `exclude-paths` is the control.
+- Dependabot names github_actions dependencies `owner/repo`, including for
+  subpath actions and reusable workflows (`owner/repo/sub@sha`); fetches use
+  that name. Do not flag subpath handling without a real Dependabot PR showing
+  a different dependency-name.
 - The literal check is a sanity check, not a security boundary: it uses
   normalised token matching, and `workflow_dispatch` takes maintainer-supplied
   JSON.
