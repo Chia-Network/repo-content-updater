@@ -62,7 +62,10 @@ jobs:
             echo "PR author is not dependabot[bot]." >&2
             exit 1
           fi
+          head_ref="$(gh pr view "$number" --json headRefName --jq '.headRefName')"
+          [[ -n "$head_ref" ]] || { echo "The PR has no head branch." >&2; exit 1; }
           echo "number=${number}" >> "$GITHUB_OUTPUT"
+          echo "head_ref=${head_ref}" >> "$GITHUB_OUTPUT"
 
       - name: Fetch dependency metadata
         id: metadata
@@ -91,6 +94,7 @@ jobs:
             ${{`{{ github.event_name == 'workflow_dispatch' && github.event.inputs.updated_dependencies_json || steps.metadata.outputs['updated-dependencies-json'] }}`}}
           PR_DIFF_PATH: ${{`{{ runner.temp }}`}}/pr-diff/pr.diff
           DCR_OUT: ${{`{{ runner.temp }}`}}/dcr-review
+          DCR_HEAD_REF: ${{`{{ github.head_ref || steps.pr.outputs.head_ref }}`}}
           DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS: >-
             {{ .DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS }}
         run: |

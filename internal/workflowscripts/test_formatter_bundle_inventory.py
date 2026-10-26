@@ -50,6 +50,8 @@ class FormatterBundleInventoryTest(unittest.TestCase):
             ("upstream_malware_scan_findings.sh", "upstream-malware-scan-findings.sh"),
             ("upstream_release_checkout.sh", "upstream-release-checkout.sh"),
             ("dcr_fetch.py", "dcr-fetch.py"),
+            ("dcr_sources.py", "dcr-sources.py"),
+            ("dcr_lock.py", "dcr-lock.py"),
             ("dcr_verdict.py", "dcr-verdict.py"),
             ("dcr_prompt.md", "dcr-prompt.md"),
         )

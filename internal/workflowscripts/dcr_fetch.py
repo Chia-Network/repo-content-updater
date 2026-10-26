@@ -8,33 +8,47 @@ trees, `changes.diff`, `files.txt` and `meta.json` under `DCR_OUT`.
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import re
-import subprocess
-import tarfile
+import sys
 import tempfile
 import urllib.parse
-import zipfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
-from hashlib import sha256, sha512
-from pathlib import Path, PurePosixPath
-from urllib.request import urlopen as _urlopen
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import dcr_lock
+import dcr_sources
+
+Candidate = dcr_sources.Candidate
+FetchError = dcr_sources.FetchError
+PYPI_ALLOWED_HOSTS = dcr_sources.PYPI_ALLOWED_HOSTS
+MAX_DIFF_BYTES = dcr_lock.MAX_DIFF_BYTES
+_URL_PATTERN = dcr_lock.URL_PATTERN
+_binding_on_added = dcr_lock.binding_on_added
+changed_packages = dcr_lock.changed_packages
+_diff_lines = dcr_lock.diff_lines
+_extract = dcr_sources.extract
+_fetch_action = dcr_sources.fetch_action
+_fetch_gomod = dcr_sources.fetch_gomod
+_fetch_npm = dcr_sources.fetch_npm
+_fetch_pypi = dcr_sources.fetch_pypi
+_format_from_name = dcr_sources.format_from_name
+_ioc_patterns = dcr_lock.ioc_patterns
+_locked_hashes = dcr_lock.locked_hashes
+missing_from_metadata = dcr_lock.missing_from_metadata
+_near = dcr_lock.near
+_near_lines = dcr_lock.near_lines
+_scan_diff = dcr_lock.scan_diff
+_write_diff = dcr_lock.write_diff
+_write_file_list = dcr_lock.write_file_list
 
 MAX_UPDATES = 10
-MAX_FILES = 5000
-MAX_BYTES = 100 * 1024 * 1024
-MAX_DIFF_BYTES = 2 * 1024 * 1024
-MAX_PYPI_JSON = 5 * 1024 * 1024
-PYPI_HOSTS = frozenset({"pypi.org"})
-PYPI_DOWNLOAD_HOSTS = frozenset({"files.pythonhosted.org"})
-PYPI_ALLOWED_HOSTS = PYPI_HOSTS | PYPI_DOWNLOAD_HOSTS
-PYPI_DISTRIBUTIONS = frozenset({"sdist", "bdist_wheel"})
 UPDATE_FIELDS = ("dependencyName", "packageEcosystem", "prevVersion", "newVersion")
 VERSION_WINDOW = 3
-HASH_WINDOW = 24
 INDEX_WINDOW = 8
 
 NPM_NAME = re.compile(r"^(?=.{1,214}$)(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
@@ -47,23 +61,8 @@ PIP_VERSION = re.compile(
 )
 GO_NAME = re.compile(r"^(?=.{1,300}$)(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9][A-Za-z0-9._~/-]*$")
 GO_VERSION = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+incompatible)?$")
-GO_SUM = re.compile(r"^h1:[A-Za-z0-9+/]{43}=$")
 ACTION_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 ACTION_SHA = re.compile(r"^[0-9a-f]{40}$")
-SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
-SHA256_VALUE = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
-BIDI_CONTROL = re.compile(r"[\u202a-\u202e\u2066-\u2069]")
-UNSAFE_ZIP_PATH = re.compile(r"^(?:[A-Za-z]:|[\\/])|[\\]|(?:^|/)\.\.(?:/|$)")
-URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+")
-
-NAME_CHARS = r"A-Za-z0-9._~-"
-VERSION_CHARS = r"A-Za-z0-9._+-"
-BINDING_CHARS = r"A-Za-z0-9._~+/=-"
-ZIP_SUFFIXES = frozenset({".zip", ".whl", ".egg"})
-
-
-class FetchError(Exception):
-    """A fetch, download, validation or extraction step could not complete."""
 
 
 @dataclass(frozen=True)
@@ -76,17 +75,6 @@ class Update:
     status: str = "reviewed"
     bound: bool = False
     note: str = ""
-
-
-@dataclass(frozen=True)
-class Candidate:
-    """A release file that can be loaded, with the literal that binds it to the lock."""
-
-    filename: str
-    binding: str
-    load: Callable[[], Path]
-    kind: str = ""
-    label: str = ""
 
 
 @dataclass(frozen=True)
@@ -116,82 +104,11 @@ class Ecosystem:
     precheck: Precheck | None = None
 
 
-def _run(
-    args: list[str], *, cwd: Path, env: dict[str, str] | None = None, text: bool = True, ok: tuple[int, ...] = (0,)
-) -> subprocess.CompletedProcess:
-    """Run one argv list without a shell and fail on an unexpected exit."""
-    try:
-        proc = subprocess.run(args, cwd=cwd, env=env, check=False, capture_output=True, text=text)
-    except OSError as exc:
-        raise FetchError(f"{args[0]} could not run: {exc}") from exc
-    if proc.returncode not in ok:
-        detail = proc.stderr if isinstance(proc.stderr, str) else proc.stderr.decode("utf-8", "replace")
-        raise FetchError(f"{args[0]} exited {proc.returncode}: {detail.strip()[:500]}")
-    return proc
-
-
-def _read_url(url: str, limit: int, hosts: frozenset[str]) -> bytes:
-    """Read one HTTPS URL from an expected host, refusing anything above the byte cap."""
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "https" or parsed.hostname not in hosts:
-        raise FetchError("download URL is not on the expected host")
-    try:
-        with _urlopen(url, timeout=30) as response:  # ruff: ignore[suspicious-url-open-usage] - scheme and host checked above
-            data = response.read(limit + 1)
-    except (OSError, ValueError) as exc:
-        raise FetchError(f"download failed: {exc}") from exc
-    if len(data) > limit:
-        raise FetchError("download exceeds the size cap")
-    return data
-
-
-def _token(text: str, chars: str) -> re.Pattern[str]:
-    """A literal match that cannot start or end inside a longer token."""
-    return re.compile(rf"(?<![{chars}]){re.escape(text)}(?![{chars}])")
-
-
-def _near(lines: list[str], anchor: str, needle: str, window: int) -> bool:
-    """True when `needle` appears within `window` lines of a whole-token `anchor`."""
-    anchor_pattern = _token(anchor, NAME_CHARS)
-    needle_pattern = _token(needle, VERSION_CHARS)
-    for index, line in enumerate(lines):
-        if not anchor_pattern.search(line):
-            continue
-        nearby = lines[max(0, index - window) : index + window + 1]
-        if any(needle_pattern.search(candidate) for candidate in nearby):
-            return True
-    return False
-
-
-def _near_lines(lines: list[str], anchor: str, window: int) -> list[str]:
-    """The lines within `window` of a whole-token `anchor`, in original order."""
-    anchor_pattern = _token(anchor, NAME_CHARS)
-    indexes = {index for index, line in enumerate(lines) if anchor_pattern.search(line)}
-    selected: set[int] = set()
-    for index in indexes:
-        selected.update(range(max(0, index - window), min(len(lines), index + window + 1)))
-    return [lines[index] for index in sorted(selected)]
-
-
-def _binding_on_added(binding: str, added: list[str]) -> bool:
-    if not binding:
-        return False
-    pattern = _token(binding, BINDING_CHARS)
-    return any(pattern.search(line) for line in added)
-
-
-def _locked_hashes(update: Update, added: list[str]) -> frozenset[str]:
-    """The sha256 values the lock lists near this package's entry."""
-    return frozenset(
-        match.group(0) for line in _near_lines(added, update.name, HASH_WINDOW) for match in SHA256_VALUE.finditer(line)
-    )
-
-
 def _pypi_index_note(update: Update, added: list[str], removed: list[str]) -> str | None:
     """Reject a package entry whose URLs are not on the public PyPI hosts."""
     for lines in (added, removed):
         for line in _near_lines(lines, update.name, INDEX_WINDOW):
-            for match in URL_PATTERN.finditer(line):
+            for match in _URL_PATTERN.finditer(line):
                 parsed = urllib.parse.urlsplit(match.group(0))
                 if parsed.scheme != "https" or parsed.hostname not in PYPI_ALLOWED_HOSTS:
                     return "non-default package index"
@@ -224,7 +141,7 @@ def _pypi_files(update: Update, candidates: tuple[Candidate, ...], added: list[s
         chosen = next((candidate for candidate in candidates if candidate.kind == "sdist"), None)
         chosen = chosen or (candidates[0] if candidates else None)
         return Review((chosen,) if chosen else ())
-    locked = _locked_hashes(update, added)
+    locked = _locked_hashes(update.name, added)
     if not locked:
         return Review(_labels(candidates), note="not bound to the lockfile")
     selected = _labels(tuple(candidate for candidate in candidates if _binding_on_added(candidate.binding, added)))
@@ -233,107 +150,11 @@ def _pypi_files(update: Update, candidates: tuple[Candidate, ...], added: list[s
     return Review(selected, status="unverified", note="partially bound")
 
 
-def _fetch_npm(work: Path, name: str, version: str) -> tuple[Candidate, ...]:
-    _run(["npm", "pack", "--ignore-scripts", f"{name}@{version}"], cwd=work)
-    archives = sorted(work.glob("*.tgz"))
-    if len(archives) != 1:
-        raise FetchError("npm pack did not produce exactly one archive")
-    archive = archives[0]
-    data = archive.read_bytes()
-    binding = "sha512-" + base64.b64encode(sha512(data).digest()).decode("ascii")
-    return (Candidate(archive.name, binding, lambda: archive),)
-
-
-def _fetch_pypi(work: Path, name: str, version: str) -> tuple[Candidate, ...]:
-    endpoint = f"https://pypi.org/pypi/{urllib.parse.quote(name, safe='')}/{urllib.parse.quote(version, safe='')}/json"
-    try:
-        payload = json.loads(_read_url(endpoint, MAX_PYPI_JSON, PYPI_HOSTS))
-    except json.JSONDecodeError as exc:
-        raise FetchError("PyPI JSON could not be parsed") from exc
-    files = payload.get("urls") if isinstance(payload, dict) else None
-    if not isinstance(files, list):
-        raise FetchError("PyPI response has no file list")
-    usable = [
-        item
-        for item in files
-        if isinstance(item, dict) and isinstance(item.get("url"), str) and item.get("packagetype") in PYPI_DISTRIBUTIONS
-    ]
-    if not usable:
-        raise FetchError("PyPI response has no downloadable distribution")
-    candidates: list[Candidate] = []
-    for index, item in enumerate(usable):
-        filename = item.get("filename")
-        digests = item.get("digests")
-        expected = digests.get("sha256") if isinstance(digests, dict) else None
-        if (
-            not isinstance(filename, str)
-            or not filename
-            or not isinstance(expected, str)
-            or not SHA256_HEX.fullmatch(expected)
-        ):
-            raise FetchError("PyPI distribution is missing a filename or sha256 digest")
-        path = work / f"dist-{index:02d}"
-        url = str(item["url"])
-        kind = str(item.get("packagetype", ""))
-
-        def load(path: Path = path, url: str = url, expected: str = expected) -> Path:
-            data = _read_url(url, MAX_BYTES, PYPI_DOWNLOAD_HOSTS)
-            actual = sha256(data).hexdigest()
-            if actual != expected:
-                raise FetchError("downloaded file does not match the PyPI sha256 digest")
-            path.write_bytes(data)
-            return path
-
-        candidates.append(Candidate(filename, expected, load, kind=kind))
-    return tuple(candidates)
-
-
-def _fetch_gomod(work: Path, name: str, version: str) -> tuple[Candidate, ...]:
-    env = dict(
-        os.environ, GO111MODULE="on", GOWORK="off", GOFLAGS="", GONOSUMDB="", GOPRIVATE="", GOSUMDB="sum.golang.org"
-    )
-    try:
-        payload = json.loads(_run(["go", "mod", "download", "-json", f"{name}@{version}"], cwd=work, env=env).stdout)
-    except json.JSONDecodeError as exc:
-        raise FetchError("go mod download did not return JSON") from exc
-    zip_name = payload.get("Zip") if isinstance(payload, dict) else None
-    sum_value = payload.get("Sum") if isinstance(payload, dict) else None
-    if not isinstance(zip_name, str) or not isinstance(sum_value, str) or not GO_SUM.fullmatch(sum_value):
-        raise FetchError("go mod download did not return a zip and an h1 sum")
-    archive = Path(zip_name)
-    return (Candidate(archive.name, sum_value, lambda: archive, kind="zip"),)
-
-
-def _fetch_action(work: Path, name: str, version: str) -> tuple[Candidate, ...]:
-    _run(["git", "init", "-q", "repo"], cwd=work)
-    _run(["git", "-C", "repo", "fetch", "--depth", "1", f"https://github.com/{name}", version], cwd=work)
-    attributes = work / "repo" / ".git" / "info" / "attributes"
-    attributes.parent.mkdir(parents=True, exist_ok=True)
-    attributes.write_text("* -export-ignore -export-subst\n", encoding="utf-8")
-    archive = work / "action.tar"
-    archive.write_bytes(
-        _run(["git", "-C", "repo", "archive", "--format=tar", "FETCH_HEAD"], cwd=work, text=False).stdout
-    )
-    return (Candidate(archive.name, version, lambda: archive),)
-
-
-def _tar_format(_filename: str) -> str:
-    return "tar"
-
-
-def _zip_format(_filename: str) -> str:
-    return "zip"
-
-
-def _format_from_name(filename: str) -> str:
-    return "zip" if PurePosixPath(filename).suffix.lower() in ZIP_SUFFIXES else "tar"
-
-
 ECOSYSTEMS: dict[str, Ecosystem] = {
-    "npm_and_yarn": Ecosystem(NPM_NAME, NPM_VERSION, _tar_format, _all_files, _fetch_npm),
+    "npm_and_yarn": Ecosystem(NPM_NAME, NPM_VERSION, _format_from_name, _all_files, _fetch_npm),
     "pip": Ecosystem(PIP_NAME, PIP_VERSION, _format_from_name, _pypi_files, _fetch_pypi, _pypi_index_note),
-    "gomod": Ecosystem(GO_NAME, GO_VERSION, _zip_format, _all_files, _fetch_gomod),
-    "github_actions": Ecosystem(ACTION_NAME, ACTION_SHA, _tar_format, _all_files, _fetch_action),
+    "gomod": Ecosystem(GO_NAME, GO_VERSION, _format_from_name, _all_files, _fetch_gomod),
+    "github_actions": Ecosystem(ACTION_NAME, ACTION_SHA, _format_from_name, _all_files, _fetch_action),
 }
 
 
@@ -354,12 +175,24 @@ def _parse_updates(raw: str) -> list[Update]:
     return updates
 
 
-def _diff_lines(text: str) -> tuple[list[str], list[str]]:
-    lines = text.splitlines()
-    return (
-        [line[1:] for line in lines if line.startswith("+") and not line.startswith("+++")],
-        [line[1:] for line in lines if line.startswith("-") and not line.startswith("---")],
-    )
+HEAD_ECOSYSTEMS = {"go_modules": "gomod"}
+
+
+def _head_ecosystem(head_ref: str) -> str | None:
+    """The update ecosystem named by a `dependabot/<ecosystem>/...` head branch."""
+    parts = head_ref.split("/")
+    if len(parts) < 3 or parts[0] != "dependabot" or not parts[1]:
+        return None
+    return HEAD_ECOSYSTEMS.get(parts[1], parts[1])
+
+
+def _head_note(update: Update, head_ecosystem: str | None) -> str | None:
+    """The fail-closed reason when the head branch does not name the update's ecosystem."""
+    if head_ecosystem is None:
+        return "head branch does not name the update ecosystem"
+    if head_ecosystem != update.ecosystem:
+        return "head branch names a different update ecosystem"
+    return None
 
 
 def _reviewable(update: Update) -> bool:
@@ -382,38 +215,6 @@ def _check(update: Update, ecosystem: Ecosystem, added: list[str], removed: list
     if ecosystem.precheck is not None and (note := ecosystem.precheck(update, added, removed)):
         return note
     return None
-
-
-def _check_budget(count: int, total: int) -> None:
-    if count > MAX_FILES:
-        raise FetchError("archive exceeds the file-count cap")
-    if total > MAX_BYTES:
-        raise FetchError("archive exceeds the extracted byte cap")
-
-
-def _extract(archive: Path, dest: Path, archive_format: str | None = None) -> None:
-    """Extract using the stated archive format, or a filename suffix when none is passed."""
-    archive_format = archive_format or _format_from_name(archive.name)
-    dest.mkdir(parents=True, exist_ok=True)
-    try:
-        if archive_format == "zip":
-            with zipfile.ZipFile(archive) as handle:
-                infos = handle.infolist()
-                if any(not info.filename or UNSAFE_ZIP_PATH.search(info.filename) for info in infos):
-                    raise FetchError("archive contains an unsafe path")
-                if any((info.external_attr >> 16) & 0o170000 == 0o120000 for info in infos):
-                    raise FetchError("archive contains a symlink")
-                _check_budget(len(infos), sum(info.file_size for info in infos if not info.is_dir()))
-                handle.extractall(dest)  # ruff: ignore[tarfile-unsafe-members] - names, links and size checked above
-        elif archive_format == "tar":
-            with tarfile.open(archive, "r:*") as handle:
-                members = handle.getmembers()
-                _check_budget(len(members), sum(member.size for member in members if not member.isdir()))
-                handle.extractall(dest, filter="data")
-        else:
-            raise FetchError(f"unsupported archive format: {archive_format}")
-    except (tarfile.TarError, zipfile.BadZipFile, OSError) as exc:
-        raise FetchError(f"extraction failed: {exc}") from exc
 
 
 def _process_update(index: int, update: Update, out_dir: Path, added: list[str], removed: list[str]) -> Update:
@@ -450,58 +251,28 @@ def _process_update(index: int, update: Update, out_dir: Path, added: list[str],
     return replace(update, bound=new_review.bound, note=new_review.note)
 
 
-def _over_cap(update: Update) -> Update:
+def _over_cap(update: Update, head_ecosystem: str | None) -> Update:
+    if note := _head_note(update, head_ecosystem):
+        return replace(update, status="unverified", note=note)
     status = "unverified" if _reviewable(update) else "not_reviewed"
     return replace(update, status=status, note=f"over the {MAX_UPDATES}-update cap")
 
 
-def _write_diff(out_dir: Path) -> bool:
-    (out_dir / "old").mkdir(exist_ok=True)
-    (out_dir / "new").mkdir(exist_ok=True)
-    data = _run(["diff", "-ruN", "old", "new"], cwd=out_dir, text=False, ok=(0, 1)).stdout
-    truncated = len(data) > MAX_DIFF_BYTES
-    if truncated:
-        data = data[:MAX_DIFF_BYTES] + b"\n[changes.diff truncated at 2 MiB]\n"
-    (out_dir / "changes.diff").write_text(data.decode("utf-8", "replace"), encoding="utf-8")
-    return truncated
-
-
-def _write_file_list(out_dir: Path) -> list[str]:
-    paths = sorted(path.relative_to(out_dir).as_posix() for path in out_dir.rglob("*") if path.is_file())
-    paths = [path for path in paths if path not in {"meta.json", "changes.diff", "files.txt"}]
-    (out_dir / "files.txt").write_text("\n".join(paths) + ("\n" if paths else ""), encoding="utf-8")
-    return paths
-
-
-def _ioc_patterns() -> list[tuple[str, re.Pattern[str]]]:
-    raw = os.environ.get("DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS", "")
-    try:
-        patterns = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise SystemExit("DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS is not valid JSON") from exc
-    if not isinstance(patterns, list) or not patterns or not all(isinstance(p, str) and p for p in patterns):
-        raise SystemExit("DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS must be a non-empty list of non-empty strings")
-    try:
-        return [(pattern, re.compile(pattern)) for pattern in patterns]
-    except re.error as exc:
-        raise SystemExit("an IOC pattern is not a valid regex") from exc
-
-
-def _scan_diff(path: Path, patterns: list[tuple[str, re.Pattern[str]]]) -> list[dict[str, object]]:
-    hits: list[dict[str, object]] = []
-    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
-    for number, line in enumerate(text.splitlines(), 1):
-        if not line.startswith("+") or line.startswith("+++"):
-            continue
-        body = line[1:]
-        hits.extend(
-            {"kind": "ioc", "pattern": source, "line": number, "match": match.group(0)[:80]}
-            for source, pattern in patterns
-            if (match := pattern.search(body)) is not None
+def _synthetic_updates(diff_text: str, updates: list[Update]) -> list[Update]:
+    """Changed lock packages that the update list does not mention."""
+    known = ((update.ecosystem, update.name, update.new_version) for update in updates)
+    return [
+        Update(
+            change.name,
+            change.ecosystem,
+            "",
+            change.prev_version,
+            change.new_version,
+            status="unverified",
+            note="missing from update metadata",
         )
-        if BIDI_CONTROL.search(body) is not None:
-            hits.append({"kind": "bidi", "pattern": "bidi-control", "line": number})
-    return hits
+        for change in missing_from_metadata(changed_packages(diff_text), known)
+    ]
 
 
 def main() -> int:
@@ -512,10 +283,17 @@ def main() -> int:
     updates = _parse_updates(os.environ.get("UPDATED_DEPENDENCIES_JSON", ""))
     diff_text = Path(os.environ["PR_DIFF_PATH"]).read_text(encoding="utf-8", errors="replace")
     added, removed = _diff_lines(diff_text)
-    results = [
-        _process_update(index, update, out_dir, added, removed) for index, update in enumerate(updates[:MAX_UPDATES])
-    ]
-    results.extend(_over_cap(update) for update in updates[MAX_UPDATES:])
+    head_ecosystem = _head_ecosystem(os.environ.get("DCR_HEAD_REF", ""))
+    results: list[Update] = []
+    for index, update in enumerate(updates[:MAX_UPDATES]):
+        note = _head_note(update, head_ecosystem)
+        results.append(
+            replace(update, status="unverified", note=note)
+            if note
+            else _process_update(index, update, out_dir, added, removed)
+        )
+    results.extend(_over_cap(update, head_ecosystem) for update in updates[MAX_UPDATES:])
+    results.extend(_synthetic_updates(diff_text, updates))
     truncated = _write_diff(out_dir)
     if truncated:
         results = [
@@ -526,17 +304,22 @@ def main() -> int:
         ]
     file_list = _write_file_list(out_dir)
     hits = _scan_diff(out_dir / "changes.diff", patterns)
+    reviewable = any(result.status != "not_reviewed" for result in results)
     meta = {
         "schema": 1,
         "max_updates": MAX_UPDATES,
         "truncated": truncated,
+        "reviewable": reviewable,
         "updates": [asdict(result) for result in results],
         "ioc_hits": hits,
         "files": file_list,
     }
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if output := os.environ.get("GITHUB_OUTPUT"):
+        with Path(output).open("a", encoding="utf-8") as handle:
+            handle.write(f"reviewable={str(reviewable).lower()}\n")
     reviewed = sum(result.status == "reviewed" for result in results)
-    print(f"reviewed={reviewed} updates={len(results)} hits={len(hits)} truncated={str(truncated).lower()}")
+    print(f"reviewable={str(reviewable).lower()} reviewed={reviewed} updates={len(results)} hits={len(hits)}")
     return 0
 
 

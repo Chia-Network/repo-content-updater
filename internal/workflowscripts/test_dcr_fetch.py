@@ -22,6 +22,7 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 import dcr_fetch
+import dcr_sources
 from dcr_fetch import FetchError, Update
 
 
@@ -227,7 +228,7 @@ class NpmFetchTest(unittest.TestCase):
         update = _update()
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
-            with mock.patch.object(dcr_fetch.subprocess, "run", side_effect=_npm_runner(tarball)):
+            with mock.patch.object(dcr_sources.subprocess, "run", side_effect=_npm_runner(tarball)):
                 result = _process(update, out, [f"left-pad@1.0.1 {binding}"], ["left-pad@1.0.0"])
             self.assertEqual(result.status, "reviewed")
             self.assertTrue(result.bound)
@@ -237,7 +238,7 @@ class NpmFetchTest(unittest.TestCase):
         tarball = _tar_bytes({"package/index.js": b"module.exports = 1;\n"})
         update = _update()
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(dcr_fetch.subprocess, "run", side_effect=_npm_runner(tarball)):
+            with mock.patch.object(dcr_sources.subprocess, "run", side_effect=_npm_runner(tarball)):
                 result = _process(update, Path(tmp), ["left-pad@1.0.1"], ["left-pad@1.0.0"])
             self.assertEqual(result.status, "reviewed")
             self.assertFalse(result.bound)
@@ -245,7 +246,7 @@ class NpmFetchTest(unittest.TestCase):
 
     def test_invalid_npm_name_is_unverified_before_any_command(self) -> None:
         update = Update("../left-pad", "npm_and_yarn", "/", "1.0.0", "1.0.1")
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(dcr_fetch.subprocess, "run") as run:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(dcr_sources.subprocess, "run") as run:
             result = _process(update, Path(tmp), ["../left-pad@1.0.1"], ["1.0.0"])
             self.assertEqual(result.status, "unverified")
             run.assert_not_called()
@@ -271,7 +272,7 @@ class PypiFetchTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
             with mock.patch.object(
-                dcr_fetch, "_urlopen", side_effect=_pypi_urlopen(self._payload(file_bytes, digest), file_bytes)
+                dcr_sources, "_urlopen", side_effect=_pypi_urlopen(self._payload(file_bytes, digest), file_bytes)
             ):
                 result = _process(
                     update,
@@ -290,7 +291,7 @@ class PypiFetchTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(
-                dcr_fetch,
+                dcr_sources,
                 "_urlopen",
                 side_effect=_pypi_urlopen(payload, file_bytes),
             ),
@@ -307,7 +308,7 @@ class PypiFetchTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(
-                dcr_fetch,
+                dcr_sources,
                 "_urlopen",
                 side_effect=_pypi_urlopen(payload, file_bytes),
             ),
@@ -330,7 +331,7 @@ class PypiFetchTest(unittest.TestCase):
         hashes = " ".join(f"--hash=sha256:{sha256(data).hexdigest()}" for data in (sdist, wheel))
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
-            with mock.patch.object(dcr_fetch, "_urlopen", side_effect=_pypi_files_urlopen(payload, files)):
+            with mock.patch.object(dcr_sources, "_urlopen", side_effect=_pypi_files_urlopen(payload, files)):
                 result = _process(update, out, [f"example-pkg==1.0.1 {hashes}"], ["example-pkg==1.0.0"])
             self.assertEqual(result.status, "reviewed")
             self.assertTrue(result.bound)
@@ -346,7 +347,7 @@ class PypiFetchTest(unittest.TestCase):
         missing = "f" * 64
         hashes = f"--hash=sha256:{sha256(sdist).hexdigest()} --hash=sha256:{missing}"
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(dcr_fetch, "_urlopen", side_effect=_pypi_files_urlopen(payload, files)):
+            with mock.patch.object(dcr_sources, "_urlopen", side_effect=_pypi_files_urlopen(payload, files)):
                 result = _process(update, Path(tmp), [f"example-pkg==1.0.1 {hashes}"], ["example-pkg==1.0.0"])
             self.assertEqual(result.status, "unverified")
             self.assertFalse(result.bound)
@@ -385,7 +386,7 @@ class GoFetchTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
             with mock.patch.object(
-                dcr_fetch.subprocess,
+                dcr_sources.subprocess,
                 "run",
                 side_effect=_go_runner(zip_bytes, sum_value, calls),
             ):
@@ -397,7 +398,7 @@ class GoFetchTest(unittest.TestCase):
 
     def test_go_path_traversal_is_unverified(self) -> None:
         update = Update("example.com/../mod", "gomod", "/", "v1.0.0", "v1.0.1")
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(dcr_fetch.subprocess, "run") as run:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(dcr_sources.subprocess, "run") as run:
             result = _process(update, Path(tmp), ["example.com/../mod v1.0.1"], ["v1.0.0"])
             self.assertEqual(result.status, "unverified")
             run.assert_not_called()
@@ -412,7 +413,7 @@ class ActionFetchTest(unittest.TestCase):
         update = _update("owner/repo", "github_actions", old_sha, new_sha)
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
-            with mock.patch.object(dcr_fetch.subprocess, "run", side_effect=_git_runner(tar_bytes, calls)):
+            with mock.patch.object(dcr_sources.subprocess, "run", side_effect=_git_runner(tar_bytes, calls)):
                 result = _process(update, out, [f"uses: owner/repo@{new_sha}"], [f"uses: owner/repo@{old_sha}"])
             self.assertEqual(result.status, "reviewed")
             self.assertTrue(result.bound)
@@ -435,7 +436,7 @@ class ActionFetchTest(unittest.TestCase):
 
         update = _update("owner/repo", "github_actions", old_sha, new_sha)
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(dcr_fetch.subprocess, "run", side_effect=run):
+            with mock.patch.object(dcr_sources.subprocess, "run", side_effect=run):
                 result = _process(update, Path(tmp), [f"uses: owner/repo@{new_sha}"], [f"uses: owner/repo@{old_sha}"])
         self.assertEqual(result.status, "reviewed")
         self.assertEqual(seen, ["* -export-ignore -export-subst\n"] * 2)
@@ -515,12 +516,12 @@ class SafeExtractionTest(unittest.TestCase):
 
     def test_file_count_cap(self) -> None:
         payload = _zip_bytes({f"file-{index}": b"x" for index in range(3)})
-        with mock.patch.object(dcr_fetch, "MAX_FILES", 2), self.assertRaises(FetchError):
+        with mock.patch.object(dcr_sources, "MAX_FILES", 2), self.assertRaises(FetchError):
             self._extract_zip(payload)
 
     def test_extracted_byte_cap(self) -> None:
         payload = _zip_bytes({"file": b"x" * 10})
-        with mock.patch.object(dcr_fetch, "MAX_BYTES", 5), self.assertRaises(FetchError):
+        with mock.patch.object(dcr_sources, "MAX_BYTES", 5), self.assertRaises(FetchError):
             self._extract_zip(payload)
 
     def test_explicit_archive_format_is_not_sniffed(self) -> None:
@@ -571,12 +572,12 @@ class DiffAndIocTest(unittest.TestCase):
     def test_diff_is_written_and_truncated_at_the_cap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
-            with mock.patch.object(dcr_fetch.subprocess, "run", side_effect=_diff_runner(b"+small\n")):
+            with mock.patch.object(dcr_sources.subprocess, "run", side_effect=_diff_runner(b"+small\n")):
                 self.assertFalse(dcr_fetch._write_diff(out))
             self.assertEqual((out / "changes.diff").read_text(encoding="utf-8"), "+small\n")
 
             big = b"+" + b"x" * (dcr_fetch.MAX_DIFF_BYTES + 1)
-            with mock.patch.object(dcr_fetch.subprocess, "run", side_effect=_diff_runner(big)):
+            with mock.patch.object(dcr_sources.subprocess, "run", side_effect=_diff_runner(big)):
                 self.assertTrue(dcr_fetch._write_diff(out))
             self.assertIn("truncated", (out / "changes.diff").read_text(encoding="utf-8"))
 
@@ -584,7 +585,7 @@ class DiffAndIocTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(
-                dcr_fetch.subprocess,
+                dcr_sources.subprocess,
                 "run",
                 side_effect=_diff_runner(b"", returncode=2),
             ),
@@ -598,6 +599,66 @@ class ParseUpdatesTest(unittest.TestCase):
         for raw in ("", "{}", "[1]", "[{}]", '[{"dependencyName": "x"}]'):
             with self.subTest(raw=raw), self.assertRaises(SystemExit):
                 dcr_fetch._parse_updates(raw)
+
+
+class HeadRefTest(unittest.TestCase):
+    def test_dependabot_head_prefixes_map_to_update_ecosystems(self) -> None:
+        prefixes = {
+            "dependabot/npm_and_yarn/left-pad-1.0.1": "npm_and_yarn",
+            "dependabot/pip/requests-2.1.0": "pip",
+            "dependabot/go_modules/example.com/mod-1.0.1": "gomod",
+            "dependabot/github_actions/actions/checkout-1.0.1": "github_actions",
+        }
+        for head_ref, ecosystem in prefixes.items():
+            with self.subTest(head_ref=head_ref):
+                self.assertEqual(dcr_fetch._head_ecosystem(head_ref), ecosystem)
+
+    def test_unknown_head_branch_has_no_ecosystem(self) -> None:
+        self.assertIsNone(dcr_fetch._head_ecosystem(""))
+        self.assertIsNone(dcr_fetch._head_ecosystem("renovate/left-pad-1.x"))
+
+    def test_head_note_rejects_a_missing_or_different_ecosystem(self) -> None:
+        update = Update("left-pad", "npm_and_yarn", "", "1.0.0", "1.0.1")
+        self.assertEqual(dcr_fetch._head_note(update, "npm_and_yarn"), None)
+        self.assertIn("different", dcr_fetch._head_note(update, "pip") or "")
+        self.assertIn("does not name", dcr_fetch._head_note(update, None) or "")
+
+
+class ReconciliationTest(unittest.TestCase):
+    def test_synthetic_update_uses_the_missing_metadata_note(self) -> None:
+        diff = (
+            "diff --git a/package-lock.json b/package-lock.json\n"
+            "--- a/package-lock.json\n"
+            "+++ b/package-lock.json\n"
+            "@@ -1,3 +1,3 @@\n"
+            '     "node_modules/right-pad": {\n'
+            '-      "version": "2.0.0",\n'
+            '+      "version": "2.0.1",\n'
+            "     }\n"
+        )
+        updates = [Update("left-pad", "npm_and_yarn", "", "1.0.0", "1.0.1")]
+        synthetic = dcr_fetch._synthetic_updates(diff, updates)
+        self.assertEqual(len(synthetic), 1)
+        self.assertEqual(synthetic[0].name, "right-pad")
+        self.assertEqual(synthetic[0].ecosystem, "npm_and_yarn")
+        self.assertEqual(synthetic[0].prev_version, "2.0.0")
+        self.assertEqual(synthetic[0].new_version, "2.0.1")
+        self.assertEqual(synthetic[0].status, "unverified")
+        self.assertEqual(synthetic[0].note, "missing from update metadata")
+
+    def test_update_list_match_produces_no_synthetic_update(self) -> None:
+        diff = (
+            "diff --git a/package-lock.json b/package-lock.json\n"
+            "--- a/package-lock.json\n"
+            "+++ b/package-lock.json\n"
+            "@@ -1,3 +1,3 @@\n"
+            '     "node_modules/left-pad": {\n'
+            '-      "version": "1.0.0",\n'
+            '+      "version": "1.0.1",\n'
+            "     }\n"
+        )
+        updates = [Update("left-pad", "npm_and_yarn", "", "1.0.0", "1.0.1")]
+        self.assertEqual(dcr_fetch._synthetic_updates(diff, updates), [])
 
 
 class MainTest(unittest.TestCase):
@@ -623,6 +684,7 @@ class MainTest(unittest.TestCase):
                 "PR_DIFF_PATH": str(diff),
                 "UPDATED_DEPENDENCIES_JSON": json.dumps(updates),
                 "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
+                "DCR_HEAD_REF": "dependabot/cargo/pkg-0",
             }
             with (
                 mock.patch.dict(os.environ, env),
@@ -668,6 +730,7 @@ class MainTest(unittest.TestCase):
                 "PR_DIFF_PATH": str(diff),
                 "UPDATED_DEPENDENCIES_JSON": json.dumps(updates),
                 "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
+                "DCR_HEAD_REF": "dependabot/npm_and_yarn/left-pad-1.0.1",
             }
             with (
                 mock.patch.dict(os.environ, env),
@@ -708,12 +771,131 @@ class MainTest(unittest.TestCase):
                 "PR_DIFF_PATH": str(diff),
                 "UPDATED_DEPENDENCIES_JSON": json.dumps([update]),
                 "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
+                "DCR_HEAD_REF": "dependabot/npm_and_yarn/left-pad-1.0.1",
             }
-            with mock.patch.dict(os.environ, env), mock.patch.object(dcr_fetch.subprocess, "run", side_effect=runner):
+            with mock.patch.dict(os.environ, env), mock.patch.object(dcr_sources.subprocess, "run", side_effect=runner):
                 self.assertEqual(dcr_fetch.main(), 0)
             meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
             self.assertTrue(meta["truncated"])
             self.assertEqual(meta["updates"][0]["status"], "truncated")
+
+    def test_mismatched_head_ref_skips_the_fetch(self) -> None:
+        update = {
+            "dependencyName": "left-pad",
+            "packageEcosystem": "npm_and_yarn",
+            "prevVersion": "1.0.0",
+            "newVersion": "1.0.1",
+            "directory": "/",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            diff = Path(tmp) / "pr.diff"
+            diff.write_text("--- a\n+++ b\n+left-pad 1.0.1\n-left-pad 1.0.0\n", encoding="utf-8")
+            out = Path(tmp) / "out"
+            env = {
+                "DCR_OUT": str(out),
+                "PR_DIFF_PATH": str(diff),
+                "UPDATED_DEPENDENCIES_JSON": json.dumps([update]),
+                "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
+                "DCR_HEAD_REF": "dependabot/pip/left-pad-1.0.1",
+            }
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.object(dcr_fetch, "_write_diff", return_value=False),
+                mock.patch.object(dcr_fetch, "_scan_diff", return_value=[]),
+                mock.patch.object(
+                    dcr_sources.subprocess,
+                    "run",
+                    side_effect=AssertionError("the fetch should not run"),
+                ),
+            ):
+                self.assertEqual(dcr_fetch.main(), 0)
+            meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["updates"][0]["status"], "unverified")
+            self.assertIn("different", meta["updates"][0]["note"])
+            self.assertTrue(meta["reviewable"])
+
+    def test_missing_lock_package_is_a_synthetic_unverified_update(self) -> None:
+        update = {
+            "dependencyName": "tokio",
+            "packageEcosystem": "cargo",
+            "prevVersion": "1.0.0",
+            "newVersion": "1.0.1",
+            "directory": "/",
+        }
+        diff_text = (
+            "diff --git a/package-lock.json b/package-lock.json\n"
+            "--- a/package-lock.json\n"
+            "+++ b/package-lock.json\n"
+            "@@ -1,3 +1,3 @@\n"
+            '     "node_modules/right-pad": {\n'
+            '-      "version": "2.0.0",\n'
+            '+      "version": "2.0.1",\n'
+            "     }\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            diff = Path(tmp) / "pr.diff"
+            diff.write_text(diff_text, encoding="utf-8")
+            out = Path(tmp) / "out"
+            env = {
+                "DCR_OUT": str(out),
+                "PR_DIFF_PATH": str(diff),
+                "UPDATED_DEPENDENCIES_JSON": json.dumps([update]),
+                "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
+                "DCR_HEAD_REF": "dependabot/cargo/tokio-1.0.1",
+            }
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.object(dcr_fetch, "_write_diff", return_value=False),
+                mock.patch.object(dcr_fetch, "_scan_diff", return_value=[]),
+            ):
+                self.assertEqual(dcr_fetch.main(), 0)
+            meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(meta["updates"]), 2)
+            self.assertEqual(meta["updates"][0]["status"], "not_reviewed")
+            synthetic = meta["updates"][1]
+            self.assertEqual(synthetic["name"], "right-pad")
+            self.assertEqual(synthetic["ecosystem"], "npm_and_yarn")
+            self.assertEqual(synthetic["status"], "unverified")
+            self.assertEqual(synthetic["note"], "missing from update metadata")
+            self.assertTrue(meta["reviewable"])
+
+    def test_reviewable_meta_and_github_output_follow_the_statuses(self) -> None:
+        update = {
+            "dependencyName": "tokio",
+            "packageEcosystem": "cargo",
+            "prevVersion": "1.0.0",
+            "newVersion": "1.0.1",
+            "directory": "/",
+        }
+        scenarios = (
+            ("dependabot/cargo/tokio-1.0.1", "not_reviewed", False),
+            ("dependabot/npm_and_yarn/tokio-1.0.1", "unverified", True),
+        )
+        for head_ref, status, expected in scenarios:
+            with self.subTest(head_ref=head_ref), tempfile.TemporaryDirectory() as tmp:
+                diff = Path(tmp) / "pr.diff"
+                diff.write_text("--- a\n+++ b\n", encoding="utf-8")
+                output = Path(tmp) / "github-output"
+                output.write_text("", encoding="utf-8")
+                out = Path(tmp) / "out"
+                env = {
+                    "DCR_OUT": str(out),
+                    "PR_DIFF_PATH": str(diff),
+                    "UPDATED_DEPENDENCIES_JSON": json.dumps([update]),
+                    "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
+                    "DCR_HEAD_REF": head_ref,
+                    "GITHUB_OUTPUT": str(output),
+                }
+                with (
+                    mock.patch.dict(os.environ, env),
+                    mock.patch.object(dcr_fetch, "_write_diff", return_value=False),
+                    mock.patch.object(dcr_fetch, "_scan_diff", return_value=[]),
+                ):
+                    self.assertEqual(dcr_fetch.main(), 0)
+                meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+                self.assertIs(meta["reviewable"], expected)
+                self.assertEqual(meta["updates"][0]["status"], status)
+                self.assertEqual(output.read_text(encoding="utf-8"), f"reviewable={str(expected).lower()}\n")
 
 
 if __name__ == "__main__":

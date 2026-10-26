@@ -97,6 +97,8 @@ func TestDependencyArtifactReviewIsOptInOnly(t *testing.T) {
 	assert.Equal(t, []string{
 		"dependency-artifact-review",
 		"dependency-artifact-review-fetch",
+		"dependency-artifact-review-sources",
+		"dependency-artifact-review-lock",
 		"dependency-artifact-review-verdict",
 		"dependency-artifact-review-prompt",
 	}, expanded)
