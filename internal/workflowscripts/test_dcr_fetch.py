@@ -120,6 +120,25 @@ def _pypi_urlopen(payload: dict[str, object], file_bytes: bytes):
     return fake
 
 
+def _pypi_files_urlopen(payload: dict[str, object], files: dict[str, bytes]):
+    encoded = json.dumps(payload).encode()
+
+    def fake(url: str, timeout: int = 30) -> _Response:
+        del timeout
+        return _Response(encoded if url.endswith("/json") else files[url])
+
+    return fake
+
+
+def _pypi_distribution(kind: str, filename: str, data: bytes) -> dict[str, object]:
+    return {
+        "packagetype": kind,
+        "url": f"https://files.pythonhosted.org/packages/{filename}",
+        "digests": {"sha256": sha256(data).hexdigest()},
+        "filename": filename,
+    }
+
+
 def _update(
     name: str = "left-pad",
     ecosystem: str = "npm_and_yarn",
@@ -158,6 +177,47 @@ class LiteralPresenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = _process(update, Path(tmp), added, removed)
             self.assertEqual(result.status, "unverified")
+
+    def test_version_prefix_is_not_a_match(self) -> None:
+        update = _update(prev="0.9", new="1.0")
+        note = dcr_fetch._check(
+            update,
+            dcr_fetch.ECOSYSTEMS["npm_and_yarn"],
+            ["left-pad@11.0.3"],
+            ["left-pad@0.9"],
+        )
+        self.assertIsNotNone(note)
+
+    def test_name_must_match_a_whole_token(self) -> None:
+        update = _update()
+        note = dcr_fetch._check(
+            update,
+            dcr_fetch.ECOSYSTEMS["npm_and_yarn"],
+            ["my-left-pad@1.0.1"],
+            ["my-left-pad@1.0.0"],
+        )
+        self.assertIsNotNone(note)
+
+    def test_name_and_version_may_be_on_nearby_lines(self) -> None:
+        update = _update()
+        note = dcr_fetch._check(
+            update,
+            dcr_fetch.ECOSYSTEMS["npm_and_yarn"],
+            ["node_modules/left-pad", "version: 1.0.1"],
+            ["node_modules/left-pad", "version: 1.0.0"],
+        )
+        self.assertIsNone(note)
+
+    def test_version_far_from_the_named_entry_is_not_a_match(self) -> None:
+        update = _update()
+        added = ["left-pad@1.0.0", "a", "b", "c", "d", "other@1.0.1"]
+        note = dcr_fetch._check(
+            update,
+            dcr_fetch.ECOSYSTEMS["npm_and_yarn"],
+            added,
+            ["left-pad@1.0.0"],
+        )
+        self.assertIsNotNone(note)
 
 
 class NpmFetchTest(unittest.TestCase):
@@ -256,6 +316,65 @@ class PypiFetchTest(unittest.TestCase):
             self.assertEqual(result.status, "fetch_failed")
             self.assertIn("expected host", result.note)
 
+    def test_new_release_reviews_the_sdist_and_every_listed_wheel(self) -> None:
+        sdist = _tar_bytes({"example-1.0.1/setup.py": b"print('ok')\n"})
+        wheel = _zip_bytes({"example/__init__.py": b"VALUE = 1\n"})
+        payload = {
+            "urls": [
+                _pypi_distribution("sdist", "example-1.0.1.tar.gz", sdist),
+                _pypi_distribution("bdist_wheel", "example-1.0.1-py3-none-any.whl", wheel),
+            ],
+        }
+        files = {str(item["url"]): data for item, data in zip(payload["urls"], (sdist, wheel))}
+        update = _update("example-pkg", "pip")
+        hashes = " ".join(f"--hash=sha256:{sha256(data).hexdigest()}" for data in (sdist, wheel))
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            with mock.patch.object(dcr_fetch, "_urlopen", side_effect=_pypi_files_urlopen(payload, files)):
+                result = _process(update, out, [f"example-pkg==1.0.1 {hashes}"], ["example-pkg==1.0.0"])
+            self.assertEqual(result.status, "reviewed")
+            self.assertTrue(result.bound)
+            artifact = out / "new" / "00-example-pkg@1.0.1"
+            self.assertTrue((artifact / "example-1.0.1.tar.gz" / "example-1.0.1" / "setup.py").is_file())
+            self.assertTrue((artifact / "example-1.0.1-py3-none-any.whl" / "example" / "__init__.py").is_file())
+
+    def test_lock_hash_without_a_registry_file_is_partially_bound(self) -> None:
+        sdist = _tar_bytes({"example-1.0.1/setup.py": b"print('ok')\n"})
+        payload = {"urls": [_pypi_distribution("sdist", "example-1.0.1.tar.gz", sdist)]}
+        files = {str(payload["urls"][0]["url"]): sdist}
+        update = _update("example-pkg", "pip")
+        missing = "f" * 64
+        hashes = f"--hash=sha256:{sha256(sdist).hexdigest()} --hash=sha256:{missing}"
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(dcr_fetch, "_urlopen", side_effect=_pypi_files_urlopen(payload, files)):
+                result = _process(update, Path(tmp), [f"example-pkg==1.0.1 {hashes}"], ["example-pkg==1.0.0"])
+            self.assertEqual(result.status, "unverified")
+            self.assertFalse(result.bound)
+            self.assertEqual(result.note, "partially bound")
+
+    def test_non_default_index_in_the_lock_entry_is_unverified(self) -> None:
+        update = _update("example-pkg", "pip")
+        note = dcr_fetch._check(
+            update,
+            dcr_fetch.ECOSYSTEMS["pip"],
+            [
+                "example-pkg==1.0.1 --hash=sha256:" + "a" * 64,
+                "example-pkg @ https://packages.example/example-pkg-1.0.1.tar.gz",
+            ],
+            ["example-pkg==1.0.0"],
+        )
+        self.assertEqual(note, "non-default package index")
+
+    def test_public_pypi_urls_are_allowed(self) -> None:
+        update = _update("example-pkg", "pip")
+        note = dcr_fetch._check(
+            update,
+            dcr_fetch.ECOSYSTEMS["pip"],
+            ["example-pkg==1.0.1 --index-url https://pypi.org/simple"],
+            ["example-pkg==1.0.0"],
+        )
+        self.assertIsNone(note)
+
 
 class GoFetchTest(unittest.TestCase):
     def test_go_zip_binds_the_h1_sum(self) -> None:
@@ -300,6 +419,26 @@ class ActionFetchTest(unittest.TestCase):
             self.assertTrue(any("https://github.com/owner/repo" in call for call in calls))
             self.assertTrue(any(new_sha in call for call in calls))
             self.assertTrue((out / "new" / f"00-owner_repo@{new_sha}" / "action.yml").is_file())
+
+    def test_archive_attributes_disable_upstream_export_rules(self) -> None:
+        tar_bytes = _tar_bytes({"action.yml": b"name: test\n"})
+        old_sha = "b" * 40
+        new_sha = "a" * 40
+        seen: list[str] = []
+
+        def run(args: list[str], **kwargs: object) -> _Completed:
+            if "archive" in args:
+                attributes = Path(kwargs["cwd"]) / "repo" / ".git" / "info" / "attributes"
+                seen.append(attributes.read_text(encoding="utf-8"))
+                return _Completed(data=tar_bytes)
+            return _Completed()
+
+        update = _update("owner/repo", "github_actions", old_sha, new_sha)
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(dcr_fetch.subprocess, "run", side_effect=run):
+                result = _process(update, Path(tmp), [f"uses: owner/repo@{new_sha}"], [f"uses: owner/repo@{old_sha}"])
+        self.assertEqual(result.status, "reviewed")
+        self.assertEqual(seen, ["* -export-ignore -export-subst\n"] * 2)
 
     def test_tag_only_pin_is_not_reviewed_as_a_moving_ref(self) -> None:
         update = _update("owner/repo", "github_actions", "v1.0.0", "v1.1.0")
@@ -383,6 +522,13 @@ class SafeExtractionTest(unittest.TestCase):
         payload = _zip_bytes({"file": b"x" * 10})
         with mock.patch.object(dcr_fetch, "MAX_BYTES", 5), self.assertRaises(FetchError):
             self._extract_zip(payload)
+
+    def test_explicit_archive_format_is_not_sniffed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "package.tar"
+            archive.write_bytes(_tar_bytes({"file": b"x"}))
+            with self.assertRaises(FetchError):
+                dcr_fetch._extract(archive, Path(tmp) / "out", "zip")
 
 
 class DiffAndIocTest(unittest.TestCase):
@@ -492,6 +638,49 @@ class MainTest(unittest.TestCase):
             self.assertEqual(len(meta["updates"]), dcr_fetch.MAX_UPDATES + 1)
             self.assertEqual(meta["updates"][-1]["status"], "not_reviewed")
             self.assertIn("cap", meta["updates"][-1]["note"])
+
+    def test_reviewable_updates_over_the_cap_are_unverified(self) -> None:
+        updates = [
+            {
+                "dependencyName": f"pkg-{index}",
+                "packageEcosystem": "cargo",
+                "prevVersion": "1.0.0",
+                "newVersion": "1.0.1",
+                "directory": "/",
+            }
+            for index in range(dcr_fetch.MAX_UPDATES)
+        ]
+        updates.append(
+            {
+                "dependencyName": "left-pad",
+                "packageEcosystem": "npm_and_yarn",
+                "prevVersion": "1.0.0",
+                "newVersion": "1.0.1",
+                "directory": "/",
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            diff = Path(tmp) / "pr.diff"
+            diff.write_text("--- a\n+++ b\n", encoding="utf-8")
+            out = Path(tmp) / "out"
+            env = {
+                "DCR_OUT": str(out),
+                "PR_DIFF_PATH": str(diff),
+                "UPDATED_DEPENDENCIES_JSON": json.dumps(updates),
+                "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
+            }
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.object(dcr_fetch, "_write_diff", return_value=False),
+                mock.patch.object(dcr_fetch, "_scan_diff", return_value=[]),
+            ):
+                self.assertEqual(dcr_fetch.main(), 0)
+            meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["updates"][-1]["status"], "unverified")
+            self.assertIn("cap", meta["updates"][-1]["note"])
+            self.assertEqual(meta["schema"], 1)
+            self.assertIn("ioc_hits", meta)
+            self.assertIn("truncated", meta)
 
     def test_truncated_diff_marks_reviewed_updates_truncated(self) -> None:
         tarball = _tar_bytes({"package/index.js": b"module.exports = 1;\n"})

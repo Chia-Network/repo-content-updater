@@ -20,7 +20,7 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from hashlib import sha256, sha512
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.request import urlopen as _urlopen
 
 MAX_UPDATES = 10
@@ -30,7 +30,12 @@ MAX_DIFF_BYTES = 2 * 1024 * 1024
 MAX_PYPI_JSON = 5 * 1024 * 1024
 PYPI_HOSTS = frozenset({"pypi.org"})
 PYPI_DOWNLOAD_HOSTS = frozenset({"files.pythonhosted.org"})
+PYPI_ALLOWED_HOSTS = PYPI_HOSTS | PYPI_DOWNLOAD_HOSTS
+PYPI_DISTRIBUTIONS = frozenset({"sdist", "bdist_wheel"})
 UPDATE_FIELDS = ("dependencyName", "packageEcosystem", "prevVersion", "newVersion")
+VERSION_WINDOW = 3
+HASH_WINDOW = 24
+INDEX_WINDOW = 8
 
 NPM_NAME = re.compile(r"^(?=.{1,214}$)(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 NPM_VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+){1,3}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
@@ -45,15 +50,20 @@ GO_VERSION = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+incom
 GO_SUM = re.compile(r"^h1:[A-Za-z0-9+/]{43}=$")
 ACTION_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 ACTION_SHA = re.compile(r"^[0-9a-f]{40}$")
+SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+SHA256_VALUE = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 BIDI_CONTROL = re.compile(r"[\u202a-\u202e\u2066-\u2069]")
 UNSAFE_ZIP_PATH = re.compile(r"^(?:[A-Za-z]:|[\\/])|[\\]|(?:^|/)\.\.(?:/|$)")
+URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+")
+
+NAME_CHARS = r"A-Za-z0-9._~-"
+VERSION_CHARS = r"A-Za-z0-9._+-"
+BINDING_CHARS = r"A-Za-z0-9._~+/=-"
+ZIP_SUFFIXES = frozenset({".zip", ".whl", ".egg"})
 
 
 class FetchError(Exception):
     """A fetch, download, validation or extraction step could not complete."""
-
-
-Ecosystem = tuple[re.Pattern[str], re.Pattern[str], Callable[[Path, str, str], tuple[Path, str]]]
 
 
 @dataclass(frozen=True)
@@ -66,6 +76,44 @@ class Update:
     status: str = "reviewed"
     bound: bool = False
     note: str = ""
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """A release file that can be loaded, with the literal that binds it to the lock."""
+
+    filename: str
+    binding: str
+    load: Callable[[], Path]
+    kind: str = ""
+    label: str = ""
+
+
+@dataclass(frozen=True)
+class Review:
+    """The files chosen for review and the binding decision they produce."""
+
+    candidates: tuple[Candidate, ...] = ()
+    bound: bool = False
+    status: str = "reviewed"
+    note: str = ""
+
+
+FetchFn = Callable[[Path, str, str], tuple[Candidate, ...]]
+Selector = Callable[[Update, tuple[Candidate, ...], tuple[str, ...], bool], Review]
+Precheck = Callable[[Update, tuple[str, ...], tuple[str, ...]], str | None]
+
+
+@dataclass(frozen=True)
+class Ecosystem:
+    """One reviewed ecosystem: grammars, archive format, review selection and fetcher."""
+
+    name: re.Pattern[str]
+    version: re.Pattern[str]
+    archive_format: Callable[[str], str]
+    files: Selector
+    fetch: FetchFn
+    precheck: Precheck | None = None
 
 
 def _run(
@@ -97,16 +145,106 @@ def _read_url(url: str, limit: int, hosts: frozenset[str]) -> bytes:
     return data
 
 
-def _fetch_npm(work: Path, name: str, version: str) -> tuple[Path, str]:
+def _token(text: str, chars: str) -> re.Pattern[str]:
+    """A literal match that cannot start or end inside a longer token."""
+    return re.compile(rf"(?<![{chars}]){re.escape(text)}(?![{chars}])")
+
+
+def _near(lines: list[str], anchor: str, needle: str, window: int) -> bool:
+    """True when `needle` appears within `window` lines of a whole-token `anchor`."""
+    anchor_pattern = _token(anchor, NAME_CHARS)
+    needle_pattern = _token(needle, VERSION_CHARS)
+    for index, line in enumerate(lines):
+        if not anchor_pattern.search(line):
+            continue
+        nearby = lines[max(0, index - window) : index + window + 1]
+        if any(needle_pattern.search(candidate) for candidate in nearby):
+            return True
+    return False
+
+
+def _near_lines(lines: list[str], anchor: str, window: int) -> list[str]:
+    """The lines within `window` of a whole-token `anchor`, in original order."""
+    anchor_pattern = _token(anchor, NAME_CHARS)
+    indexes = {index for index, line in enumerate(lines) if anchor_pattern.search(line)}
+    selected: set[int] = set()
+    for index in indexes:
+        selected.update(range(max(0, index - window), min(len(lines), index + window + 1)))
+    return [lines[index] for index in sorted(selected)]
+
+
+def _binding_on_added(binding: str, added: list[str]) -> bool:
+    if not binding:
+        return False
+    pattern = _token(binding, BINDING_CHARS)
+    return any(pattern.search(line) for line in added)
+
+
+def _locked_hashes(update: Update, added: list[str]) -> frozenset[str]:
+    """The sha256 values the lock lists near this package's entry."""
+    return frozenset(
+        match.group(0) for line in _near_lines(added, update.name, HASH_WINDOW) for match in SHA256_VALUE.finditer(line)
+    )
+
+
+def _pypi_index_note(update: Update, added: list[str], removed: list[str]) -> str | None:
+    """Reject a package entry whose URLs are not on the public PyPI hosts."""
+    for lines in (added, removed):
+        for line in _near_lines(lines, update.name, INDEX_WINDOW):
+            for match in URL_PATTERN.finditer(line):
+                parsed = urllib.parse.urlsplit(match.group(0))
+                if parsed.scheme != "https" or parsed.hostname not in PYPI_ALLOWED_HOSTS:
+                    return "non-default package index"
+    return None
+
+
+def _all_files(_update: Update, candidates: tuple[Candidate, ...], added: list[str], is_new: bool) -> Review:
+    """Review every fetched file; only the new side is bound to the lock."""
+    if not is_new:
+        return Review(candidates)
+    bound = bool(candidates) and all(_binding_on_added(candidate.binding, added) for candidate in candidates)
+    return Review(candidates, bound=bound, note="" if bound else "not bound to the lockfile")
+
+
+def _safe_label(filename: str) -> str:
+    """A single safe path component for one distribution's extraction directory."""
+    return re.sub(r"[^A-Za-z0-9._@-]", "_", filename).strip(".") or "artifact"
+
+
+def _labels(candidates: tuple[Candidate, ...]) -> tuple[Candidate, ...]:
+    """Keep several distributions apart by giving each its own extraction directory."""
+    if len(candidates) < 2:
+        return candidates
+    return tuple(replace(candidate, label=_safe_label(candidate.filename)) for candidate in candidates)
+
+
+def _pypi_files(update: Update, candidates: tuple[Candidate, ...], added: list[str], is_new: bool) -> Review:
+    """Review the new distributions whose hashes the lock lists, and check that all are covered."""
+    if not is_new:
+        chosen = next((candidate for candidate in candidates if candidate.kind == "sdist"), None)
+        chosen = chosen or (candidates[0] if candidates else None)
+        return Review((chosen,) if chosen else ())
+    locked = _locked_hashes(update, added)
+    if not locked:
+        return Review(_labels(candidates), note="not bound to the lockfile")
+    selected = _labels(tuple(candidate for candidate in candidates if _binding_on_added(candidate.binding, added)))
+    if {candidate.binding for candidate in candidates} >= locked:
+        return Review(selected, bound=True)
+    return Review(selected, status="unverified", note="partially bound")
+
+
+def _fetch_npm(work: Path, name: str, version: str) -> tuple[Candidate, ...]:
     _run(["npm", "pack", "--ignore-scripts", f"{name}@{version}"], cwd=work)
     archives = sorted(work.glob("*.tgz"))
     if len(archives) != 1:
         raise FetchError("npm pack did not produce exactly one archive")
-    data = archives[0].read_bytes()
-    return archives[0], "sha512-" + base64.b64encode(sha512(data).digest()).decode("ascii")
+    archive = archives[0]
+    data = archive.read_bytes()
+    binding = "sha512-" + base64.b64encode(sha512(data).digest()).decode("ascii")
+    return (Candidate(archive.name, binding, lambda: archive),)
 
 
-def _fetch_pypi(work: Path, name: str, version: str) -> tuple[Path, str]:
+def _fetch_pypi(work: Path, name: str, version: str) -> tuple[Candidate, ...]:
     endpoint = f"https://pypi.org/pypi/{urllib.parse.quote(name, safe='')}/{urllib.parse.quote(version, safe='')}/json"
     try:
         payload = json.loads(_read_url(endpoint, MAX_PYPI_JSON, PYPI_HOSTS))
@@ -115,25 +253,42 @@ def _fetch_pypi(work: Path, name: str, version: str) -> tuple[Path, str]:
     files = payload.get("urls") if isinstance(payload, dict) else None
     if not isinstance(files, list):
         raise FetchError("PyPI response has no file list")
-    usable = [item for item in files if isinstance(item, dict) and isinstance(item.get("url"), str)]
-    chosen = next(
-        (item for kind in ("sdist", "bdist_wheel") for item in usable if item.get("packagetype") == kind),
-        usable[0] if usable else None,
-    )
-    if chosen is None:
-        raise FetchError("PyPI response has no downloadable file")
-    data = _read_url(str(chosen["url"]), MAX_BYTES, PYPI_DOWNLOAD_HOSTS)
-    digests = chosen.get("digests")
-    expected = digests.get("sha256") if isinstance(digests, dict) else None
-    actual = sha256(data).hexdigest()
-    if not isinstance(expected, str) or expected != actual:
-        raise FetchError("downloaded file does not match the PyPI sha256 digest")
-    archive = work / "package"
-    archive.write_bytes(data)
-    return archive, f"sha256:{actual}"
+    usable = [
+        item
+        for item in files
+        if isinstance(item, dict) and isinstance(item.get("url"), str) and item.get("packagetype") in PYPI_DISTRIBUTIONS
+    ]
+    if not usable:
+        raise FetchError("PyPI response has no downloadable distribution")
+    candidates: list[Candidate] = []
+    for index, item in enumerate(usable):
+        filename = item.get("filename")
+        digests = item.get("digests")
+        expected = digests.get("sha256") if isinstance(digests, dict) else None
+        if (
+            not isinstance(filename, str)
+            or not filename
+            or not isinstance(expected, str)
+            or not SHA256_HEX.fullmatch(expected)
+        ):
+            raise FetchError("PyPI distribution is missing a filename or sha256 digest")
+        path = work / f"dist-{index:02d}"
+        url = str(item["url"])
+        kind = str(item.get("packagetype", ""))
+
+        def load(path: Path = path, url: str = url, expected: str = expected) -> Path:
+            data = _read_url(url, MAX_BYTES, PYPI_DOWNLOAD_HOSTS)
+            actual = sha256(data).hexdigest()
+            if actual != expected:
+                raise FetchError("downloaded file does not match the PyPI sha256 digest")
+            path.write_bytes(data)
+            return path
+
+        candidates.append(Candidate(filename, expected, load, kind=kind))
+    return tuple(candidates)
 
 
-def _fetch_gomod(work: Path, name: str, version: str) -> tuple[Path, str]:
+def _fetch_gomod(work: Path, name: str, version: str) -> tuple[Candidate, ...]:
     env = dict(
         os.environ, GO111MODULE="on", GOWORK="off", GOFLAGS="", GONOSUMDB="", GOPRIVATE="", GOSUMDB="sum.golang.org"
     )
@@ -145,24 +300,40 @@ def _fetch_gomod(work: Path, name: str, version: str) -> tuple[Path, str]:
     sum_value = payload.get("Sum") if isinstance(payload, dict) else None
     if not isinstance(zip_name, str) or not isinstance(sum_value, str) or not GO_SUM.fullmatch(sum_value):
         raise FetchError("go mod download did not return a zip and an h1 sum")
-    return Path(zip_name), sum_value
+    archive = Path(zip_name)
+    return (Candidate(archive.name, sum_value, lambda: archive, kind="zip"),)
 
 
-def _fetch_action(work: Path, name: str, version: str) -> tuple[Path, str]:
+def _fetch_action(work: Path, name: str, version: str) -> tuple[Candidate, ...]:
     _run(["git", "init", "-q", "repo"], cwd=work)
     _run(["git", "-C", "repo", "fetch", "--depth", "1", f"https://github.com/{name}", version], cwd=work)
+    attributes = work / "repo" / ".git" / "info" / "attributes"
+    attributes.parent.mkdir(parents=True, exist_ok=True)
+    attributes.write_text("* -export-ignore -export-subst\n", encoding="utf-8")
     archive = work / "action.tar"
     archive.write_bytes(
         _run(["git", "-C", "repo", "archive", "--format=tar", "FETCH_HEAD"], cwd=work, text=False).stdout
     )
-    return archive, version
+    return (Candidate(archive.name, version, lambda: archive),)
+
+
+def _tar_format(_filename: str) -> str:
+    return "tar"
+
+
+def _zip_format(_filename: str) -> str:
+    return "zip"
+
+
+def _format_from_name(filename: str) -> str:
+    return "zip" if PurePosixPath(filename).suffix.lower() in ZIP_SUFFIXES else "tar"
 
 
 ECOSYSTEMS: dict[str, Ecosystem] = {
-    "npm_and_yarn": (NPM_NAME, NPM_VERSION, _fetch_npm),
-    "pip": (PIP_NAME, PIP_VERSION, _fetch_pypi),
-    "gomod": (GO_NAME, GO_VERSION, _fetch_gomod),
-    "github_actions": (ACTION_NAME, ACTION_SHA, _fetch_action),
+    "npm_and_yarn": Ecosystem(NPM_NAME, NPM_VERSION, _tar_format, _all_files, _fetch_npm),
+    "pip": Ecosystem(PIP_NAME, PIP_VERSION, _format_from_name, _pypi_files, _fetch_pypi, _pypi_index_note),
+    "gomod": Ecosystem(GO_NAME, GO_VERSION, _zip_format, _all_files, _fetch_gomod),
+    "github_actions": Ecosystem(ACTION_NAME, ACTION_SHA, _tar_format, _all_files, _fetch_action),
 }
 
 
@@ -191,17 +362,25 @@ def _diff_lines(text: str) -> tuple[list[str], list[str]]:
     )
 
 
+def _reviewable(update: Update) -> bool:
+    """An update in a reviewed ecosystem whose new pin can be fetched and reviewed."""
+    if update.ecosystem not in ECOSYSTEMS:
+        return False
+    return update.ecosystem != "github_actions" or bool(ACTION_SHA.fullmatch(update.new_version))
+
+
 def _check(update: Update, ecosystem: Ecosystem, added: list[str], removed: list[str]) -> str | None:
     """Return an unverified reason, or None when the update passes the literal checks."""
-    name_pattern, version_pattern, _ = ecosystem
-    if not any(update.name in line and update.new_version in line for line in added) or not any(
-        update.prev_version in line for line in removed
+    if not _near(added, update.name, update.new_version, VERSION_WINDOW) or not _near(
+        removed, update.name, update.prev_version, VERSION_WINDOW
     ):
         return "name and version were not found on the expected diff lines"
-    if not name_pattern.fullmatch(update.name) or not all(
-        version_pattern.fullmatch(version) for version in (update.new_version, update.prev_version)
+    if not ecosystem.name.fullmatch(update.name) or not all(
+        ecosystem.version.fullmatch(version) for version in (update.new_version, update.prev_version)
     ):
         return "name or version does not match the ecosystem grammar"
+    if ecosystem.precheck is not None and (note := ecosystem.precheck(update, added, removed)):
+        return note
     return None
 
 
@@ -212,11 +391,12 @@ def _check_budget(count: int, total: int) -> None:
         raise FetchError("archive exceeds the extracted byte cap")
 
 
-def _extract(archive: Path, dest: Path) -> None:
-    """Extract a tar or zip archive after checking paths, links and size caps."""
+def _extract(archive: Path, dest: Path, archive_format: str | None = None) -> None:
+    """Extract using the stated archive format, or a filename suffix when none is passed."""
+    archive_format = archive_format or _format_from_name(archive.name)
     dest.mkdir(parents=True, exist_ok=True)
     try:
-        if zipfile.is_zipfile(archive):
+        if archive_format == "zip":
             with zipfile.ZipFile(archive) as handle:
                 infos = handle.infolist()
                 if any(not info.filename or UNSAFE_ZIP_PATH.search(info.filename) for info in infos):
@@ -225,11 +405,13 @@ def _extract(archive: Path, dest: Path) -> None:
                     raise FetchError("archive contains a symlink")
                 _check_budget(len(infos), sum(info.file_size for info in infos if not info.is_dir()))
                 handle.extractall(dest)  # ruff: ignore[tarfile-unsafe-members] - names, links and size checked above
-        else:
+        elif archive_format == "tar":
             with tarfile.open(archive, "r:*") as handle:
                 members = handle.getmembers()
                 _check_budget(len(members), sum(member.size for member in members if not member.isdir()))
                 handle.extractall(dest, filter="data")
+        else:
+            raise FetchError(f"unsupported archive format: {archive_format}")
     except (tarfile.TarError, zipfile.BadZipFile, OSError) as exc:
         raise FetchError(f"extraction failed: {exc}") from exc
 
@@ -238,21 +420,39 @@ def _process_update(index: int, update: Update, out_dir: Path, added: list[str],
     ecosystem = ECOSYSTEMS.get(update.ecosystem)
     if ecosystem is None:
         return replace(update, status="not_reviewed", note="ecosystem is not reviewed")
-    _, _, fetch = ecosystem
     if update.ecosystem == "github_actions" and not ACTION_SHA.fullmatch(update.new_version):
         return replace(update, status="not_reviewed", note="moving ref: the new pin is not a 40-hex commit SHA")
     if note := _check(update, ecosystem, added, removed):
         return replace(update, status="unverified", note=note)
+    slug = f"{index:02d}-" + re.sub(r"[^A-Za-z0-9._@-]", "_", f"{update.name}@{update.new_version}")
     try:
-        slug = f"{index:02d}-" + re.sub(r"[^A-Za-z0-9._@-]", "_", f"{update.name}@{update.new_version}")
-        for version, side in ((update.prev_version, "old"), (update.new_version, "new")):
+        new_review: Review | None = None
+        for side, version, is_new in (
+            ("old", update.prev_version, False),
+            ("new", update.new_version, True),
+        ):
             with tempfile.TemporaryDirectory() as tmp:
-                archive, binding = fetch(Path(tmp), update.name, version)
-                _extract(archive, out_dir / side / slug)
+                candidates = ecosystem.fetch(Path(tmp), update.name, version)
+                review = ecosystem.files(update, candidates, added, is_new)
+                for candidate in review.candidates:
+                    archive = candidate.load()
+                    _extract(
+                        archive, out_dir / side / slug / candidate.label, ecosystem.archive_format(candidate.filename)
+                    )
+                if is_new:
+                    new_review = review
     except (FetchError, OSError) as exc:
         return replace(update, status="fetch_failed", note=str(exc))
-    bound = any(binding in line for line in added)
-    return replace(update, bound=bound, note="" if bound else "not bound to the lockfile")
+    if new_review is None:
+        return replace(update, status="fetch_failed", note="the new version was not fetched")
+    if new_review.status != "reviewed":
+        return replace(update, status=new_review.status, note=new_review.note)
+    return replace(update, bound=new_review.bound, note=new_review.note)
+
+
+def _over_cap(update: Update) -> Update:
+    status = "unverified" if _reviewable(update) else "not_reviewed"
+    return replace(update, status=status, note=f"over the {MAX_UPDATES}-update cap")
 
 
 def _write_diff(out_dir: Path) -> bool:
@@ -315,10 +515,7 @@ def main() -> int:
     results = [
         _process_update(index, update, out_dir, added, removed) for index, update in enumerate(updates[:MAX_UPDATES])
     ]
-    results.extend(
-        replace(update, status="not_reviewed", note=f"over the {MAX_UPDATES}-update cap")
-        for update in updates[MAX_UPDATES:]
-    )
+    results.extend(_over_cap(update) for update in updates[MAX_UPDATES:])
     truncated = _write_diff(out_dir)
     if truncated:
         results = [
