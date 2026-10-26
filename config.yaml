@@ -71,8 +71,6 @@ files:
     companion_files:
       - github-scripts-init
       - dependency-artifact-review-fetch
-      - dependency-artifact-review-sources
-      - dependency-artifact-review-lock
       - dependency-artifact-review-verdict
       - dependency-artifact-review-prompt
     alternate_paths:
@@ -81,14 +79,6 @@ files:
   - name: dependency-artifact-review-fetch
     template_name: dcr-fetch.py
     repo_path: .github/scripts/dcr_fetch.py
-
-  - name: dependency-artifact-review-sources
-    template_name: dcr-sources.py
-    repo_path: .github/scripts/dcr_sources.py
-
-  - name: dependency-artifact-review-lock
-    template_name: dcr-lock.py
-    repo_path: .github/scripts/dcr_lock.py
 
   - name: dependency-artifact-review-verdict
     template_name: dcr-verdict.py
@@ -256,7 +246,6 @@ variables:
   CURSOR_CLI_VERSION: "2026.10.22-27dcf5f"
   CURSOR_CLI_SHA256: "85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294"
   DEPENDABOT_CURSOR_MALWARE_WARN_ONLY: "1"
-  DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS: '["axios@1\\.14\\.1", "axios@0\\.30\\.4", "plain-crypto-js", "sfrclak\\.com", "@shadanai/openclaw", "@shadanai/[a-z0-9._-]+", "2026\\.3\\.28-2", "2026\\.3\\.28-3", "2026\\.3\\.31-1", "2026\\.3\\.31-2"]'
   DEPENDABOT_CURSOR_MALWARE_IOC_ALLOWLIST: "[]"
   DEPENDABOT_CURSOR_MALWARE_UNICODE_ALLOWLIST: "[]"
   DEPENDABOT_CURSOR_MALWARE_CONFUSABLE_ALLOWLIST: "[]"

@@ -19,8 +19,6 @@ class FormatterBundleInventoryTest(unittest.TestCase):
             ("check_node_runtime.sh", "check-node-runtime.sh"),
             ("github_scripts_init.py", "github-scripts-init.py"),
             ("dcr_fetch.py", "dcr-fetch.py"),
-            ("dcr_sources.py", "dcr-sources.py"),
-            ("dcr_lock.py", "dcr-lock.py"),
             ("dcr_verdict.py", "dcr-verdict.py"),
             ("dcr_prompt.md", "dcr-prompt.md"),
         )

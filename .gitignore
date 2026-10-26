@@ -11,7 +11,5 @@ __pycache__/
 templates/check-node-runtime.sh
 templates/github-scripts-init.py
 templates/dcr-fetch.py
-templates/dcr-sources.py
-templates/dcr-lock.py
 templates/dcr-verdict.py
 templates/dcr-prompt.md

@@ -99,8 +99,6 @@ jobs:
           PR_FILES_PATH: ${{`{{ runner.temp }}`}}/pr-diff/files.txt
           DCR_OUT: ${{`{{ runner.temp }}`}}/dcr-review
           DCR_HEAD_REF: ${{`{{ github.event.pull_request.head.ref || steps.pr.outputs.head_ref }}`}}
-          DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS: >-
-            {{ .DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS }}
         run: |
           set -euo pipefail
           python3 -I .trusted-dcr-scripts/.github/scripts/dcr_fetch.py

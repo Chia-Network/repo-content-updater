@@ -142,8 +142,6 @@ func TestDependencyArtifactReviewIsOptInOnly(t *testing.T) {
 		"dependency-artifact-review",
 		"github-scripts-init",
 		"dependency-artifact-review-fetch",
-		"dependency-artifact-review-sources",
-		"dependency-artifact-review-lock",
 		"dependency-artifact-review-verdict",
 		"dependency-artifact-review-prompt",
 	}, expanded)
