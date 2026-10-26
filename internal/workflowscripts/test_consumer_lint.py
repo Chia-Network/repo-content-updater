@@ -1,4 +1,4 @@
-"""Lint synced dependency-cursor-review scripts as a consumer repository would.
+"""Lint synced managed review scripts as a consumer repository would.
 
 Builds `.github/scripts` from the canonical modules (the bytes
 `sync_malware_formatter_templates.py` emits) and runs chia-blockchain's ruff
