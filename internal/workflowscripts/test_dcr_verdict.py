@@ -172,6 +172,11 @@ class CommentTest(unittest.TestCase):
         self.assertIn("`first second ", body)
         self.assertNotIn("x" * 200, body)
 
+    def test_transitive_dependencies_note_is_present(self) -> None:
+        facts = _facts()
+        body = dcr_verdict.comment_body("<!-- marker -->", facts, decide(facts), "")
+        self.assertIn(dcr_verdict.TRANSITIVE_NOTE, body)
+
     def test_empty_agent_output_omits_the_details_block(self) -> None:
         facts = _facts()
         body = dcr_verdict.comment_body("<!-- marker -->", facts, decide(facts), "")

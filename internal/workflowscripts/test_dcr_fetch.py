@@ -228,7 +228,11 @@ class PypiFetchTest(unittest.TestCase):
                 )
             self.assertEqual(result.status, "reviewed")
             self.assertTrue(result.bound)
-            self.assertTrue((out / "new" / "00-example-pkg@1.0.1" / "example-1.0.1" / "setup.py").is_file())
+            self.assertTrue(
+                (
+                    out / "new" / "00-example-pkg@1.0.1" / "example-VERSION.tar.gz" / "example-1.0.1" / "setup.py"
+                ).is_file()
+            )
 
     def test_digest_mismatch_is_a_fetch_failure(self) -> None:
         file_bytes = _tar_bytes({"pkg/setup.py": b"print('ok')\n"})
@@ -282,8 +286,59 @@ class PypiFetchTest(unittest.TestCase):
             self.assertEqual(result.status, "reviewed")
             self.assertTrue(result.bound)
             artifact = out / "new" / "00-example-pkg@1.0.1"
-            self.assertTrue((artifact / "example-1.0.1.tar.gz" / "example-1.0.1" / "setup.py").is_file())
-            self.assertTrue((artifact / "example-1.0.1-py3-none-any.whl" / "example" / "__init__.py").is_file())
+            self.assertTrue((artifact / "example-VERSION.tar.gz" / "example-1.0.1" / "setup.py").is_file())
+            self.assertTrue((artifact / "example-VERSION-py3-none-any.whl" / "example" / "__init__.py").is_file())
+
+    def test_old_side_reviews_the_counterparts_of_the_new_distributions(self) -> None:
+        old_sdist = _tar_bytes({"example-1.0.0/setup.py": b"OLD\n"})
+        old_wheel = _zip_bytes({"example/__init__.py": b"OLD\n"})
+        new_sdist = _tar_bytes({"example-1.0.1/setup.py": b"NEW\n"})
+        new_wheel = _zip_bytes({"example/__init__.py": b"NEW\n"})
+        payloads = {
+            "1.0.0": {
+                "urls": [
+                    _pypi_distribution("sdist", "example-1.0.0.tar.gz", old_sdist),
+                    _pypi_distribution("bdist_wheel", "example-1.0.0-py3-none-any.whl", old_wheel),
+                ]
+            },
+            "1.0.1": {
+                "urls": [
+                    _pypi_distribution("sdist", "example-1.0.1.tar.gz", new_sdist),
+                    _pypi_distribution("bdist_wheel", "example-1.0.1-py3-none-any.whl", new_wheel),
+                ]
+            },
+        }
+        files = {
+            str(item["url"]): data
+            for payload, datas in (
+                (payloads["1.0.0"], (old_sdist, old_wheel)),
+                (payloads["1.0.1"], (new_sdist, new_wheel)),
+            )
+            for item, data in zip(payload["urls"], datas)
+        }
+
+        def fake(url: str, timeout: int = 30) -> _Response:
+            del timeout
+            for version, payload in payloads.items():
+                if url.endswith(f"/{version}/json"):
+                    return _Response(json.dumps(payload).encode())
+            return _Response(files[url])
+
+        update = _update("example-pkg", "pip")
+        hashes = " ".join(f"--hash=sha256:{sha256(data).hexdigest()}" for data in (new_sdist, new_wheel))
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            with mock.patch.object(dcr_sources, "_urlopen", side_effect=fake):
+                result = _process(update, out, [f"example-pkg==1.0.1 {hashes}"], ["example-pkg==1.0.0"])
+            self.assertEqual(result.status, "reviewed")
+            old_artifact = out / "old" / "00-example-pkg@1.0.1"
+            new_artifact = out / "new" / "00-example-pkg@1.0.1"
+            self.assertTrue((old_artifact / "example-VERSION.tar.gz" / "example-1.0.0" / "setup.py").is_file())
+            self.assertTrue((old_artifact / "example-VERSION-py3-none-any.whl" / "example" / "__init__.py").is_file())
+            self.assertEqual(
+                {path.name for path in old_artifact.iterdir()},
+                {path.name for path in new_artifact.iterdir()},
+            )
 
     def test_lock_hash_without_a_registry_file_is_partially_bound(self) -> None:
         sdist = _tar_bytes({"example-1.0.1/setup.py": b"print('ok')\n"})
@@ -571,11 +626,15 @@ class HeadRefTest(unittest.TestCase):
         self.assertIsNone(dcr_fetch._head_ecosystem(""))
         self.assertIsNone(dcr_fetch._head_ecosystem("renovate/left-pad-1.x"))
 
-    def test_head_note_rejects_a_missing_or_different_ecosystem(self) -> None:
+    def test_status_rejects_a_missing_or_different_head_ecosystem(self) -> None:
         update = Update("left-pad", "npm_and_yarn", "", "1.0.0", "1.0.1")
-        self.assertEqual(dcr_fetch._head_note(update, "npm_and_yarn"), None)
-        self.assertIn("different", dcr_fetch._head_note(update, "pip") or "")
-        self.assertIn("does not name", dcr_fetch._head_note(update, None) or "")
+        self.assertIsNone(dcr_fetch._status(update, "npm_and_yarn", None, False))
+        different = dcr_fetch._status(update, "pip", None, False)
+        self.assertIsNotNone(different)
+        self.assertIn("different", different.note if different else "")
+        missing = dcr_fetch._status(update, None, None, False)
+        self.assertIsNotNone(missing)
+        self.assertIn("does not name", missing.note if missing else "")
 
 
 class DiffScanTest(unittest.TestCase):
@@ -720,6 +779,41 @@ class MainTest(unittest.TestCase):
             meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
             self.assertTrue(meta["truncated"])
             self.assertEqual(meta["updates"][0]["status"], "truncated")
+
+    def test_diff_failure_still_writes_meta_and_marks_reviewed_failed(self) -> None:
+        tarball = _tar_bytes({"package/index.js": b"module.exports = 1;\n"})
+        binding = "sha512-" + base64.b64encode(sha512(tarball).digest()).decode("ascii")
+        update = {
+            "dependencyName": "left-pad",
+            "packageEcosystem": "npm_and_yarn",
+            "prevVersion": "1.0.0",
+            "newVersion": "1.0.1",
+            "directory": "/",
+        }
+
+        def runner(args: list[str], **kwargs: object) -> _Completed:
+            if args[0] == "npm":
+                return _npm_runner(tarball)(args, **kwargs)
+            return _diff_runner(b"", returncode=2)(args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            diff = Path(tmp) / "pr.diff"
+            diff.write_text(f"--- a\n+++ b\n+left-pad 1.0.1 {binding}\n-left-pad 1.0.0\n", encoding="utf-8")
+            files = _files_list(Path(tmp), "package.json")
+            out = Path(tmp) / "out"
+            env = {
+                "DCR_OUT": str(out),
+                "PR_DIFF_PATH": str(diff),
+                "PR_FILES_PATH": str(files),
+                "UPDATED_DEPENDENCIES_JSON": json.dumps([update]),
+                "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
+                "DCR_HEAD_REF": "dependabot/npm_and_yarn/left-pad-1.0.1",
+            }
+            with mock.patch.dict(os.environ, env), mock.patch.object(dcr_sources.subprocess, "run", side_effect=runner):
+                self.assertEqual(dcr_fetch.main(), 0)
+            meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["updates"][0]["status"], "fetch_failed")
+            self.assertIn("diff failed", meta["updates"][0]["note"])
 
     def test_mismatched_head_ref_skips_the_fetch(self) -> None:
         update = {

@@ -54,6 +54,8 @@ If you cannot inspect enough of the artifact to reach a conclusion, choose
 ## Scope reminders
 
 - Review the published bytes, not the upstream repository's commit history.
+- Dependencies added transitively (brand-new packages that are not in the update
+  list) are not artifact-reviewed.
 - Changes to tests, documentation and examples are lower priority than code
   that runs at install time or at runtime.
 - Report what you actually saw. Do not repeat long file contents.

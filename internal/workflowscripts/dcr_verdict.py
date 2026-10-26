@@ -17,6 +17,7 @@ from typing import NamedTuple
 VERDICT_PREFIX = "MALWARE_REVIEW_VERDICT:"
 VERDICT_RE = re.compile(rf"^{VERDICT_PREFIX} (benign|suspicious|malicious)$")
 MARKER = "<!-- dcr-artifact-review sha256:{digest} -->"
+TRANSITIVE_NOTE = "Dependencies added transitively and not listed as updates are not artifact-reviewed."
 MAX_AGENT_CHARS, MAX_COMMENT_CHARS = 40000, 64000
 URL_RE = re.compile(r"(?i)https?://")
 
@@ -99,6 +100,7 @@ def comment_body(marker: str, facts: Facts, decision: Decision, agent_text: str)
     parts.append(f"**Result:** {decision.conclusion}\n**Reason:** {decision.reason}")
     if facts.updates:
         parts.append("### Updates\n" + "\n".join(map(_update_line, facts.updates)))
+    parts.append(TRANSITIVE_NOTE)
     if facts.ioc_hits:
         hits = "\n".join(f"- {_inline(h.get('kind', ''))}: {_inline(h.get('pattern', ''))}" for h in facts.ioc_hits)
         parts.append("### Deterministic findings\n" + hits)

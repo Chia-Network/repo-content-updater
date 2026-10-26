@@ -89,19 +89,15 @@ class Review:
 
 
 FetchFn = Callable[[Path, str, str], tuple[Candidate, ...]]
-Selector = Callable[[Update, tuple[Candidate, ...], Sequence[Hunk], bool], Review]
-Precheck = Callable[[Update, Sequence[Hunk]], str | None]
 
 
 @dataclass(frozen=True)
 class Ecosystem:
-    """One reviewed ecosystem: grammars, review selection and fetcher."""
+    """One reviewed ecosystem: grammars and fetcher."""
 
     name: re.Pattern[str]
     version: re.Pattern[str]
-    files: Selector
     fetch: FetchFn
-    precheck: Precheck | None = None
 
 
 def _pypi_index_note(update: Update, hunks: Sequence[Hunk]) -> str | None:
@@ -116,47 +112,58 @@ def _pypi_index_note(update: Update, hunks: Sequence[Hunk]) -> str | None:
     return None
 
 
-def _all_files(_update: Update, candidates: tuple[Candidate, ...], hunks: Sequence[Hunk], is_new: bool) -> Review:
-    """Review every fetched file; only the new side is bound to the lock."""
-    if not is_new:
-        return Review(candidates)
-    added = [body for hunk in hunks for kind, body in hunk.lines if kind == "+"]
-    bound = bool(candidates) and all(binding_on_added(candidate.binding, added) for candidate in candidates)
-    return Review(candidates, bound=bound, note="" if bound else "not bound to the lockfile")
-
-
 def _safe_label(filename: str) -> str:
     """A single safe path component for one distribution's extraction directory."""
     return re.sub(r"[^A-Za-z0-9._@-]", "_", filename).strip(".") or "artifact"
 
 
-def _labels(candidates: tuple[Candidate, ...]) -> tuple[Candidate, ...]:
-    """Keep several distributions apart by giving each its own extraction directory."""
-    if len(candidates) < 2:
-        return candidates
-    return tuple(replace(candidate, label=_safe_label(candidate.filename)) for candidate in candidates)
+def _pypi_label(filename: str, version: str) -> str:
+    """A version-free label so old and new distributions share a directory."""
+    return _safe_label(filename.replace(version, "VERSION"))
 
 
-def _pypi_files(update: Update, candidates: tuple[Candidate, ...], hunks: Sequence[Hunk], is_new: bool) -> Review:
-    """Review the new distributions whose hashes the lock lists, and check that all are covered."""
+def _pypi_files(
+    update: Update,
+    candidates: tuple[Candidate, ...],
+    hunks: Sequence[Hunk],
+    is_new: bool,
+    new_review: Review | None = None,
+) -> Review:
+    """Review the new distributions the lock binds, and the matching old ones."""
     if not is_new:
-        chosen = next((candidate for candidate in candidates if candidate.kind == "sdist"), None)
-        chosen = chosen or (candidates[0] if candidates else None)
-        return Review((chosen,) if chosen else ())
+        reviewed = new_review.candidates if new_review else ()
+        old_names = {
+            candidate.filename.replace(update.new_version, update.prev_version): candidate for candidate in reviewed
+        }
+        selected = tuple(
+            replace(candidate, label=_pypi_label(old_names[candidate.filename].filename, update.new_version))
+            for candidate in candidates
+            if candidate.filename in old_names
+        )
+        return Review(selected)
     locked = locked_hashes(update.name, hunks)
     if not locked:
-        return Review(_labels(candidates), note="not bound to the lockfile")
-    selected = _labels(tuple(candidate for candidate in candidates if candidate.binding in locked))
+        selected = candidates
+        return Review(
+            tuple(
+                replace(candidate, label=_pypi_label(candidate.filename, update.new_version)) for candidate in selected
+            ),
+            note="not bound to the lockfile",
+        )
+    selected = tuple(candidate for candidate in candidates if candidate.binding in locked)
+    labeled = tuple(
+        replace(candidate, label=_pypi_label(candidate.filename, update.new_version)) for candidate in selected
+    )
     if locked <= {candidate.binding for candidate in candidates}:
-        return Review(selected, bound=True)
-    return Review(selected, status="unverified", note="partially bound")
+        return Review(labeled, bound=True)
+    return Review(labeled, status="unverified", note="partially bound")
 
 
 ECOSYSTEMS: dict[str, Ecosystem] = {
-    "npm_and_yarn": Ecosystem(NPM_NAME, NPM_VERSION, _all_files, fetch_npm),
-    "pip": Ecosystem(PIP_NAME, PIP_VERSION, _pypi_files, fetch_pypi, _pypi_index_note),
-    "gomod": Ecosystem(GO_NAME, GO_VERSION, _all_files, fetch_gomod),
-    "github_actions": Ecosystem(ACTION_NAME, ACTION_SHA, _all_files, fetch_action),
+    "npm_and_yarn": Ecosystem(NPM_NAME, NPM_VERSION, fetch_npm),
+    "pip": Ecosystem(PIP_NAME, PIP_VERSION, fetch_pypi),
+    "gomod": Ecosystem(GO_NAME, GO_VERSION, fetch_gomod),
+    "github_actions": Ecosystem(ACTION_NAME, ACTION_SHA, fetch_action),
 }
 
 ALLOWED_CHANGED_FILES: dict[str, tuple[re.Pattern[str], ...]] = {
@@ -223,12 +230,31 @@ def _head_ecosystem(head_ref: str) -> str | None:
     return ECOSYSTEM_ALIASES.get(parts[1], parts[1])
 
 
-def _head_note(update: Update, head_ecosystem: str | None) -> str | None:
-    """The fail-closed reason when the head branch does not name the update's ecosystem."""
+def _status(
+    update: Update,
+    head_ecosystem: str | None,
+    scope_note: str | None,
+    over_cap: bool,
+) -> Update | None:
+    """The final Update when it must not be fetched, or None when it should be."""
     if head_ecosystem is None:
-        return "head branch does not name the update ecosystem"
+        return replace(update, status="unverified", note="head branch does not name the update ecosystem")
     if head_ecosystem != update.ecosystem:
-        return "head branch names a different update ecosystem"
+        return replace(update, status="unverified", note="head branch names a different update ecosystem")
+    ecosystem = ECOSYSTEMS.get(update.ecosystem)
+    reviewable = ecosystem is not None and (
+        update.ecosystem != "github_actions" or bool(ACTION_SHA.fullmatch(update.new_version))
+    )
+    if over_cap:
+        if not reviewable:
+            return replace(update, status="not_reviewed", note=f"over the {MAX_UPDATES}-update cap")
+        return replace(update, status="unverified", note=scope_note or f"over the {MAX_UPDATES}-update cap")
+    if ecosystem is None:
+        return replace(update, status="not_reviewed", note="ecosystem is not reviewed")
+    if update.ecosystem == "github_actions" and not ACTION_SHA.fullmatch(update.new_version):
+        return replace(update, status="not_reviewed", note="moving ref: the new pin is not a 40-hex commit SHA")
+    if scope_note:
+        return replace(update, status="unverified", note=scope_note)
     return None
 
 
@@ -248,13 +274,6 @@ def _changed_files() -> tuple[str, ...] | None:
     return read_changed_files(os.environ.get("PR_FILES_PATH"))
 
 
-def _reviewable(update: Update) -> bool:
-    """An update in a reviewed ecosystem whose new pin can be fetched and reviewed."""
-    if update.ecosystem not in ECOSYSTEMS:
-        return False
-    return update.ecosystem != "github_actions" or bool(ACTION_SHA.fullmatch(update.new_version))
-
-
 def _check(update: Update, ecosystem: Ecosystem, hunks: Sequence[Hunk]) -> str | None:
     """Return an unverified reason, or None when the update passes the literal checks."""
     if not any(
@@ -266,7 +285,7 @@ def _check(update: Update, ecosystem: Ecosystem, hunks: Sequence[Hunk]) -> str |
         ecosystem.version.fullmatch(version) for version in (update.new_version, update.prev_version)
     ):
         return "name or version does not match the ecosystem grammar"
-    if ecosystem.precheck is not None and (note := ecosystem.precheck(update, hunks)):
+    if update.ecosystem == "pip" and (note := _pypi_index_note(update, hunks)):
         return note
     return None
 
@@ -278,45 +297,35 @@ def _process_update(
     hunks: Sequence[Hunk],
     scope_note: str | None = None,
 ) -> Update:
-    ecosystem = ECOSYSTEMS.get(update.ecosystem)
-    if ecosystem is None:
-        return replace(update, status="not_reviewed", note="ecosystem is not reviewed")
-    if update.ecosystem == "github_actions" and not ACTION_SHA.fullmatch(update.new_version):
-        return replace(update, status="not_reviewed", note="moving ref: the new pin is not a 40-hex commit SHA")
-    if scope_note:
-        return replace(update, status="unverified", note=scope_note)
+    if status := _status(update, update.ecosystem, scope_note, False):
+        return status
+    ecosystem = ECOSYSTEMS[update.ecosystem]
     if note := _check(update, ecosystem, hunks):
         return replace(update, status="unverified", note=note)
     slug = f"{index:02d}-" + re.sub(r"[^A-Za-z0-9._@-]", "_", f"{update.name}@{update.new_version}")
     try:
-        new_review: Review | None = None
-        for side, version, is_new in (
-            ("old", update.prev_version, False),
-            ("new", update.new_version, True),
-        ):
-            with tempfile.TemporaryDirectory() as tmp:
-                candidates = ecosystem.fetch(Path(tmp), update.name, version)
-                review = ecosystem.files(update, candidates, hunks, is_new)
+        with tempfile.TemporaryDirectory() as tmp_old, tempfile.TemporaryDirectory() as tmp_new:
+            old_candidates = ecosystem.fetch(Path(tmp_old), update.name, update.prev_version)
+            new_candidates = ecosystem.fetch(Path(tmp_new), update.name, update.new_version)
+            if update.ecosystem == "pip":
+                new_review = _pypi_files(update, new_candidates, hunks, True)
+                old_review = _pypi_files(update, old_candidates, hunks, False, new_review)
+            else:
+                added = [body for hunk in hunks for kind, body in hunk.lines if kind == "+"]
+                bound = bool(new_candidates) and all(
+                    binding_on_added(candidate.binding, added) for candidate in new_candidates
+                )
+                new_review = Review(new_candidates, bound=bound, note="" if bound else "not bound to the lockfile")
+                old_review = Review(old_candidates)
+            for side, review in (("old", old_review), ("new", new_review)):
                 for candidate in review.candidates:
                     archive = candidate.load()
                     extract(archive, out_dir / side / slug / candidate.label, format_from_name(candidate.filename))
-                if is_new:
-                    new_review = review
     except (FetchError, OSError) as exc:
         return replace(update, status="fetch_failed", note=str(exc))
-    if new_review is None:
-        return replace(update, status="fetch_failed", note="the new version was not fetched")
     if new_review.status != "reviewed":
         return replace(update, status=new_review.status, note=new_review.note)
     return replace(update, bound=new_review.bound, note=new_review.note)
-
-
-def _over_cap(update: Update, head_ecosystem: str | None, scope_note: str | None) -> Update:
-    if note := _head_note(update, head_ecosystem):
-        return replace(update, status="unverified", note=note)
-    status = "unverified" if _reviewable(update) else "not_reviewed"
-    note = scope_note if status == "unverified" and scope_note else f"over the {MAX_UPDATES}-update cap"
-    return replace(update, status=status, note=note)
 
 
 def write_diff(out_dir: Path) -> bool:
@@ -389,15 +398,19 @@ def main() -> int:
     files = _changed_files()
     scope_note = "changed file list unavailable" if files is None else _scope_note(head_ecosystem, files)
     results: list[Update] = []
-    for index, update in enumerate(updates[:MAX_UPDATES]):
-        note = _head_note(update, head_ecosystem)
-        results.append(
-            replace(update, status="unverified", note=note)
-            if note
-            else _process_update(index, update, out_dir, hunks, scope_note)
-        )
-    results.extend(_over_cap(update, head_ecosystem, scope_note) for update in updates[MAX_UPDATES:])
-    truncated = write_diff(out_dir)
+    for index, update in enumerate(updates):
+        status = _status(update, head_ecosystem, scope_note, index >= MAX_UPDATES)
+        results.append(status if status is not None else _process_update(index, update, out_dir, hunks, scope_note))
+    try:
+        truncated = write_diff(out_dir)
+    except FetchError as exc:
+        results = [
+            replace(result, status="fetch_failed", note=f"diff failed: {exc}")
+            if result.status == "reviewed"
+            else result
+            for result in results
+        ]
+        truncated = False
     if truncated:
         results = [
             replace(result, status="truncated", note="changes.diff exceeded the 2 MiB cap")
