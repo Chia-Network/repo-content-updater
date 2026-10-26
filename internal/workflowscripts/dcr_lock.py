@@ -1,15 +1,15 @@
-"""Inspect the PR diff for changed file paths and literal review changes.
+"""Inspect the PR diff and changed-file list for literal review changes.
 
-The diff text is untrusted data and is never executed. Paths come from the
-`diff --git` headers, and the same module owns the literal diff checks.
+The diff and file list are untrusted data and are never executed. Paths come
+from the PR files API list, and the same module owns the literal diff checks.
 """
 
 from __future__ import annotations
 
 import re
-import shlex
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+")
 SHA256_VALUE = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
@@ -22,6 +22,7 @@ PIP_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 PIP_VERSION_SPLIT = re.compile(r"-(?=[0-9])")
 PACKAGE_SUFFIX = re.compile(r"\.(?:tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg)$")
 LOCK_WINDOW = 24
+MAX_PR_FILES = 3000
 
 
 @dataclass(frozen=True)
@@ -31,27 +32,18 @@ class Hunk:
     lines: tuple[tuple[str, str], ...] = ()
 
 
-def _strip_git_prefix(value: str) -> str | None:
-    """The path without its a/ or b/ prefix, or None for /dev/null."""
-    if value == "/dev/null":
+def read_changed_files(path: str | None) -> tuple[str, ...] | None:
+    """The paths listed by the PR files API, or None when the list is unusable."""
+    if not path:
         return None
-    if len(value) >= 2 and value[0] == value[-1] == '"':
-        value = value[1:-1]
-    return value[2:] if value.startswith(("a/", "b/")) else value
-
-
-def _git_paths(line: str) -> tuple[str, ...]:
-    """The old and new paths named by one `diff --git` header."""
-    rest = line[len("diff --git ") :].strip()
-    if '"' in rest:
-        try:
-            parts = shlex.split(rest)
-        except ValueError:
-            parts = rest.split()
-    else:
-        index = rest.find(" b/")
-        parts = [rest] if index < 0 else [rest[:index], rest[index + 1 :]]
-    return tuple(path for part in parts[:2] if (path := _strip_git_prefix(part)))
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    paths = tuple(line for line in text.splitlines() if line)
+    if not paths or len(paths) >= MAX_PR_FILES:
+        return None
+    return paths
 
 
 def _walk(text: str) -> Iterator[tuple[int, str, str, int]]:
@@ -175,18 +167,6 @@ def hunk_matches(hunk: Hunk, name: str, new_version: str, prev_version: str, win
         )
 
     return found(new_version, "new") and found(prev_version, "old")
-
-
-def changed_files(text: str) -> tuple[str, ...]:
-    """The changed file paths on both sides of the diff's `diff --git` headers."""
-    paths: list[str] = []
-    for line in text.splitlines():
-        if not line.startswith("diff --git "):
-            continue
-        for path in _git_paths(line):
-            if path not in paths:
-                paths.append(path)
-    return tuple(paths)
 
 
 def token(text: str, chars: str) -> re.Pattern[str]:

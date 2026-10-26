@@ -1,16 +1,20 @@
-"""Tests for dcr_lock: changed file paths and hunk parsing from a diff."""
+"""Tests for dcr_lock: changed file lists and hunk parsing from a diff."""
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from dcr_lock import added_lines, changed_files, parse_hunks
+import dcr_fetch
+from dcr_lock import added_lines, parse_hunks
 
 
 class DiffParseTest(unittest.TestCase):
@@ -29,36 +33,49 @@ class DiffParseTest(unittest.TestCase):
 
 
 class ChangedFilesTest(unittest.TestCase):
-    def test_both_sides_of_a_rename_are_reported(self) -> None:
-        text = (
-            "diff --git a/old.txt b/new.txt\n"
-            "similarity index 100%\n"
-            "rename from old.txt\n"
-            "rename to new.txt\n"
-            "--- a/old.txt\n"
-            "+++ b/new.txt\n"
-        )
-        self.assertEqual(changed_files(text), ("old.txt", "new.txt"))
+    def _note(self, path: str | None) -> str | None:
+        """The scope note for a pip head and the given PR files list path."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            if path is None:
+                os.environ.pop("PR_FILES_PATH", None)
+            else:
+                os.environ["PR_FILES_PATH"] = path
+            files = dcr_fetch._changed_files()
+        return "changed file list unavailable" if files is None else dcr_fetch._scope_note("pip", files)
 
-    def test_deletion_is_reported_from_the_git_header(self) -> None:
-        text = "diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\n--- a/gone.txt\n+++ /dev/null\n"
-        self.assertEqual(changed_files(text), ("gone.txt",))
+    def test_lockfile_only_list_has_no_scope_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            files = Path(tmp) / "files.txt"
+            files.write_text("poetry.lock\n", encoding="utf-8")
+            self.assertIsNone(self._note(str(files)))
 
-    def test_quoted_path_with_spaces_is_unquoted(self) -> None:
-        text = 'diff --git "a/with space.txt" "b/with space.txt"\n'
-        self.assertEqual(changed_files(text), ("with space.txt",))
+    def test_previous_filename_outside_the_ecosystem_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            files = Path(tmp) / "files.txt"
+            files.write_text("poetry.lock\n.github/workflows/x.yml\n", encoding="utf-8")
+            self.assertEqual(
+                self._note(str(files)),
+                "changed file outside the update ecosystem: .github/workflows/x.yml",
+            )
 
-    def test_unquoted_path_with_spaces_is_kept_whole(self) -> None:
-        text = "diff --git a/with space.txt b/with space.txt\n"
-        self.assertEqual(changed_files(text), ("with space.txt",))
+    def test_unavailable_changed_file_lists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = Path(tmp) / "empty.txt"
+            empty.write_text("", encoding="utf-8")
+            missing = Path(tmp) / "missing.txt"
+            for label, path in (
+                ("missing env var", None),
+                ("missing file", str(missing)),
+                ("empty file", str(empty)),
+            ):
+                with self.subTest(label=label):
+                    self.assertEqual(self._note(path), "changed file list unavailable")
 
-    def test_duplicate_paths_are_reported_once(self) -> None:
-        text = "diff --git a/same.txt b/same.txt\ndiff --git a/same.txt b/same.txt\n"
-        self.assertEqual(changed_files(text), ("same.txt",))
-
-    def test_headers_without_a_git_line_are_ignored(self) -> None:
-        text = "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n"
-        self.assertEqual(changed_files(text), ())
+    def test_three_thousand_paths_are_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            files = Path(tmp) / "files.txt"
+            files.write_text("\n".join(f"file-{index}" for index in range(3000)), encoding="utf-8")
+            self.assertEqual(self._note(str(files)), "changed file list unavailable")
 
 
 if __name__ == "__main__":

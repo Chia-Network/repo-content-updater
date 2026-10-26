@@ -1,9 +1,10 @@
 """Fetch published artifacts for a Dependabot PR and write a review bundle.
 
-The update list (`dependabot/fetch-metadata`) and the PR diff (`gh pr diff`) are
-untrusted. Names and versions are validated per ecosystem, passed as argv, and
-extracted archives are checked for links and traversal. Writes the artifact
-trees, `changes.diff`, `files.txt` and `meta.json` under `DCR_OUT`.
+The update list (`dependabot/fetch-metadata`), PR diff (`gh pr diff`) and PR
+files API list are untrusted. Names and versions are validated per ecosystem,
+passed as argv, and extracted archives are checked for links and traversal.
+Writes the artifact trees, `changes.diff`, `files.txt` and `meta.json` under
+`DCR_OUT`.
 """
 
 from __future__ import annotations
@@ -26,11 +27,11 @@ from dcr_lock import (
     Hunk,
     added_lines,
     binding_on_added,
-    changed_files,
     hunk_matches,
     hunk_near,
     locked_hashes,
     parse_hunks,
+    read_changed_files,
 )
 from dcr_sources import (
     PYPI_ALLOWED_HOSTS,
@@ -242,6 +243,11 @@ def _scope_note(head_ecosystem: str | None, files: tuple[str, ...]) -> str | Non
     return None
 
 
+def _changed_files() -> tuple[str, ...] | None:
+    """The PR's changed paths, or None when the files API list is unavailable."""
+    return read_changed_files(os.environ.get("PR_FILES_PATH"))
+
+
 def _reviewable(update: Update) -> bool:
     """An update in a reviewed ecosystem whose new pin can be fetched and reviewed."""
     if update.ecosystem not in ECOSYSTEMS:
@@ -380,7 +386,8 @@ def main() -> int:
     diff_text = Path(os.environ["PR_DIFF_PATH"]).read_text(encoding="utf-8", errors="replace")
     hunks = parse_hunks(diff_text)
     head_ecosystem = _head_ecosystem(os.environ.get("DCR_HEAD_REF", ""))
-    scope_note = _scope_note(head_ecosystem, changed_files(diff_text))
+    files = _changed_files()
+    scope_note = "changed file list unavailable" if files is None else _scope_note(head_ecosystem, files)
     results: list[Update] = []
     for index, update in enumerate(updates[:MAX_UPDATES]):
         note = _head_note(update, head_ecosystem)

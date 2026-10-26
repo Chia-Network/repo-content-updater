@@ -105,6 +105,7 @@ class ArtifactReviewTemplateTest(unittest.TestCase):
     def test_publish_downloads_only_the_small_verdict_inputs(self) -> None:
         inputs = _step(self.prepare, "Upload review inputs")
         self.assertIn("name: dcr-review-input-${{`{{ github.run_id }}`}}", inputs)
+        self.assertIn("include-hidden-files: true", inputs)
         metadata = _step(self.prepare, "Upload review metadata")
         self.assertIn("name: dcr-verdict-meta-${{`{{ github.run_id }}`}}", metadata)
         self.assertTrue(metadata.rstrip().endswith("meta.json"))
@@ -130,6 +131,16 @@ class ArtifactReviewTemplateTest(unittest.TestCase):
             "DCR_HEAD_REF: ${{`{{ github.event.pull_request.head.ref || steps.pr.outputs.head_ref }}`}}",
             fetch,
         )
+
+    def test_collect_step_writes_and_fetch_step_reads_the_pr_files_list(self) -> None:
+        collect = _step(self.prepare, "Collect PR diff")
+        self.assertIn(
+            'gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100"',
+            collect,
+        )
+        self.assertIn('> "${RUNNER_TEMP}/pr-diff/files.txt"', collect)
+        fetch = _step(self.prepare, "Fetch published artifacts")
+        self.assertIn("PR_FILES_PATH: ${{`{{ runner.temp }}`}}/pr-diff/files.txt", fetch)
 
 
 class ArtifactReviewConfigTest(unittest.TestCase):

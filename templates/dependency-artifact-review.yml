@@ -83,6 +83,7 @@ jobs:
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/pr-diff"
           gh pr diff "$PR_NUMBER" > "${RUNNER_TEMP}/pr-diff/pr.diff"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" --jq '.[] | [.filename, (.previous_filename // empty)] | .[]' > "${RUNNER_TEMP}/pr-diff/files.txt"
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -95,6 +96,7 @@ jobs:
           UPDATED_DEPENDENCIES_JSON: >-
             ${{`{{ github.event_name == 'workflow_dispatch' && github.event.inputs.updated_dependencies_json || steps.metadata.outputs['updated-dependencies-json'] }}`}}
           PR_DIFF_PATH: ${{`{{ runner.temp }}`}}/pr-diff/pr.diff
+          PR_FILES_PATH: ${{`{{ runner.temp }}`}}/pr-diff/files.txt
           DCR_OUT: ${{`{{ runner.temp }}`}}/dcr-review
           DCR_HEAD_REF: ${{`{{ github.event.pull_request.head.ref || steps.pr.outputs.head_ref }}`}}
           DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS: >-
@@ -110,6 +112,7 @@ jobs:
           name: dcr-review-input-${{`{{ github.run_id }}`}}
           retention-days: 1
           if-no-files-found: error
+          include-hidden-files: true
           path: ${{`{{ runner.temp }}`}}/dcr-review
 
       - name: Upload review metadata

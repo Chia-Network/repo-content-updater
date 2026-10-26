@@ -591,6 +591,12 @@ class DiffScanTest(unittest.TestCase):
             self.assertEqual(dcr_fetch.scan_diff(path, [("header", re.compile(r"new/x"))]), [])
 
 
+def _files_list(directory: Path, *paths: str) -> Path:
+    path = directory / "files.txt"
+    path.write_text("\n".join(paths), encoding="utf-8")
+    return path
+
+
 class MainTest(unittest.TestCase):
     def test_updates_over_the_cap_are_not_reviewed(self) -> None:
         updates = [
@@ -608,10 +614,12 @@ class MainTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             diff = Path(tmp) / "pr.diff"
             diff.write_text(f"--- a\n+++ b\n{added}\n{removed}\n", encoding="utf-8")
+            files = _files_list(Path(tmp), "Cargo.lock")
             out = Path(tmp) / "out"
             env = {
                 "DCR_OUT": str(out),
                 "PR_DIFF_PATH": str(diff),
+                "PR_FILES_PATH": str(files),
                 "UPDATED_DEPENDENCIES_JSON": json.dumps(updates),
                 "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
                 "DCR_HEAD_REF": "dependabot/cargo/pkg-0",
@@ -654,10 +662,12 @@ class MainTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             diff = Path(tmp) / "pr.diff"
             diff.write_text("--- a\n+++ b\n", encoding="utf-8")
+            files = _files_list(Path(tmp), "package.json")
             out = Path(tmp) / "out"
             env = {
                 "DCR_OUT": str(out),
                 "PR_DIFF_PATH": str(diff),
+                "PR_FILES_PATH": str(files),
                 "UPDATED_DEPENDENCIES_JSON": json.dumps(updates),
                 "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
                 "DCR_HEAD_REF": "dependabot/npm_and_yarn/left-pad-1.0.1",
@@ -695,10 +705,12 @@ class MainTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             diff = Path(tmp) / "pr.diff"
             diff.write_text(f"--- a\n+++ b\n+left-pad 1.0.1 {binding}\n-left-pad 1.0.0\n", encoding="utf-8")
+            files = _files_list(Path(tmp), "package.json")
             out = Path(tmp) / "out"
             env = {
                 "DCR_OUT": str(out),
                 "PR_DIFF_PATH": str(diff),
+                "PR_FILES_PATH": str(files),
                 "UPDATED_DEPENDENCIES_JSON": json.dumps([update]),
                 "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
                 "DCR_HEAD_REF": "dependabot/npm_and_yarn/left-pad-1.0.1",
@@ -720,10 +732,12 @@ class MainTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             diff = Path(tmp) / "pr.diff"
             diff.write_text("--- a\n+++ b\n+left-pad 1.0.1\n-left-pad 1.0.0\n", encoding="utf-8")
+            files = _files_list(Path(tmp), "requirements.txt")
             out = Path(tmp) / "out"
             env = {
                 "DCR_OUT": str(out),
                 "PR_DIFF_PATH": str(diff),
+                "PR_FILES_PATH": str(files),
                 "UPDATED_DEPENDENCIES_JSON": json.dumps([update]),
                 "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
                 "DCR_HEAD_REF": "dependabot/pip/left-pad-1.0.1",
@@ -760,12 +774,14 @@ class MainTest(unittest.TestCase):
             with self.subTest(head_ref=head_ref), tempfile.TemporaryDirectory() as tmp:
                 diff = Path(tmp) / "pr.diff"
                 diff.write_text("--- a\n+++ b\n", encoding="utf-8")
+                files = _files_list(Path(tmp), "Cargo.lock" if "cargo" in head_ref else "package.json")
                 output = Path(tmp) / "github-output"
                 output.write_text("", encoding="utf-8")
                 out = Path(tmp) / "out"
                 env = {
                     "DCR_OUT": str(out),
                     "PR_DIFF_PATH": str(diff),
+                    "PR_FILES_PATH": str(files),
                     "UPDATED_DEPENDENCIES_JSON": json.dumps([update]),
                     "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
                     "DCR_HEAD_REF": head_ref,

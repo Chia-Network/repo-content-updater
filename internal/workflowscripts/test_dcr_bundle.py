@@ -267,15 +267,32 @@ class WriteDiffTest(unittest.TestCase):
 
 
 class FileScopeTest(unittest.TestCase):
+    def _diff_paths(self, diff_text: str) -> list[str]:
+        paths: list[str] = []
+        for old, new in re.findall(r"^diff --git a/(\S+) b/(\S+)$", diff_text, re.MULTILINE):
+            for path in (old, new):
+                if path not in paths:
+                    paths.append(path)
+        return paths
+
     def _run(
-        self, tmp: Path, diff_text: str, updates: list[dict[str, object]], head_ref: str, runner
+        self,
+        tmp: Path,
+        diff_text: str,
+        updates: list[dict[str, object]],
+        head_ref: str,
+        runner,
+        files: list[str] | None = None,
     ) -> dict[str, object]:
         diff = tmp / "pr.diff"
         diff.write_text(diff_text, encoding="utf-8")
+        files_path = tmp / "files.txt"
+        files_path.write_text("\n".join(files or self._diff_paths(diff_text)), encoding="utf-8")
         out = tmp / "out"
         env = {
             "DCR_OUT": str(out),
             "PR_DIFF_PATH": str(diff),
+            "PR_FILES_PATH": str(files_path),
             "UPDATED_DEPENDENCIES_JSON": json.dumps(updates),
             "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
             "DCR_HEAD_REF": head_ref,
@@ -289,9 +306,16 @@ class FileScopeTest(unittest.TestCase):
             self.assertEqual(dcr_fetch.main(), 0)
         return json.loads((out / "meta.json").read_text(encoding="utf-8"))
 
-    def _meta(self, diff_text: str, updates: list[dict[str, object]], head_ref: str, runner) -> dict[str, object]:
+    def _meta(
+        self,
+        diff_text: str,
+        updates: list[dict[str, object]],
+        head_ref: str,
+        runner,
+        files: list[str] | None = None,
+    ) -> dict[str, object]:
         with tempfile.TemporaryDirectory() as tmp:
-            return self._run(Path(tmp), diff_text, updates, head_ref, runner)
+            return self._run(Path(tmp), diff_text, updates, head_ref, runner, files)
 
     def test_npm_transitive_lock_changes_add_no_updates(self) -> None:
         tarball = _tar_bytes({"package/index.js": b"module.exports = 1;\n"})
@@ -412,6 +436,30 @@ class FileScopeTest(unittest.TestCase):
         self.assertEqual(meta["updates"][0]["status"], "unverified")
         self.assertEqual(meta["updates"][0]["note"], "changed file outside the update ecosystem: src/index.js")
         self.assertTrue(meta["reviewable"])
+
+    def test_files_api_scope_overrides_the_diff_headers(self) -> None:
+        diff_text = (
+            "diff --git a/package.json b/package.json\n"
+            "--- a/package.json\n"
+            "+++ b/package.json\n"
+            "@@ -1,2 +1,2 @@\n"
+            '-  "left-pad": "1.0.0",\n'
+            '+  "left-pad": "1.0.1",\n'
+        )
+        tarball = _tar_bytes({"package/index.js": b"module.exports = 1;\n"})
+        updates = [_metadata("left-pad", "npm_and_yarn", "1.0.0", "1.0.1")]
+        meta = self._meta(
+            diff_text,
+            updates,
+            "dependabot/npm_and_yarn/left-pad-1.0.1",
+            _npm_runner(tarball),
+            files=["package.json", ".github/workflows/x.yml"],
+        )
+        self.assertEqual(meta["updates"][0]["status"], "unverified")
+        self.assertEqual(
+            meta["updates"][0]["note"],
+            "changed file outside the update ecosystem: .github/workflows/x.yml",
+        )
 
 
 if __name__ == "__main__":
