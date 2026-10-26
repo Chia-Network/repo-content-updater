@@ -108,8 +108,8 @@ func TestDefaultDependabotKeepsUncoveredDirectories(t *testing.T) {
 
 func TestDefaultDependabotWritesOneActionsBlockPerKey(t *testing.T) {
 	updates := mergeDefaultDependabot(t, "actions",
-		"  - package-ecosystem: github-actions\n    directory: /extra\n"+
-			"  - package-ecosystem: github-actions\n    directory: /extra\n")
+		"  - package-ecosystem: github-actions\n    directory: /extra\n    labels: [extra]\n"+
+			"  - package-ecosystem: github-actions\n    directory: /extra\n    labels: [extra]\n")
 	actions := entriesFor(updates, "github-actions")
 	if len(actions) != 2 {
 		t.Fatalf("want the rendered block plus one /extra block, got %v", actions)
@@ -124,6 +124,9 @@ func TestDefaultDependabotWritesOneActionsBlockPerKey(t *testing.T) {
 	for _, u := range actions {
 		if u["directory"] == "/extra" {
 			extra++
+			if labels, ok := u["labels"].([]any); !ok || !slices.Equal(labels, []any{"extra"}) {
+				t.Fatalf("merged /extra block lost its labels: %v", u)
+			}
 		}
 	}
 	if extra != 1 {
