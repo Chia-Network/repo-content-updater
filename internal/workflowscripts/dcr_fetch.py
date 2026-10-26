@@ -23,12 +23,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dcr_lock import (
     URL_PATTERN,
+    Hunk,
+    added_lines,
     binding_on_added,
     changed_files,
-    diff_lines,
+    hunk_matches,
+    hunk_near,
     locked_hashes,
-    near,
-    near_lines,
+    parse_hunks,
 )
 from dcr_sources import (
     PYPI_ALLOWED_HOSTS,
@@ -86,8 +88,8 @@ class Review:
 
 
 FetchFn = Callable[[Path, str, str], tuple[Candidate, ...]]
-Selector = Callable[[Update, tuple[Candidate, ...], tuple[str, ...], bool], Review]
-Precheck = Callable[[Update, tuple[str, ...], tuple[str, ...]], str | None]
+Selector = Callable[[Update, tuple[Candidate, ...], Sequence[Hunk], bool], Review]
+Precheck = Callable[[Update, Sequence[Hunk]], str | None]
 
 
 @dataclass(frozen=True)
@@ -101,21 +103,23 @@ class Ecosystem:
     precheck: Precheck | None = None
 
 
-def _pypi_index_note(update: Update, added: list[str], removed: list[str]) -> str | None:
+def _pypi_index_note(update: Update, hunks: Sequence[Hunk]) -> str | None:
     """Reject a package entry whose URLs are not on the public PyPI hosts."""
-    for lines in (added, removed):
-        for line in near_lines(lines, update.name, INDEX_WINDOW):
-            for match in URL_PATTERN.finditer(line):
-                parsed = urllib.parse.urlsplit(match.group(0))
-                if parsed.scheme != "https" or parsed.hostname not in PYPI_ALLOWED_HOSTS:
-                    return "non-default package index"
+    for hunk in hunks:
+        for side in ("new", "old"):
+            for _kind, line in hunk_near(hunk, update.name, INDEX_WINDOW, update.ecosystem, side):
+                for match in URL_PATTERN.finditer(line):
+                    parsed = urllib.parse.urlsplit(match.group(0))
+                    if parsed.scheme != "https" or parsed.hostname not in PYPI_ALLOWED_HOSTS:
+                        return "non-default package index"
     return None
 
 
-def _all_files(_update: Update, candidates: tuple[Candidate, ...], added: list[str], is_new: bool) -> Review:
+def _all_files(_update: Update, candidates: tuple[Candidate, ...], hunks: Sequence[Hunk], is_new: bool) -> Review:
     """Review every fetched file; only the new side is bound to the lock."""
     if not is_new:
         return Review(candidates)
+    added = [body for hunk in hunks for kind, body in hunk.lines if kind == "+"]
     bound = bool(candidates) and all(binding_on_added(candidate.binding, added) for candidate in candidates)
     return Review(candidates, bound=bound, note="" if bound else "not bound to the lockfile")
 
@@ -132,13 +136,13 @@ def _labels(candidates: tuple[Candidate, ...]) -> tuple[Candidate, ...]:
     return tuple(replace(candidate, label=_safe_label(candidate.filename)) for candidate in candidates)
 
 
-def _pypi_files(update: Update, candidates: tuple[Candidate, ...], added: list[str], is_new: bool) -> Review:
+def _pypi_files(update: Update, candidates: tuple[Candidate, ...], hunks: Sequence[Hunk], is_new: bool) -> Review:
     """Review the new distributions whose hashes the lock lists, and check that all are covered."""
     if not is_new:
         chosen = next((candidate for candidate in candidates if candidate.kind == "sdist"), None)
         chosen = chosen or (candidates[0] if candidates else None)
         return Review((chosen,) if chosen else ())
-    locked = locked_hashes(update.name, added)
+    locked = locked_hashes(update.name, hunks)
     if not locked:
         return Review(_labels(candidates), note="not bound to the lockfile")
     selected = _labels(tuple(candidate for candidate in candidates if candidate.binding in locked))
@@ -245,17 +249,18 @@ def _reviewable(update: Update) -> bool:
     return update.ecosystem != "github_actions" or bool(ACTION_SHA.fullmatch(update.new_version))
 
 
-def _check(update: Update, ecosystem: Ecosystem, added: list[str], removed: list[str]) -> str | None:
+def _check(update: Update, ecosystem: Ecosystem, hunks: Sequence[Hunk]) -> str | None:
     """Return an unverified reason, or None when the update passes the literal checks."""
-    if not near(added, update.name, update.new_version, VERSION_WINDOW) or not near(
-        removed, update.name, update.prev_version, VERSION_WINDOW
+    if not any(
+        hunk_matches(hunk, update.name, update.new_version, update.prev_version, VERSION_WINDOW, update.ecosystem)
+        for hunk in hunks
     ):
         return "name and version were not found on the expected diff lines"
     if not ecosystem.name.fullmatch(update.name) or not all(
         ecosystem.version.fullmatch(version) for version in (update.new_version, update.prev_version)
     ):
         return "name or version does not match the ecosystem grammar"
-    if ecosystem.precheck is not None and (note := ecosystem.precheck(update, added, removed)):
+    if ecosystem.precheck is not None and (note := ecosystem.precheck(update, hunks)):
         return note
     return None
 
@@ -264,8 +269,7 @@ def _process_update(
     index: int,
     update: Update,
     out_dir: Path,
-    added: list[str],
-    removed: list[str],
+    hunks: Sequence[Hunk],
     scope_note: str | None = None,
 ) -> Update:
     ecosystem = ECOSYSTEMS.get(update.ecosystem)
@@ -275,7 +279,7 @@ def _process_update(
         return replace(update, status="not_reviewed", note="moving ref: the new pin is not a 40-hex commit SHA")
     if scope_note:
         return replace(update, status="unverified", note=scope_note)
-    if note := _check(update, ecosystem, added, removed):
+    if note := _check(update, ecosystem, hunks):
         return replace(update, status="unverified", note=note)
     slug = f"{index:02d}-" + re.sub(r"[^A-Za-z0-9._@-]", "_", f"{update.name}@{update.new_version}")
     try:
@@ -286,7 +290,7 @@ def _process_update(
         ):
             with tempfile.TemporaryDirectory() as tmp:
                 candidates = ecosystem.fetch(Path(tmp), update.name, version)
-                review = ecosystem.files(update, candidates, added, is_new)
+                review = ecosystem.files(update, candidates, hunks, is_new)
                 for candidate in review.candidates:
                     archive = candidate.load()
                     extract(archive, out_dir / side / slug / candidate.label, format_from_name(candidate.filename))
@@ -356,10 +360,7 @@ def scan_diff(path: Path, patterns: Sequence[tuple[str, re.Pattern[str]]]) -> li
     """IOC and bidi-control hits on the added lines of a diff file."""
     hits: list[dict[str, object]] = []
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
-    for number, line in enumerate(text.splitlines(), 1):
-        if not line.startswith("+") or line.startswith("+++"):
-            continue
-        body = line[1:]
+    for number, body in added_lines(text):
         hits.extend(
             {"kind": "ioc", "pattern": source, "line": number, "match": match.group(0)[:80]}
             for source, pattern in patterns
@@ -377,7 +378,7 @@ def main() -> int:
     patterns = ioc_patterns()
     updates = _parse_updates(os.environ.get("UPDATED_DEPENDENCIES_JSON", ""))
     diff_text = Path(os.environ["PR_DIFF_PATH"]).read_text(encoding="utf-8", errors="replace")
-    added, removed = diff_lines(diff_text)
+    hunks = parse_hunks(diff_text)
     head_ecosystem = _head_ecosystem(os.environ.get("DCR_HEAD_REF", ""))
     scope_note = _scope_note(head_ecosystem, changed_files(diff_text))
     results: list[Update] = []
@@ -386,7 +387,7 @@ def main() -> int:
         results.append(
             replace(update, status="unverified", note=note)
             if note
-            else _process_update(index, update, out_dir, added, removed, scope_note)
+            else _process_update(index, update, out_dir, hunks, scope_note)
         )
     results.extend(_over_cap(update, head_ecosystem, scope_note) for update in updates[MAX_UPDATES:])
     truncated = write_diff(out_dir)

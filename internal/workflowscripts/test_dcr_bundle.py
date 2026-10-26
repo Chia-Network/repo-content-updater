@@ -19,6 +19,7 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 import dcr_fetch
+import dcr_lock
 import dcr_sources
 from dcr_fetch import FetchError, Update
 
@@ -112,13 +113,20 @@ def _no_fetch_runner(args: list[str], **kwargs: object) -> _Completed:
     raise AssertionError(f"unexpected command: {args}")
 
 
+def _hunks(added: list[str], removed: list[str]) -> tuple[dcr_lock.Hunk, ...]:
+    text = f"@@ -1,{len(removed)} +1,{len(added)} @@\n"
+    text += "".join(f"+{line}\n" for line in added)
+    text += "".join(f"-{line}\n" for line in removed)
+    return dcr_lock.parse_hunks(text)
+
+
 def _process(
     update: Update,
     out: Path,
     added: list[str],
     removed: list[str],
 ) -> dcr_fetch.UpdateResult:
-    return dcr_fetch._process_update(0, update, out, added, removed)
+    return dcr_fetch._process_update(0, update, out, _hunks(added, removed))
 
 
 class LiteralPresenceTest(unittest.TestCase):
@@ -137,9 +145,9 @@ class LiteralPresenceTest(unittest.TestCase):
 
     def test_header_lines_do_not_count(self) -> None:
         update = _update()
-        added, removed = dcr_fetch.diff_lines("--- left-pad@1.0.1\n+++ left-pad@1.0.1\n--- left-pad@1.0.0\n")
+        hunks = dcr_lock.parse_hunks("--- left-pad@1.0.1\n+++ left-pad@1.0.1\n--- left-pad@1.0.0\n")
         with tempfile.TemporaryDirectory() as tmp:
-            result = _process(update, Path(tmp), added, removed)
+            result = dcr_fetch._process_update(0, update, Path(tmp), hunks)
             self.assertEqual(result.status, "unverified")
 
     def test_version_prefix_is_not_a_match(self) -> None:
@@ -147,8 +155,7 @@ class LiteralPresenceTest(unittest.TestCase):
         note = dcr_fetch._check(
             update,
             dcr_fetch.ECOSYSTEMS["npm_and_yarn"],
-            ["left-pad@11.0.3"],
-            ["left-pad@0.9"],
+            _hunks(["left-pad@11.0.3"], ["left-pad@0.9"]),
         )
         self.assertIsNotNone(note)
 
@@ -157,8 +164,7 @@ class LiteralPresenceTest(unittest.TestCase):
         note = dcr_fetch._check(
             update,
             dcr_fetch.ECOSYSTEMS["npm_and_yarn"],
-            ["my-left-pad@1.0.1"],
-            ["my-left-pad@1.0.0"],
+            _hunks(["my-left-pad@1.0.1"], ["my-left-pad@1.0.0"]),
         )
         self.assertIsNotNone(note)
 
@@ -167,8 +173,7 @@ class LiteralPresenceTest(unittest.TestCase):
         note = dcr_fetch._check(
             update,
             dcr_fetch.ECOSYSTEMS["npm_and_yarn"],
-            ["node_modules/left-pad", "version: 1.0.1"],
-            ["node_modules/left-pad", "version: 1.0.0"],
+            _hunks(["node_modules/left-pad", "version: 1.0.1"], ["node_modules/left-pad", "version: 1.0.0"]),
         )
         self.assertIsNone(note)
 
@@ -178,8 +183,7 @@ class LiteralPresenceTest(unittest.TestCase):
         note = dcr_fetch._check(
             update,
             dcr_fetch.ECOSYSTEMS["npm_and_yarn"],
-            added,
-            ["left-pad@1.0.0"],
+            _hunks(added, ["left-pad@1.0.0"]),
         )
         self.assertIsNotNone(note)
 

@@ -1,4 +1,4 @@
-"""Tests for dcr_lock: changed file paths from a diff."""
+"""Tests for dcr_lock: changed file paths and hunk parsing from a diff."""
 
 from __future__ import annotations
 
@@ -10,7 +10,22 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from dcr_lock import changed_files
+from dcr_lock import added_lines, changed_files, parse_hunks
+
+
+class DiffParseTest(unittest.TestCase):
+    def test_content_line_beginning_with_two_pluses_is_added(self) -> None:
+        text = "diff -ruNa old/x new/x\n--- old/x\n+++ new/x\n@@ -1 +1 @@\n-++removed\n+++eval(atob(1))\n"
+        hunks = parse_hunks(text)
+        self.assertEqual([body for hunk in hunks for kind, body in hunk.lines if kind == "+"], ["++eval(atob(1))"])
+        self.assertEqual([body for hunk in hunks for kind, body in hunk.lines if kind == "-"], ["++removed"])
+        self.assertEqual([body for _number, body in added_lines(text)], ["++eval(atob(1))"])
+
+    def test_file_header_is_not_added_content(self) -> None:
+        text = "diff -ruNa old/x new/x\n--- old/x\n+++ new/x\n@@ -1 +1 @@\n-a\n+b\n"
+        hunks = parse_hunks(text)
+        self.assertEqual([body for hunk in hunks for kind, body in hunk.lines if kind == "+"], ["b"])
+        self.assertEqual([body for hunk in hunks for kind, body in hunk.lines if kind == "-"], ["a"])
 
 
 class ChangedFilesTest(unittest.TestCase):

@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import os
+import re
 import sys
 import tarfile
 import tempfile
@@ -17,10 +18,12 @@ from typing import Self
 from unittest import mock
 
 _SCRIPTS = Path(__file__).resolve().parent
+_TESTDATA = _SCRIPTS / "testdata"
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 import dcr_fetch
+import dcr_lock
 import dcr_sources
 from dcr_fetch import FetchError, Update
 
@@ -148,13 +151,20 @@ def _update(
     return Update(name, ecosystem, "/", prev, new)
 
 
+def _hunks(added: list[str], removed: list[str]) -> tuple[dcr_lock.Hunk, ...]:
+    text = f"@@ -1,{len(removed)} +1,{len(added)} @@\n"
+    text += "".join(f"+{line}\n" for line in added)
+    text += "".join(f"-{line}\n" for line in removed)
+    return dcr_lock.parse_hunks(text)
+
+
 def _process(
     update: Update,
     out: Path,
     added: list[str],
     removed: list[str],
 ) -> dcr_fetch.UpdateResult:
-    return dcr_fetch._process_update(0, update, out, added, removed)
+    return dcr_fetch._process_update(0, update, out, _hunks(added, removed))
 
 
 class NpmFetchTest(unittest.TestCase):
@@ -294,11 +304,13 @@ class PypiFetchTest(unittest.TestCase):
         note = dcr_fetch._check(
             update,
             dcr_fetch.ECOSYSTEMS["pip"],
-            [
-                "example-pkg==1.0.1 --hash=sha256:" + "a" * 64,
-                "example-pkg @ https://packages.example/example-pkg-1.0.1.tar.gz",
-            ],
-            ["example-pkg==1.0.0"],
+            _hunks(
+                [
+                    "example-pkg==1.0.1 --hash=sha256:" + "a" * 64,
+                    "example-pkg @ https://packages.example/example-pkg-1.0.1.tar.gz",
+                ],
+                ["example-pkg==1.0.0"],
+            ),
         )
         self.assertEqual(note, "non-default package index")
 
@@ -307,10 +319,78 @@ class PypiFetchTest(unittest.TestCase):
         note = dcr_fetch._check(
             update,
             dcr_fetch.ECOSYSTEMS["pip"],
-            ["example-pkg==1.0.1 --index-url https://pypi.org/simple"],
-            ["example-pkg==1.0.0"],
+            _hunks(
+                ["example-pkg==1.0.1 --index-url https://pypi.org/simple"],
+                ["example-pkg==1.0.0"],
+            ),
         )
         self.assertIsNone(note)
+
+
+class PoetryDiffCheckTest(unittest.TestCase):
+    def _read(self, name: str) -> tuple[dcr_lock.Hunk, ...]:
+        return dcr_lock.parse_hunks((_TESTDATA / name).read_text(encoding="utf-8"))
+
+    def test_miniupnpc_context_name_with_the_added_version_passes(self) -> None:
+        update = _update("miniupnpc", "pip", "2.3.2", "2.3.3")
+        self.assertIsNone(dcr_fetch._check(update, dcr_fetch.ECOSYSTEMS["pip"], self._read("poetry_miniupnpc.diff")))
+
+    def test_miniupnpc_wrong_version_fails(self) -> None:
+        update = _update("miniupnpc", "pip", "2.3.2", "2.3.4")
+        self.assertIsNotNone(dcr_fetch._check(update, dcr_fetch.ECOSYSTEMS["pip"], self._read("poetry_miniupnpc.diff")))
+
+    def test_miniupnpc_different_name_fails(self) -> None:
+        update = _update("miniupnpd", "pip", "2.3.2", "2.3.3")
+        self.assertIsNotNone(dcr_fetch._check(update, dcr_fetch.ECOSYSTEMS["pip"], self._read("poetry_miniupnpc.diff")))
+
+    def test_chia_rs_underscore_filenames_pass(self) -> None:
+        update = _update("chia-rs", "pip", "0.50.0", "0.52.0")
+        self.assertIsNone(dcr_fetch._check(update, dcr_fetch.ECOSYSTEMS["pip"], self._read("poetry_chia_rs.diff")))
+
+    def test_chia_rs_name_variants_normalize(self) -> None:
+        update = _update("Chia.RS", "pip", "0.50.0", "0.52.0")
+        self.assertIsNone(dcr_fetch._check(update, dcr_fetch.ECOSYSTEMS["pip"], self._read("poetry_chia_rs.diff")))
+
+    def test_chia_rs_wrong_version_fails(self) -> None:
+        update = _update("chia-rs", "pip", "0.50.0", "0.53.0")
+        self.assertIsNotNone(dcr_fetch._check(update, dcr_fetch.ECOSYSTEMS["pip"], self._read("poetry_chia_rs.diff")))
+
+    def test_non_default_index_in_the_package_hunk_is_unverified(self) -> None:
+        text = (
+            (_TESTDATA / "poetry_miniupnpc.diff")
+            .read_text(encoding="utf-8")
+            .replace(
+                '+version = "2.3.3"',
+                '+version = "2.3.3"\n url = "https://pypi.chia.net/simple/"',
+            )
+        )
+        update = _update("miniupnpc", "pip", "2.3.2", "2.3.3")
+        self.assertEqual(
+            dcr_fetch._check(update, dcr_fetch.ECOSYSTEMS["pip"], dcr_lock.parse_hunks(text)),
+            "non-default package index",
+        )
+
+    def test_locked_hashes_are_the_new_package_hashes(self) -> None:
+        text = (_TESTDATA / "poetry_miniupnpc.diff").read_text(encoding="utf-8")
+        expected = frozenset(
+            re.findall(
+                r"sha256:([0-9a-f]{64})",
+                "\n".join(line for line in text.splitlines() if line.startswith("+") and "miniupnpc-2.3.3" in line),
+            )
+        )
+        self.assertEqual(len(expected), 35)
+        self.assertEqual(dcr_lock.locked_hashes("miniupnpc", dcr_lock.parse_hunks(text)), expected)
+
+    def test_locked_hashes_are_per_hunk_for_chia_rs(self) -> None:
+        text = (_TESTDATA / "poetry_chia_rs.diff").read_text(encoding="utf-8")
+        expected = frozenset(
+            re.findall(
+                r"sha256:([0-9a-f]{64})",
+                "\n".join(line for line in text.splitlines() if line.startswith("+") and "chia_rs-0.52.0" in line),
+            )
+        )
+        self.assertEqual(len(expected), 26)
+        self.assertEqual(dcr_lock.locked_hashes("chia-rs", dcr_lock.parse_hunks(text)), expected)
 
 
 class GoFetchTest(unittest.TestCase):
@@ -496,6 +576,19 @@ class HeadRefTest(unittest.TestCase):
         self.assertEqual(dcr_fetch._head_note(update, "npm_and_yarn"), None)
         self.assertIn("different", dcr_fetch._head_note(update, "pip") or "")
         self.assertIn("does not name", dcr_fetch._head_note(update, None) or "")
+
+
+class DiffScanTest(unittest.TestCase):
+    def test_content_line_starting_with_three_pluses_is_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "changes.diff"
+            path.write_text(
+                "diff -ruNa old/x new/x\n--- old/x\n+++ new/x\n@@ -1 +1 @@\n-old\n+++eval(atob(1))\n",
+                encoding="utf-8",
+            )
+            hits = dcr_fetch.scan_diff(path, [("eval", re.compile(r"eval\(atob"))])
+            self.assertEqual([hit["line"] for hit in hits], [6])
+            self.assertEqual(dcr_fetch.scan_diff(path, [("header", re.compile(r"new/x"))]), [])
 
 
 class MainTest(unittest.TestCase):
