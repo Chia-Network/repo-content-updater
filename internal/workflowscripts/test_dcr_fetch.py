@@ -54,12 +54,16 @@ def _dep(name, ecosystem="npm_and_yarn", prev="1.0.0", new="1.0.1"):
     }
 
 
-def _environment(tmp, updates, added="left-pad 1.0.1"):
-    diff = Path(tmp) / "pr.diff"
-    diff.write_text(f"--- a\n+++ b\n+{added}\n", encoding="utf-8")
+def _uses(marker, pin):
+    return f"{marker} uses: owner/repo@{pin} # v\n"
+
+
+def _environment(tmp, updates, added="left-pad 1.0.1", diff=None):
+    path = Path(tmp) / "pr.diff"
+    path.write_text(diff or f"--- a\n+++ b\n+{added}\n", encoding="utf-8")
     return {
         "DCR_OUT": str(Path(tmp) / "out"),
-        "PR_DIFF_PATH": str(diff),
+        "PR_DIFF_PATH": str(path),
         "UPDATED_DEPENDENCIES_JSON": json.dumps(updates),
         "GITHUB_OUTPUT": str(Path(tmp) / "github-output"),
     }
@@ -90,16 +94,25 @@ class LiteralCheckTest(unittest.TestCase):
         wrong = _update("miniupnpc", "pip", "2.3.2", "2.3.4")
         self.assertFalse(dcr_fetch.literal_ok(wrong, self._fixture("poetry_miniupnpc.diff")))
 
+    def test_version_matches_require_token_boundaries(self):
+        cases = (
+            ("7", "left-pad ^7.0.1", False),
+            ("1.2", "left-pad 1.20.0", False),
+            ("1.0.1", "left-pad 1.0.1", True),
+        )
+        for version, line, expected in cases:
+            self.assertEqual(dcr_fetch.literal_ok(_update(new=version), [line]), expected, line)
+
 
 class StatusTest(unittest.TestCase):
     def test_cargo_and_tag_actions_are_not_reviewed(self):
-        cargo = dcr_fetch._status(_update("tokio", "cargo"), ["tokio 1.0.1"])
-        action = dcr_fetch._status(_update("owner/repo", "github_actions", "v1.0.0", "v1.1.0"), ["x"])
+        cargo = dcr_fetch._status(_update("tokio", "cargo"), "")
+        action = dcr_fetch._status(_update("owner/repo", "github_actions", "v1", "v2"), "+uses: owner/repo@v2")
         self.assertEqual((cargo.status, action.status), ("not_reviewed", "not_reviewed"))
 
     def test_unsafe_name_and_wrong_literal_are_unverified(self):
-        unsafe = dcr_fetch._status(_update("-bad"), ["-bad 1.0.1"])
-        mismatch = dcr_fetch._status(_update(), ["other-package 1.0.1"])
+        unsafe = dcr_fetch._status(_update("-bad"), "+-bad 1.0.1")
+        mismatch = dcr_fetch._status(_update(), "+other-package 1.0.1")
         self.assertEqual((unsafe.status, mismatch.status), ("unverified", "unverified"))
 
 
@@ -109,7 +122,7 @@ class FetcherTest(unittest.TestCase):
 
         def run(args, **kwargs):
             calls.append(args)
-            Path(kwargs["cwd"]).joinpath("package.tgz").write_bytes(b"tar")
+            Path(kwargs["cwd"]).joinpath("left-pad-1.0.1.tgz").write_bytes(b"tar")
             return mock.Mock()
 
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(dcr_fetch, "_run", side_effect=run):
@@ -138,10 +151,20 @@ class FetcherTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / "module.zip"
             archive.write_bytes(_zip_bytes({"go.mod": b"module example.com/mod\n"}))
-            result = mock.Mock(stdout=json.dumps({"Zip": str(archive)}))
+            result = mock.Mock(stdout=json.dumps({"Zip": str(archive), "Version": "v1.0.1"}))
             with mock.patch.object(dcr_fetch, "_run", return_value=result) as run:
                 self.assertEqual(dcr_fetch.fetch_gomod(Path(tmp), "example.com/mod", "v1.0.1"), archive)
             self.assertIn("example.com/mod@v1.0.1", run.call_args.args[0])
+
+    def test_npm_and_go_reject_a_different_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "left-pad-9.9.9.tgz").write_bytes(b"tar")
+            with mock.patch.object(dcr_fetch, "_run", return_value=mock.Mock()), self.assertRaises(FetchError):
+                dcr_fetch.fetch_npm(root, "left-pad", "1.0.1")
+            result = mock.Mock(stdout=json.dumps({"Zip": "module.zip", "Version": "v9.9.9"}))
+            with mock.patch.object(dcr_fetch, "_run", return_value=result), self.assertRaises(FetchError):
+                dcr_fetch.fetch_gomod(root, "example.com/mod", "v1.0.1")
 
     def test_action_fetch_uses_the_sha_and_removes_git(self):
         calls = []
@@ -171,6 +194,45 @@ class ExtractTest(unittest.TestCase):
             archive.write_bytes(_zip_bytes({"two.txt": b"2"}))
             dcr_fetch.extract(archive, root / "zip")
             self.assertEqual((root / "zip" / "two.txt").read_bytes(), b"2")
+
+    def test_a_single_top_level_directory_is_flattened(self):
+        cases = (
+            ("example-1.0.1.tar.gz", _tar_bytes({"example-1.0.1/setup.py": b"1"}), "setup.py", b"1"),
+            ("module@v1.0.1.zip", _zip_bytes({"module@v1.0.1/go.mod": b"2"}), "go.mod", b"2"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index, (filename, data, leaf, expected) in enumerate(cases):
+                source = root / filename
+                source.write_bytes(data)
+                dest = root / f"out{index}"
+                dcr_fetch.extract(source, dest)
+                self.assertEqual((dest / leaf).read_bytes(), expected)
+
+
+class ActionDiffTest(unittest.TestCase):
+    def _review(self, diff, update):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _environment(tmp, [update], diff=diff)
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.dict(dcr_fetch.FETCHERS, {"github_actions": lambda work, name, version: work}),
+                mock.patch.object(dcr_fetch, "_run", return_value=mock.Mock(stdout=b"")),
+            ):
+                self.assertEqual(dcr_fetch.main(), 0)
+            return json.loads((Path(env["DCR_OUT"]) / "meta.json").read_text(encoding="utf-8"))["updates"][0]
+
+    def test_sha_pins_come_from_the_diff(self):
+        old, new, update = "a" * 40, "b" * 40, _dep("owner/repo", "github_actions", "v1", "2")
+        cases = (
+            (_uses("-", old) + _uses("+", new), "reviewed", old, new),
+            (_uses("-", old) + _uses("+", new) + _uses("+", "c" * 40), "unverified", "v1", "2"),
+            (_uses("-", "v1") + _uses("+", "v2"), "not_reviewed", "v1", "2"),
+        )
+        for body, status, prev, new in cases:
+            with self.subTest(status=status):
+                result = self._review(f"--- a\n+++ b\n{body}", update)
+                self.assertEqual((result["status"], result["prev_version"], result["new_version"]), (status, prev, new))
 
 
 class MainTest(unittest.TestCase):
@@ -212,6 +274,16 @@ class MainTest(unittest.TestCase):
             self.assertEqual(meta["updates"][0]["status"], "fetch_failed")
             self.assertTrue(meta["updates"][0]["note"].startswith("diff failed:"))
             self.assertEqual(Path(env["GITHUB_OUTPUT"]).read_text(encoding="utf-8"), "reviewable=false\n")
+
+    def test_empty_previous_version_only_marks_that_update_unverified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _environment(tmp, [_dep("broken", prev=""), _dep("tokio", "cargo")], added="broken 1.0.1")
+            data = mock.patch.object(dcr_fetch, "_run", return_value=mock.Mock(stdout=b""))
+            with mock.patch.dict(os.environ, env), data:
+                self.assertEqual(dcr_fetch.main(), 0)
+            items = json.loads((Path(env["DCR_OUT"]) / "meta.json").read_text(encoding="utf-8"))["updates"]
+            self.assertEqual([item["status"] for item in items], ["unverified", "not_reviewed"])
+            self.assertIn("previous version", items[0]["note"])
 
 
 if __name__ == "__main__":

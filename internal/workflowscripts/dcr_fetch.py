@@ -18,7 +18,7 @@ from urllib.request import urlopen
 SAFE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._/~+-]{0,299}$")
 ACTION_SHA = re.compile(r"^[0-9a-f]{40}$")
 ECOSYSTEM_ALIASES = {"go_modules": "gomod"}
-UPDATE_FIELDS = ("dependencyName", "packageEcosystem", "prevVersion", "newVersion")
+UPDATE_FIELDS = ("dependencyName", "packageEcosystem", "newVersion", "prevVersion")
 
 
 class FetchError(Exception):
@@ -45,7 +45,8 @@ def _norm(value: str) -> str:
 
 
 def literal_ok(update: Update, added: list[str]) -> bool:
-    return any(_norm(update.name) in _norm(line) and update.new_version in line for line in added)
+    version = re.compile(rf"(?<![0-9A-Za-z.]){re.escape(update.new_version)}(?![0-9A-Za-z]|\.[0-9])")
+    return any(_norm(update.name) in _norm(line) and version.search(line) for line in added)
 
 
 def _parse_updates(raw: str) -> list[Update]:
@@ -58,17 +59,12 @@ def _parse_updates(raw: str) -> list[Update]:
     updates: list[Update] = []
     for item in payload:
         values = [item.get(key) if isinstance(item, dict) else None for key in UPDATE_FIELDS]
-        if not all(isinstance(value, str) and value for value in values):
+        if not all(isinstance(v, str) and v for v in values[:3]) or not isinstance(values[3] or "", str):
             raise SystemExit("updated dependency is missing a required field")
-        directory = item.get("directory", "")
-        name, ecosystem, prev_version, new_version = values
-        update = Update(
-            name,
-            ECOSYSTEM_ALIASES.get(ecosystem, ecosystem),
-            directory if isinstance(directory, str) else "",
-            prev_version,
-            new_version,
-        )
+        directory = entry if isinstance(entry := item.get("directory", ""), str) else ""
+        name, ecosystem, new_version, prev_version = values
+        prev_version = prev_version if isinstance(prev_version, str) else ""
+        update = Update(name, ECOSYSTEM_ALIASES.get(ecosystem, ecosystem), directory, prev_version, new_version)
         updates.append(_normalize_versions(update))
     return updates
 
@@ -76,7 +72,7 @@ def _parse_updates(raw: str) -> list[Update]:
 def _normalize_versions(update: Update) -> Update:
     if update.ecosystem != "gomod":
         return update
-    versions = [v if v.startswith("v") else f"v{v}" for v in (update.prev_version, update.new_version)]
+    versions = [v if not v or v.startswith("v") else f"v{v}" for v in (update.prev_version, update.new_version)]
     return replace(update, prev_version=versions[0], new_version=versions[1])
 
 
@@ -102,8 +98,8 @@ def _read_url(url: str) -> bytes:
 def fetch_npm(work: Path, name: str, version: str) -> Path:
     _run(["npm", "pack", "--ignore-scripts", f"{name}@{version}"], cwd=work)
     archives = sorted(work.glob("*.tgz"))
-    if len(archives) != 1:
-        raise FetchError("npm pack did not produce exactly one archive")
+    if len(archives) != 1 or not archives[0].name.endswith(f"-{version}.tgz"):
+        raise FetchError("npm pack did not produce the requested version")
     return archives[0]
 
 
@@ -138,8 +134,8 @@ def fetch_gomod(work: Path, name: str, version: str) -> Path:
     except json.JSONDecodeError as exc:
         raise FetchError("go mod download did not return JSON") from exc
     archive = payload.get("Zip") if isinstance(payload, dict) else None
-    if not isinstance(archive, str) or not archive:
-        raise FetchError("go mod download did not return a zip")
+    if not isinstance(archive, str) or not archive or payload.get("Version") != version:
+        raise FetchError("go mod download did not return the requested version")
     return Path(archive)
 
 
@@ -159,16 +155,34 @@ FETCHERS = {
 }
 
 
-def _status(update: Update, added: list[str]) -> Update | None:
+def _action_shas(name: str, diff: str) -> tuple[set[str], set[str]]:
+    """Return the distinct removed and added commit SHAs for one action."""
+    pattern = re.compile(rf"uses:\s*(?i:{re.escape(name)})(?:/[^@\s]*)?@([0-9a-f]{{40}})")
+    found: dict[str, set[str]] = {"-": set(), "+": set()}
+    for line in diff.split("\n"):
+        if line[:1] in found and not line.startswith(("--- ", "+++ ")) and (match := pattern.search(line)):
+            found[line[0]].add(match.group(1))
+    return found["-"], found["+"]
+
+
+def _status(update: Update, diff: str) -> Update:
     if update.ecosystem not in FETCHERS:
         return replace(update, status="not_reviewed", note="ecosystem is not reviewed")
-    if update.ecosystem == "github_actions" and not ACTION_SHA.fullmatch(update.new_version):
-        return replace(update, status="not_reviewed", note="moving ref: the new pin is not a 40-hex commit SHA")
+    if update.ecosystem == "github_actions":
+        old, new = _action_shas(update.name, diff)
+        if len(old) == len(new) == 1:
+            update = replace(update, prev_version=old.pop(), new_version=new.pop())
+        elif new:
+            return replace(update, status="unverified", note="the diff does not identify one old and one new SHA")
+        elif not ACTION_SHA.fullmatch(update.new_version):
+            return replace(update, status="not_reviewed", note="moving ref: the new pin is not a 40-hex commit SHA")
+    if not update.prev_version:
+        return replace(update, status="unverified", note="previous version is missing")
     if not all(SAFE.fullmatch(value) for value in (update.name, update.prev_version, update.new_version)):
         return replace(update, status="unverified", note="name or version contains unsupported characters")
-    if not literal_ok(update, added):
+    if not literal_ok(update, added_lines(diff)):
         return replace(update, status="unverified", note="name and new version were not found on an added diff line")
-    return None
+    return update
 
 
 def extract(source: Path, dest: Path) -> None:
@@ -185,6 +199,11 @@ def extract(source: Path, dest: Path) -> None:
                 handle.extractall(dest, filter="data")
     except (tarfile.TarError, zipfile.BadZipFile, OSError) as exc:
         raise FetchError(f"extraction failed: {exc}") from exc
+    entries = list(dest.iterdir())
+    if len(entries) == 1 and entries[0].is_dir():
+        for child in list(entries[0].iterdir()):
+            child.rename(dest / child.name)
+        entries[0].rmdir()
 
 
 def write_diff(out_dir: Path) -> None:
@@ -199,22 +218,22 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     updates = _parse_updates(os.environ.get("UPDATED_DEPENDENCIES_JSON", ""))
     diff_text = Path(os.environ["PR_DIFF_PATH"]).read_text(encoding="utf-8", errors="replace")
-    added = added_lines(diff_text)
     results: list[Update] = []
     for index, update in enumerate(updates):
-        if status := _status(update, added):
-            results.append(status)
+        resolved = _status(update, diff_text)
+        if resolved.status != "reviewed":
+            results.append(resolved)
             continue
-        slug = f"{index:02d}-" + re.sub(r"[^A-Za-z0-9._@-]", "_", f"{update.name}@{update.new_version}")
+        slug = f"{index:02d}-" + re.sub(r"[^A-Za-z0-9._@-]", "_", f"{resolved.name}@{resolved.new_version}")
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                for side, version in (("old", update.prev_version), ("new", update.new_version)):
+                for side, version in (("old", resolved.prev_version), ("new", resolved.new_version)):
                     work = Path(tmp) / side
                     work.mkdir()
-                    extract(FETCHERS[update.ecosystem](work, update.name, version), out_dir / side / slug)
-            results.append(update)
+                    extract(FETCHERS[resolved.ecosystem](work, resolved.name, version), out_dir / side / slug)
+            results.append(resolved)
         except (FetchError, OSError) as exc:
-            results.append(replace(update, status="fetch_failed", note=str(exc)))
+            results.append(replace(resolved, status="fetch_failed", note=str(exc)))
     try:
         write_diff(out_dir)
     except FetchError as exc:
