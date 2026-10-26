@@ -174,6 +174,9 @@ ALLOWED_CHANGED_FILES: dict[str, tuple[re.Pattern[str], ...]] = {
 }
 
 
+ECOSYSTEM_ALIASES = {"go_modules": "gomod"}
+
+
 def _normalize_versions(update: Update) -> Update:
     """Dependabot reports Go versions without the leading `v` that go.mod and go.sum use."""
     if update.ecosystem != "gomod":
@@ -197,12 +200,19 @@ def _parse_updates(raw: str) -> list[Update]:
         if not all(isinstance(value, str) and value for value in values):
             raise SystemExit("updated dependency is missing a required field")
         directory = item.get("directory", "")
-        update = Update(*values[:2], directory if isinstance(directory, str) else "", *values[2:])
+        name, ecosystem, prev_version, new_version = values
+        update = Update(
+            name,
+            ECOSYSTEM_ALIASES.get(ecosystem, ecosystem),
+            directory if isinstance(directory, str) else "",
+            prev_version,
+            new_version,
+        )
         updates.append(_normalize_versions(update))
     return updates
 
 
-HEAD_ECOSYSTEMS = {"go_modules": "gomod"}
+HEAD_ECOSYSTEMS = ECOSYSTEM_ALIASES
 
 
 def _head_ecosystem(head_ref: str) -> str | None:

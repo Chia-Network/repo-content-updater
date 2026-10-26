@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from dcr_lock import changed_files
+from dcr_lock import changed_files, ioc_patterns, scan_diff, write_diff
 
 
 class ChangedFilesTest(unittest.TestCase):
@@ -44,6 +47,22 @@ class ChangedFilesTest(unittest.TestCase):
     def test_headers_without_a_git_line_are_ignored(self) -> None:
         text = "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n"
         self.assertEqual(changed_files(text), ())
+
+
+class WriteDiffTest(unittest.TestCase):
+    def test_nul_byte_file_content_is_scanned_as_text(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["EVIL_MARKER"]'}),
+        ):
+            out = Path(tmp)
+            (out / "new" / "pkg").mkdir(parents=True)
+            (out / "new" / "pkg" / "x.js").write_bytes(b"safe\x00line\nEVIL_MARKER\n")
+            self.assertFalse(write_diff(out))
+            text = (out / "changes.diff").read_text(encoding="utf-8")
+            self.assertNotIn("Binary files", text)
+            hits = scan_diff(out / "changes.diff", ioc_patterns())
+            self.assertEqual([hit["kind"] for hit in hits], ["ioc"])
 
 
 if __name__ == "__main__":

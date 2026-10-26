@@ -116,7 +116,7 @@ def write_diff(out_dir: Path) -> bool:
     (out_dir / "old").mkdir(exist_ok=True)
     (out_dir / "new").mkdir(exist_ok=True)
     try:
-        result = subprocess.run(["diff", "-ruN", "old", "new"], cwd=out_dir, check=False, capture_output=True)
+        result = subprocess.run(["diff", "-ruNa", "old", "new"], cwd=out_dir, check=False, capture_output=True)
     except OSError as exc:
         raise FetchError(f"diff could not run: {exc}") from exc
     if result.returncode not in {0, 1}:

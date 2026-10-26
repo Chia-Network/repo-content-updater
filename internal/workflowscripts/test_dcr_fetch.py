@@ -89,7 +89,7 @@ def _git_runner(tar_bytes: bytes, calls: list[list[str]] | None = None):
 
 def _diff_runner(data: bytes, returncode: int = 1):
     def run(args: list[str], **kwargs: object) -> _Completed:
-        if args != ["diff", "-ruN", "old", "new"]:
+        if args != ["diff", "-ruNa", "old", "new"]:
             raise AssertionError(args)
         return _Completed(returncode=returncode, data=data)
 
@@ -706,9 +706,7 @@ class FileScopeTest(unittest.TestCase):
         self.assertNotIn("missing from update metadata", json.dumps(meta))
 
     def test_go_versions_are_v_prefixed_for_matching_and_fetching(self) -> None:
-        zip_bytes = _zip_bytes({"example.com/mod@v1.5.0/go.mod": b"module example.com/mod\n"})
         sum_value = "h1:" + "A" * 43 + "="
-        calls: list[list[str]] = []
         diff_text = (
             "diff --git a/go.mod b/go.mod\n"
             "--- a/go.mod\n"
@@ -723,14 +721,19 @@ class FileScopeTest(unittest.TestCase):
             f"-example.com/mod v1.4.0 {sum_value}\n"
             f"+example.com/mod v1.5.0 {sum_value}\n"
         )
-        updates = [_metadata("example.com/mod", "gomod", "1.4.0", "1.5.0")]
-        runner = _go_runner(zip_bytes, sum_value, calls)
-        meta = self._meta(diff_text, updates, "dependabot/go_modules/example.com/mod-1.5.0", runner)
-        recorded = meta["updates"][0]
-        self.assertEqual(recorded["status"], "reviewed")
-        self.assertEqual(recorded["prev_version"], "v1.4.0")
-        self.assertEqual(recorded["new_version"], "v1.5.0")
-        self.assertTrue(any("example.com/mod@v1.5.0" in call for call in calls))
+        for ecosystem in ("go_modules", "gomod"):
+            with self.subTest(ecosystem=ecosystem):
+                zip_bytes = _zip_bytes({"example.com/mod@v1.5.0/go.mod": b"module example.com/mod\n"})
+                calls: list[list[str]] = []
+                updates = [_metadata("example.com/mod", ecosystem, "1.4.0", "1.5.0")]
+                runner = _go_runner(zip_bytes, sum_value, calls)
+                meta = self._meta(diff_text, updates, "dependabot/go_modules/example.com/mod-1.5.0", runner)
+                recorded = meta["updates"][0]
+                self.assertEqual(recorded["status"], "reviewed")
+                self.assertEqual(recorded["ecosystem"], "gomod")
+                self.assertEqual(recorded["prev_version"], "v1.4.0")
+                self.assertEqual(recorded["new_version"], "v1.5.0")
+                self.assertTrue(any("example.com/mod@v1.5.0" in call for call in calls))
 
     def test_cargo_lock_transitive_changes_stay_not_reviewed(self) -> None:
         diff_text = (
