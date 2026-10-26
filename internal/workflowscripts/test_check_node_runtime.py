@@ -37,15 +37,7 @@ def _workflow(*uses: str) -> str:
         steps = "\n".join(f"      - uses: {use}" for use in uses)
     else:
         steps = "      - run: echo ok"
-    return (
-        "name: fixture\n"
-        "on: push\n"
-        "jobs:\n"
-        "  test:\n"
-        "    runs-on: ubuntu-latest\n"
-        "    steps:\n"
-        f"{steps}\n"
-    )
+    return f"name: fixture\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n{steps}\n"
 
 
 @unittest.skipUnless(shutil.which("yq"), "yq not on PATH")
@@ -92,8 +84,7 @@ class CheckNodeRuntimeTest(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertIn(
-            "::error file=.github/workflows/x.yml::"
-            "Action acme/action@v1 uses unsupported Node runtime node20",
+            "::error file=.github/workflows/x.yml::Action acme/action@v1 uses unsupported Node runtime node20",
             proc.stdout,
         )
 
@@ -189,8 +180,7 @@ class CheckNodeRuntimeTest(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertIn(
-            "::error file=.github/workflows/my flow.yml::"
-            "Action acme/action@v1 uses unsupported Node runtime node20",
+            "::error file=.github/workflows/my flow.yml::Action acme/action@v1 uses unsupported Node runtime node20",
             proc.stdout,
         )
 
