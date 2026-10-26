@@ -149,6 +149,29 @@ def _update(
     return Update(name, ecosystem, "/", prev, new)
 
 
+def _metadata(name: str, ecosystem: str, prev: str, new: str) -> dict[str, object]:
+    return {
+        "dependencyName": name,
+        "dependencyType": "direct:production",
+        "updateType": "version-update:semver-patch",
+        "directory": "/",
+        "packageEcosystem": ecosystem,
+        "targetBranch": "main",
+        "prevVersion": prev,
+        "newVersion": new,
+        "alertState": "",
+        "ghsaId": "",
+        "cvss": "",
+        "compatScore": "",
+        "maintainerChanges": False,
+        "dependencyGroup": "",
+    }
+
+
+def _no_fetch_runner(args: list[str], **kwargs: object) -> _Completed:
+    raise AssertionError(f"unexpected command: {args}")
+
+
 def _process(
     update: Update,
     out: Path,
@@ -624,41 +647,149 @@ class HeadRefTest(unittest.TestCase):
         self.assertIn("does not name", dcr_fetch._head_note(update, None) or "")
 
 
-class ReconciliationTest(unittest.TestCase):
-    def test_synthetic_update_uses_the_missing_metadata_note(self) -> None:
-        diff = (
-            "diff --git a/package-lock.json b/package-lock.json\n"
-            "--- a/package-lock.json\n"
-            "+++ b/package-lock.json\n"
-            "@@ -1,3 +1,3 @@\n"
-            '     "node_modules/right-pad": {\n'
-            '-      "version": "2.0.0",\n'
-            '+      "version": "2.0.1",\n'
-            "     }\n"
-        )
-        updates = [Update("left-pad", "npm_and_yarn", "", "1.0.0", "1.0.1")]
-        synthetic = dcr_fetch._synthetic_updates(diff, updates)
-        self.assertEqual(len(synthetic), 1)
-        self.assertEqual(synthetic[0].name, "right-pad")
-        self.assertEqual(synthetic[0].ecosystem, "npm_and_yarn")
-        self.assertEqual(synthetic[0].prev_version, "2.0.0")
-        self.assertEqual(synthetic[0].new_version, "2.0.1")
-        self.assertEqual(synthetic[0].status, "unverified")
-        self.assertEqual(synthetic[0].note, "missing from update metadata")
+class FileScopeTest(unittest.TestCase):
+    def _run(
+        self, tmp: Path, diff_text: str, updates: list[dict[str, object]], head_ref: str, runner
+    ) -> dict[str, object]:
+        diff = tmp / "pr.diff"
+        diff.write_text(diff_text, encoding="utf-8")
+        out = tmp / "out"
+        env = {
+            "DCR_OUT": str(out),
+            "PR_DIFF_PATH": str(diff),
+            "UPDATED_DEPENDENCIES_JSON": json.dumps(updates),
+            "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
+            "DCR_HEAD_REF": head_ref,
+        }
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(dcr_fetch, "_write_diff", return_value=False),
+            mock.patch.object(dcr_fetch, "_scan_diff", return_value=[]),
+            mock.patch.object(dcr_sources.subprocess, "run", side_effect=runner),
+        ):
+            self.assertEqual(dcr_fetch.main(), 0)
+        return json.loads((out / "meta.json").read_text(encoding="utf-8"))
 
-    def test_update_list_match_produces_no_synthetic_update(self) -> None:
-        diff = (
+    def _meta(self, diff_text: str, updates: list[dict[str, object]], head_ref: str, runner) -> dict[str, object]:
+        with tempfile.TemporaryDirectory() as tmp:
+            return self._run(Path(tmp), diff_text, updates, head_ref, runner)
+
+    def test_npm_transitive_lock_changes_add_no_updates(self) -> None:
+        tarball = _tar_bytes({"package/index.js": b"module.exports = 1;\n"})
+        diff_text = (
+            "diff --git a/package.json b/package.json\n"
+            "--- a/package.json\n"
+            "+++ b/package.json\n"
+            "@@ -1,4 +1,4 @@\n"
+            '   "dependencies": {\n'
+            '-    "left-pad": "1.0.0",\n'
+            '+    "left-pad": "1.0.1",\n'
+            "   }\n"
             "diff --git a/package-lock.json b/package-lock.json\n"
             "--- a/package-lock.json\n"
             "+++ b/package-lock.json\n"
-            "@@ -1,3 +1,3 @@\n"
+            "@@ -1,9 +1,9 @@\n"
             '     "node_modules/left-pad": {\n'
             '-      "version": "1.0.0",\n'
             '+      "version": "1.0.1",\n'
-            "     }\n"
+            '     "node_modules/right-pad": {\n'
+            '-      "version": "2.0.0",\n'
+            '+      "version": "2.0.1",\n'
+            '     "node_modules/other-pad": {\n'
+            '-      "version": "3.0.0",\n'
+            '+      "version": "3.0.1",\n'
         )
-        updates = [Update("left-pad", "npm_and_yarn", "", "1.0.0", "1.0.1")]
-        self.assertEqual(dcr_fetch._synthetic_updates(diff, updates), [])
+        updates = [_metadata("left-pad", "npm_and_yarn", "1.0.0", "1.0.1")]
+        meta = self._meta(diff_text, updates, "dependabot/npm_and_yarn/left-pad-1.0.1", _npm_runner(tarball))
+        self.assertEqual(len(meta["updates"]), 1)
+        self.assertEqual(meta["updates"][0]["status"], "reviewed")
+        self.assertNotIn("missing from update metadata", json.dumps(meta))
+
+    def test_go_versions_are_v_prefixed_for_matching_and_fetching(self) -> None:
+        zip_bytes = _zip_bytes({"example.com/mod@v1.5.0/go.mod": b"module example.com/mod\n"})
+        sum_value = "h1:" + "A" * 43 + "="
+        calls: list[list[str]] = []
+        diff_text = (
+            "diff --git a/go.mod b/go.mod\n"
+            "--- a/go.mod\n"
+            "+++ b/go.mod\n"
+            "@@ -1,2 +1,2 @@\n"
+            "-\texample.com/mod v1.4.0\n"
+            "+\texample.com/mod v1.5.0\n"
+            "diff --git a/go.sum b/go.sum\n"
+            "--- a/go.sum\n"
+            "+++ b/go.sum\n"
+            "@@ -1,1 +1,1 @@\n"
+            f"-example.com/mod v1.4.0 {sum_value}\n"
+            f"+example.com/mod v1.5.0 {sum_value}\n"
+        )
+        updates = [_metadata("example.com/mod", "gomod", "1.4.0", "1.5.0")]
+        runner = _go_runner(zip_bytes, sum_value, calls)
+        meta = self._meta(diff_text, updates, "dependabot/go_modules/example.com/mod-1.5.0", runner)
+        recorded = meta["updates"][0]
+        self.assertEqual(recorded["status"], "reviewed")
+        self.assertEqual(recorded["prev_version"], "v1.4.0")
+        self.assertEqual(recorded["new_version"], "v1.5.0")
+        self.assertTrue(any("example.com/mod@v1.5.0" in call for call in calls))
+
+    def test_cargo_lock_transitive_changes_stay_not_reviewed(self) -> None:
+        diff_text = (
+            "diff --git a/Cargo.lock b/Cargo.lock\n"
+            "--- a/Cargo.lock\n"
+            "+++ b/Cargo.lock\n"
+            "@@ -1,8 +1,8 @@\n"
+            " [[package]]\n"
+            ' name = "serde"\n'
+            '-version = "1.0.0"\n'
+            '+version = "1.0.1"\n'
+            " [[package]]\n"
+            ' name = "tokio"\n'
+            '-version = "1.0.0"\n'
+            '+version = "1.0.1"\n'
+        )
+        updates = [_metadata("tokio", "cargo", "1.0.0", "1.0.1")]
+        meta = self._meta(diff_text, updates, "dependabot/cargo/tokio-1.0.1", _no_fetch_runner)
+        self.assertEqual(meta["updates"][0]["status"], "not_reviewed")
+        self.assertIn("not reviewed", meta["updates"][0]["note"])
+        self.assertFalse(meta["reviewable"])
+        self.assertFalse(any(update["status"] == "unverified" for update in meta["updates"]))
+
+    def test_tag_pinned_action_bump_stays_not_reviewed(self) -> None:
+        diff_text = (
+            "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n"
+            "--- a/.github/workflows/ci.yml\n"
+            "+++ b/.github/workflows/ci.yml\n"
+            "@@ -1,1 +1,1 @@\n"
+            "-      - uses: actions/checkout@v4\n"
+            "+      - uses: actions/checkout@v7\n"
+        )
+        updates = [_metadata("actions/checkout", "github_actions", "4", "7")]
+        meta = self._meta(diff_text, updates, "dependabot/github_actions/actions/checkout-7", _no_fetch_runner)
+        self.assertEqual(meta["updates"][0]["status"], "not_reviewed")
+        self.assertIn("moving ref", meta["updates"][0]["note"])
+        self.assertFalse(meta["reviewable"])
+        self.assertFalse(any(update["status"] == "unverified" for update in meta["updates"]))
+
+    def test_changed_file_outside_the_head_ecosystem_is_unverified(self) -> None:
+        diff_text = (
+            "diff --git a/package.json b/package.json\n"
+            "--- a/package.json\n"
+            "+++ b/package.json\n"
+            "@@ -1,2 +1,2 @@\n"
+            '-  "left-pad": "1.0.0",\n'
+            '+  "left-pad": "1.0.1",\n'
+            "diff --git a/src/index.js b/src/index.js\n"
+            "--- a/src/index.js\n"
+            "+++ b/src/index.js\n"
+            "@@ -1,1 +1,1 @@\n"
+            "-export const version = '1.0.0';\n"
+            "+export const version = '1.0.1';\n"
+        )
+        updates = [_metadata("left-pad", "npm_and_yarn", "1.0.0", "1.0.1")]
+        meta = self._meta(diff_text, updates, "dependabot/npm_and_yarn/left-pad-1.0.1", _no_fetch_runner)
+        self.assertEqual(meta["updates"][0]["status"], "unverified")
+        self.assertEqual(meta["updates"][0]["note"], "changed file outside the update ecosystem: src/index.js")
+        self.assertTrue(meta["reviewable"])
 
 
 class MainTest(unittest.TestCase):
@@ -812,51 +943,6 @@ class MainTest(unittest.TestCase):
             meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
             self.assertEqual(meta["updates"][0]["status"], "unverified")
             self.assertIn("different", meta["updates"][0]["note"])
-            self.assertTrue(meta["reviewable"])
-
-    def test_missing_lock_package_is_a_synthetic_unverified_update(self) -> None:
-        update = {
-            "dependencyName": "tokio",
-            "packageEcosystem": "cargo",
-            "prevVersion": "1.0.0",
-            "newVersion": "1.0.1",
-            "directory": "/",
-        }
-        diff_text = (
-            "diff --git a/package-lock.json b/package-lock.json\n"
-            "--- a/package-lock.json\n"
-            "+++ b/package-lock.json\n"
-            "@@ -1,3 +1,3 @@\n"
-            '     "node_modules/right-pad": {\n'
-            '-      "version": "2.0.0",\n'
-            '+      "version": "2.0.1",\n'
-            "     }\n"
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            diff = Path(tmp) / "pr.diff"
-            diff.write_text(diff_text, encoding="utf-8")
-            out = Path(tmp) / "out"
-            env = {
-                "DCR_OUT": str(out),
-                "PR_DIFF_PATH": str(diff),
-                "UPDATED_DEPENDENCIES_JSON": json.dumps([update]),
-                "DEPENDABOT_CURSOR_MALWARE_IOC_PATTERNS": '["never-match"]',
-                "DCR_HEAD_REF": "dependabot/cargo/tokio-1.0.1",
-            }
-            with (
-                mock.patch.dict(os.environ, env),
-                mock.patch.object(dcr_fetch, "_write_diff", return_value=False),
-                mock.patch.object(dcr_fetch, "_scan_diff", return_value=[]),
-            ):
-                self.assertEqual(dcr_fetch.main(), 0)
-            meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
-            self.assertEqual(len(meta["updates"]), 2)
-            self.assertEqual(meta["updates"][0]["status"], "not_reviewed")
-            synthetic = meta["updates"][1]
-            self.assertEqual(synthetic["name"], "right-pad")
-            self.assertEqual(synthetic["ecosystem"], "npm_and_yarn")
-            self.assertEqual(synthetic["status"], "unverified")
-            self.assertEqual(synthetic["note"], "missing from update metadata")
             self.assertTrue(meta["reviewable"])
 
     def test_reviewable_meta_and_github_output_follow_the_statuses(self) -> None:

@@ -29,7 +29,7 @@ PYPI_ALLOWED_HOSTS = dcr_sources.PYPI_ALLOWED_HOSTS
 MAX_DIFF_BYTES = dcr_lock.MAX_DIFF_BYTES
 _URL_PATTERN = dcr_lock.URL_PATTERN
 _binding_on_added = dcr_lock.binding_on_added
-changed_packages = dcr_lock.changed_packages
+_changed_files = dcr_lock.changed_files
 _diff_lines = dcr_lock.diff_lines
 _extract = dcr_sources.extract
 _fetch_action = dcr_sources.fetch_action
@@ -39,7 +39,6 @@ _fetch_pypi = dcr_sources.fetch_pypi
 _format_from_name = dcr_sources.format_from_name
 _ioc_patterns = dcr_lock.ioc_patterns
 _locked_hashes = dcr_lock.locked_hashes
-missing_from_metadata = dcr_lock.missing_from_metadata
 _near = dcr_lock.near
 _near_lines = dcr_lock.near_lines
 _scan_diff = dcr_lock.scan_diff
@@ -157,6 +156,33 @@ ECOSYSTEMS: dict[str, Ecosystem] = {
     "github_actions": Ecosystem(ACTION_NAME, ACTION_SHA, _format_from_name, _all_files, _fetch_action),
 }
 
+ALLOWED_CHANGED_FILES: dict[str, tuple[re.Pattern[str], ...]] = {
+    "npm_and_yarn": (
+        re.compile(r"(?:^|/)(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml)$"),
+    ),
+    "pip": (
+        re.compile(r"(?:^|/)requirements[^/]*\.(?:txt|in)$"),
+        re.compile(r"(?:^|/)requirements/[^/]+\.txt$"),
+        re.compile(r"(?:^|/)(?:pyproject\.toml|poetry\.lock|uv\.lock|Pipfile|Pipfile\.lock|setup\.cfg|setup\.py)$"),
+    ),
+    "gomod": (re.compile(r"(?:^|/)go\.(?:mod|sum)$"),),
+    "github_actions": (
+        re.compile(r"(?:^|/)\.github/workflows/.+\.ya?ml$"),
+        re.compile(r"(?:^|/)action\.ya?ml$"),
+    ),
+    "cargo": (re.compile(r"(?:^|/)(?:Cargo\.toml|Cargo\.lock)$"),),
+}
+
+
+def _normalize_versions(update: Update) -> Update:
+    """Dependabot reports Go versions without the leading `v` that go.mod and go.sum use."""
+    if update.ecosystem != "gomod":
+        return update
+    prev_version, new_version = (
+        version if version.startswith("v") else f"v{version}" for version in (update.prev_version, update.new_version)
+    )
+    return replace(update, prev_version=prev_version, new_version=new_version)
+
 
 def _parse_updates(raw: str) -> list[Update]:
     try:
@@ -171,7 +197,8 @@ def _parse_updates(raw: str) -> list[Update]:
         if not all(isinstance(value, str) and value for value in values):
             raise SystemExit("updated dependency is missing a required field")
         directory = item.get("directory", "")
-        updates.append(Update(*values[:2], directory if isinstance(directory, str) else "", *values[2:]))
+        update = Update(*values[:2], directory if isinstance(directory, str) else "", *values[2:])
+        updates.append(_normalize_versions(update))
     return updates
 
 
@@ -192,6 +219,17 @@ def _head_note(update: Update, head_ecosystem: str | None) -> str | None:
         return "head branch does not name the update ecosystem"
     if head_ecosystem != update.ecosystem:
         return "head branch names a different update ecosystem"
+    return None
+
+
+def _scope_note(head_ecosystem: str | None, files: tuple[str, ...]) -> str | None:
+    """The fail-closed reason when a changed file is outside the head ecosystem's files."""
+    allowed = ALLOWED_CHANGED_FILES.get(head_ecosystem or "")
+    if allowed is None:
+        return None
+    for path in files:
+        if not any(pattern.search(path) for pattern in allowed):
+            return f"changed file outside the update ecosystem: {path}"
     return None
 
 
@@ -217,12 +255,21 @@ def _check(update: Update, ecosystem: Ecosystem, added: list[str], removed: list
     return None
 
 
-def _process_update(index: int, update: Update, out_dir: Path, added: list[str], removed: list[str]) -> Update:
+def _process_update(
+    index: int,
+    update: Update,
+    out_dir: Path,
+    added: list[str],
+    removed: list[str],
+    scope_note: str | None = None,
+) -> Update:
     ecosystem = ECOSYSTEMS.get(update.ecosystem)
     if ecosystem is None:
         return replace(update, status="not_reviewed", note="ecosystem is not reviewed")
     if update.ecosystem == "github_actions" and not ACTION_SHA.fullmatch(update.new_version):
         return replace(update, status="not_reviewed", note="moving ref: the new pin is not a 40-hex commit SHA")
+    if scope_note:
+        return replace(update, status="unverified", note=scope_note)
     if note := _check(update, ecosystem, added, removed):
         return replace(update, status="unverified", note=note)
     slug = f"{index:02d}-" + re.sub(r"[^A-Za-z0-9._@-]", "_", f"{update.name}@{update.new_version}")
@@ -251,28 +298,12 @@ def _process_update(index: int, update: Update, out_dir: Path, added: list[str],
     return replace(update, bound=new_review.bound, note=new_review.note)
 
 
-def _over_cap(update: Update, head_ecosystem: str | None) -> Update:
+def _over_cap(update: Update, head_ecosystem: str | None, scope_note: str | None) -> Update:
     if note := _head_note(update, head_ecosystem):
         return replace(update, status="unverified", note=note)
     status = "unverified" if _reviewable(update) else "not_reviewed"
-    return replace(update, status=status, note=f"over the {MAX_UPDATES}-update cap")
-
-
-def _synthetic_updates(diff_text: str, updates: list[Update]) -> list[Update]:
-    """Changed lock packages that the update list does not mention."""
-    known = ((update.ecosystem, update.name, update.new_version) for update in updates)
-    return [
-        Update(
-            change.name,
-            change.ecosystem,
-            "",
-            change.prev_version,
-            change.new_version,
-            status="unverified",
-            note="missing from update metadata",
-        )
-        for change in missing_from_metadata(changed_packages(diff_text), known)
-    ]
+    note = scope_note if status == "unverified" and scope_note else f"over the {MAX_UPDATES}-update cap"
+    return replace(update, status=status, note=note)
 
 
 def main() -> int:
@@ -284,16 +315,16 @@ def main() -> int:
     diff_text = Path(os.environ["PR_DIFF_PATH"]).read_text(encoding="utf-8", errors="replace")
     added, removed = _diff_lines(diff_text)
     head_ecosystem = _head_ecosystem(os.environ.get("DCR_HEAD_REF", ""))
+    scope_note = _scope_note(head_ecosystem, _changed_files(diff_text))
     results: list[Update] = []
     for index, update in enumerate(updates[:MAX_UPDATES]):
         note = _head_note(update, head_ecosystem)
         results.append(
             replace(update, status="unverified", note=note)
             if note
-            else _process_update(index, update, out_dir, added, removed)
+            else _process_update(index, update, out_dir, added, removed, scope_note)
         )
-    results.extend(_over_cap(update, head_ecosystem) for update in updates[MAX_UPDATES:])
-    results.extend(_synthetic_updates(diff_text, updates))
+    results.extend(_over_cap(update, head_ecosystem, scope_note) for update in updates[MAX_UPDATES:])
     truncated = _write_diff(out_dir)
     if truncated:
         results = [
