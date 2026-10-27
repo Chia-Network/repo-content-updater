@@ -272,15 +272,30 @@ func TestThisRepoDependabotScansTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	template, err := os.ReadFile(filepath.Join("..", "..", "templates", "dependabot.yml"))
+	repoRoot := filepath.Join("..", "..")
+	// This repo selects the "dependabot" file via its managed-files property,
+	// not the default "dependabot-actions" file, so render that entry with isDefault=false.
+	fileinfo := cfg.GetFileInfo("dependabot")
+	if fileinfo == nil {
+		t.Fatal(`config.yaml has no "dependabot" file entry`)
+	}
+	template, err := os.ReadFile(filepath.Join(repoRoot, "templates", "dependabot.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := ProcessTemplate(template, cfg.Variables, repoConfig.VarOverrides)
+	templateVars, err := DependabotVarsForRepo(repoRoot, cfg.Variables, repoConfig.VarOverrides)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rendered, err := os.ReadFile(filepath.Join("..", "..", ".github", "dependabot.yml"))
+	got, err := ProcessTemplate(template, withAdoptionMarker(templateVars, fileinfo.AdoptionMarker), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = postRenderDependabot(repoRoot, false, fileinfo, got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := os.ReadFile(filepath.Join(repoRoot, ".github", "dependabot.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
