@@ -2,13 +2,6 @@
 # inline with the upstream template, unless you add !dependabot to the repo's managed-files property
 
 version: 2
-registries:
-  chia-pypi:
-    type: python-index
-    url: https://pypi.chia.net/simple/
-  chia-downloads:
-    type: python-index
-    url: https://download.chia.net/simple/
 updates:
   - package-ecosystem: "gomod"
     directories: ["/"]
@@ -27,23 +20,6 @@ updates:
       global:
         patterns:
           - "*"
-  - package-ecosystem: "pip"
-    registries:
-      - chia-pypi
-      - chia-downloads
-    insecure-external-code-execution: allow
-    directories: ["/"]
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 10
-    rebase-strategy: auto
-    labels:
-      - dependencies
-      - python
-      - "Changed"
   - package-ecosystem: "github-actions"
     directories: ["/", "/.github/actions/*", "/templates"]
     schedule:
@@ -60,77 +36,3 @@ updates:
     exclude-paths:
       - ".github/workflows/dependency-artifact-review.yml"
       - ".github/workflows/dependency-review.yml"
-  - package-ecosystem: "npm"
-    directories: ["/"]
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 10
-    rebase-strategy: auto
-    labels:
-      - dependencies
-      - javascript
-      - "Changed"
-  - package-ecosystem: cargo
-    directories: ["/"]
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 10
-    rebase-strategy: auto
-    labels:
-      - dependencies
-      - rust
-      - "Changed"
-  - package-ecosystem: swift
-    directories: ["/"]
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 10
-    rebase-strategy: auto
-  - package-ecosystem: docker
-    directories: ["/"]
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 10
-    rebase-strategy: auto
-    labels:
-      - dependencies
-      - docker
-      - "Changed"
-  - package-ecosystem: terraform
-    directories: ["/"]
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 10
-    rebase-strategy: auto
-    labels:
-      - dependencies
-      - terraform
-      - "Changed"
-  - package-ecosystem: nuget
-    directories: ["/"]
-    schedule:
-      interval: "weekly"
-      day: "tuesday"
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 10
-    rebase-strategy: auto
-    labels:
-      - dependencies
-      - dotnet
-      - "Changed"
