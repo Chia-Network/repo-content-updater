@@ -273,7 +273,12 @@ func TestThisRepoDependabotScansTemplates(t *testing.T) {
 	}
 
 	repoRoot := filepath.Join("..", "..")
+	// This repo selects the "dependabot" file via its managed-files property,
+	// not the default "dependabot-actions" file, so render that entry with isDefault=false.
 	fileinfo := cfg.GetFileInfo("dependabot")
+	if fileinfo == nil {
+		t.Fatal(`config.yaml has no "dependabot" file entry`)
+	}
 	template, err := os.ReadFile(filepath.Join(repoRoot, "templates", "dependabot.yml"))
 	if err != nil {
 		t.Fatal(err)
