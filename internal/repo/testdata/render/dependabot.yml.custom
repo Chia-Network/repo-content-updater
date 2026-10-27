@@ -86,6 +86,10 @@ updates:
       - dependencies
       - rust
       - "Changed"
+    groups:
+      global:
+        patterns:
+          - "*"
   - package-ecosystem: swift
     directories: ["/"]
     schedule:
