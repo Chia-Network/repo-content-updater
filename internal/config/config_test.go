@@ -24,20 +24,19 @@ func TestConfigIsValid(t *testing.T) {
 		assert.Equal(t, len(group.Templates), len(files))
 	}
 
-	assert.Equal(t, []string{"dependabot-actions", "dep-review"}, cfg.DefaultFiles)
+	assert.Equal(t, []string{"dependabot-actions"}, cfg.DefaultFiles)
 }
 
-func TestDependencyReviewAcceptsEarlierHeaderMarkers(t *testing.T) {
+func TestDependencyReviewShipsOnlyThroughBaseGroup(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	if !assert.Nil(t, err) {
 		return
 	}
 
-	file := cfg.GetFileInfo("dep-review")
-	if !assert.NotNil(t, file) {
-		return
-	}
-	assert.Equal(t, []string{"Managed by repo-content-updater"}, file.PreviousAdoptionMarkers)
+	assert.NotContains(t, cfg.DefaultFiles, "dep-review")
+	base, err := cfg.ExpandGroup("base")
+	assert.Nil(t, err)
+	assert.Contains(t, base, "dep-review")
 }
 
 // TestAdoptionMarkersDoNotMatchOtherTemplates checks that every marker names
@@ -166,10 +165,9 @@ func TestResolveManagedFileSelection(t *testing.T) {
 	t.Run("defaults are added to every repo", func(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", nil)
 		assert.Empty(t, selection.Explicit)
-		assert.Equal(t, []string{"dependabot-actions", "dep-review"}, defaultNames(selection))
-		if assert.Len(t, selection.Defaults, 2) {
+		assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
+		if assert.Len(t, selection.Defaults, 1) {
 			assert.Equal(t, config.DefaultBundle{Root: "dependabot-actions", Files: []string{"dependabot-actions"}}, selection.Defaults[0])
-			assert.Equal(t, config.DefaultBundle{Root: "dep-review", Files: []string{"dep-review"}}, selection.Defaults[1])
 		}
 	})
 
@@ -181,27 +179,20 @@ func TestResolveManagedFileSelection(t *testing.T) {
 			assert.Equal(t, []string{".github/dependabot.yaml"}, file.AlternatePaths)
 			assert.Equal(t, []string{".github/workflows"}, file.RequiresPaths)
 		}
-		depReview := cfg.GetFileInfo("dep-review")
-		if assert.NotNil(t, depReview) {
-			assert.Equal(t, "repo-content-updater:dependency-review", depReview.AdoptionMarker)
-			assert.Equal(t, []string{".github/workflows"}, depReview.RequiresPaths)
-		}
 	})
 
 	for _, optOut := range []string{"!dependabot", "!go-dependabot", "!dependabot-actions"} {
-		t.Run(optOut+" removes the dependabot default and keeps the review default", func(t *testing.T) {
+		t.Run(optOut+" removes the dependabot default", func(t *testing.T) {
 			selection := cfg.ResolveManagedFileSelection("repo", []string{optOut})
 			assert.Empty(t, selection.Explicit)
-			names := defaultNames(selection)
-			assert.NotContains(t, names, "dependabot-actions")
-			assert.Contains(t, names, "dep-review")
+			assert.Empty(t, selection.Defaults)
 		})
 	}
 
-	t.Run("opt-out of the dependency review default removes it", func(t *testing.T) {
-		selection := cfg.ResolveManagedFileSelection("repo", []string{"!dep-review"})
+	t.Run("dependency review is not a default", func(t *testing.T) {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{"group:base"})
+		assert.Contains(t, selection.Explicit, "dep-review")
 		assert.NotContains(t, defaultNames(selection), "dep-review")
-		assert.Contains(t, defaultNames(selection), "dependabot-actions")
 	})
 
 	t.Run("opt-out removes an explicitly selected file", func(t *testing.T) {
@@ -215,7 +206,7 @@ func TestResolveManagedFileSelection(t *testing.T) {
 		selection := cfg.ResolveManagedFileSelection("repo", []string{"dependency-artifact-review"})
 		assert.Contains(t, selection.Explicit, "dependency-artifact-review")
 		assert.Contains(t, selection.Explicit, "dependency-artifact-review-fetch")
-		assert.Equal(t, []string{"dependabot-actions", "dep-review"}, defaultNames(selection))
+		assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
 	})
 
 	t.Run("go-dependabot suppresses the default via its shared repo path", func(t *testing.T) {

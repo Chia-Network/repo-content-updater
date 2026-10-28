@@ -9,6 +9,8 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEMPLATES = _REPO_ROOT / "templates"
 _DEPENDENCY_REVIEW = _TEMPLATES / "dependency-review.yml"
+_OWN_DEPENDENCY_REVIEW = _REPO_ROOT / ".github" / "workflows" / "dependency-review.yml"
+_CONFIG = _REPO_ROOT / "config.yaml"
 _DEPENDABOT_TEMPLATES = (_TEMPLATES / "dependabot.yml", _TEMPLATES / "go-dependabot.yml")
 _OSV_WORKFLOW = "google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml"
 _UPDATE_BLOCK = re.compile(r"^  - package-ecosystem:", re.MULTILINE)
@@ -38,10 +40,16 @@ class DependencyReviewTemplateTest(unittest.TestCase):
     def setUp(self) -> None:
         self.workflow = _DEPENDENCY_REVIEW.read_text(encoding="utf-8")
 
-    def test_keeps_the_dependency_review_job_and_severity_gate(self) -> None:
+    def test_keeps_the_dependency_review_job_at_the_default_severity(self) -> None:
         job = _job(self.workflow, "dependency-review")
         self.assertIn("uses: actions/dependency-review-action@v5.0.0", job)
-        self.assertIn('fail-on-severity: "{{ .DEPENDENCY_REVIEW_FAIL_ON_SEVERITY }}"', job)
+        self.assertNotIn("fail-on-severity", job)
+
+    def test_own_copy_and_config_have_no_severity_gate(self) -> None:
+        own = _OWN_DEPENDENCY_REVIEW.read_text(encoding="utf-8")
+        self.assertNotIn("fail-on-severity", own)
+        config = _CONFIG.read_text(encoding="utf-8")
+        self.assertNotIn("DEPENDENCY_REVIEW_FAIL_ON_SEVERITY", config)
 
     def test_runs_osv_scanner_on_pull_request_lockfiles(self) -> None:
         job = _job(self.workflow, "osv-scanner")
@@ -59,10 +67,6 @@ class DependencyReviewTemplateTest(unittest.TestCase):
 
     def test_top_level_permissions_stay_read_only(self) -> None:
         self.assertIn("permissions:\n  contents: read\n", self.workflow)
-
-    def test_severity_default_is_configured(self) -> None:
-        config = (_REPO_ROOT / "config.yaml").read_text(encoding="utf-8")
-        self.assertIn('DEPENDENCY_REVIEW_FAIL_ON_SEVERITY: "high"', config)
 
 
 class DependabotCooldownTest(unittest.TestCase):
