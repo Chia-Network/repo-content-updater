@@ -12,7 +12,6 @@
 # out of the default.
 default_files:
   - dependabot-actions
-  - dep-review
 
 # Groups allow inheriting a potentially evolving set of templates for a particular project type without needing to
 # constantly update the list of files in the repo settings
@@ -91,16 +90,13 @@ files:
   - name: dep-review
     template_name: dependency-review.yml
     repo_path: .github/workflows/dependency-review.yml
-    adoption_marker: "repo-content-updater:dependency-review"
-    # Header line of earlier releases of this template.
-    previous_adoption_markers:
-      - "Managed by repo-content-updater"
-    requires_paths:
-      - .github/workflows
     alternate_paths:
       - .github/workflows/dependency-review.yaml
-    # The legacy dependency cursor review bundle. dep-review is its default
-    # replacement, so applying it removes the old workflow and its scripts.
+    # The legacy dependency cursor review bundle, which no longer has a config
+    # entry. Applying dep-review removes the old workflow and its scripts. This
+    # runs only in repos that select dep-review (group:base or by name); repos
+    # that got dep-review as a default from #224 keep a stale copy with
+    # fail-on-severity: high, are no longer updated and get no cleanup.
     retired_paths:
       - .github/workflows/dependency-cursor-review.yml
       - .github/workflows/dependency-cursor-review.yaml
@@ -222,7 +218,6 @@ variables:
   DEPENDABOT_CARGO_REBASE_STRATEGY: "auto"
   DEPENDABOT_CARGO_GROUP_UPDATES: "1"
   DEPENDENCY_REVIEW_ALLOW_DEPENDENCIES_LICENSES: pkg:pypi/pyinstaller
-  DEPENDENCY_REVIEW_FAIL_ON_SEVERITY: "high"
   DEPENDABOT_SWIFT_DIRECTORY: '["/"]'
   DEPENDABOT_SWIFT_PULL_REQUEST_LIMIT: "10"
   DEPENDABOT_SWIFT_REBASE_STRATEGY: "auto"

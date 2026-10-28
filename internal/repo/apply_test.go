@@ -127,7 +127,7 @@ func TestApplySelection(t *testing.T) {
 		}
 	})
 
-	t.Run("the default dependency review removes retired legacy paths", func(t *testing.T) {
+	t.Run("dependency review removes retired legacy paths", func(t *testing.T) {
 		repoName := "retire-legacy"
 		writeDependabotTestFile(t, repoDir(repoName), workflow, "")
 		legacyWorkflow := ".github/workflows/dependency-cursor-review.yml"
@@ -136,10 +136,7 @@ func TestApplySelection(t *testing.T) {
 		writeDependabotTestFile(t, repoDir(repoName), legacyWorkflow, "name: legacy\n")
 		writeDependabotTestFile(t, repoDir(repoName), legacyScript, "#!/bin/sh\n")
 		writeDependabotTestFile(t, repoDir(repoName), keptScript, "keep\n")
-		selection := config.ManagedFileSelection{Defaults: []config.DefaultBundle{{
-			Root:  "dep-review",
-			Files: []string{"dep-review"},
-		}}}
+		selection := config.ManagedFileSelection{Explicit: []string{"dep-review"}}
 		if _, err := apply(t, repoName, selection); err != nil {
 			t.Fatal(err)
 		}
