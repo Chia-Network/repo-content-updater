@@ -61,6 +61,7 @@ class EndBlockTest(unittest.TestCase):
             _block(),
             f"Finding: ok\n\n## Compatibility\n\nFine.\n\n{_block()}\n\n",
             f"﻿{_block('suspicious', 'no', 'New network call.')}",
+            f"{_block()}\n\nThanks, that is the full review.",
         ):
             self.assertIsNotNone(parse_end_block(text), repr(text))
         self.assertEqual(parse_end_block(_block("malicious", "no", "x")), ("malicious", "no", "x"))
@@ -69,7 +70,6 @@ class EndBlockTest(unittest.TestCase):
         for text in (
             "",
             "MALWARE: clean\nMERGE: yes",
-            f"{_block()}\ntrailing text",
             _block("benign"),
             _block(merge="maybe"),
             _block(reason=""),
@@ -86,6 +86,28 @@ class EndBlockTest(unittest.TestCase):
             f"  MALWARE: clean\n\n{_block()}",
             "MALWARE: clean\nMERGE: yes\nREASON: x ",
             "MALWARE: clean\nMERGE: yes \nREASON: x",
+        ):
+            self.assertIsNone(parse_end_block(text), repr(text))
+
+    def test_trailing_text_after_the_block_is_allowed(self) -> None:
+        text = f"Finding: ok\n\n{_block('suspicious', 'no', 'New call.')}\n\nSee the notes above.\nDone."
+        self.assertEqual(parse_end_block(text), ("suspicious", "no", "New call."))
+
+    def test_block_must_be_within_the_last_lines(self) -> None:
+        window = dcr_verdict.END_BLOCK_WINDOW
+        inside = "\n".join(f"note {n}" for n in range(window - 3))
+        outside = "\n".join(f"note {n}" for n in range(window - 2))
+        self.assertIsNotNone(parse_end_block(f"{_block()}\n\n{inside}"))
+        self.assertIsNone(parse_end_block(f"{_block()}\n\n{outside}"))
+
+    def test_trailing_text_does_not_relax_other_rules(self) -> None:
+        for text in (
+            f"{_block()}\nMALWARE: malicious",
+            f"{_block()}\n> REASON: other",
+            f"{_block()}\n{_block()}",
+            "MALWARE: clean\ntext\nMERGE: yes\nREASON: x\nmore",
+            f"```\n{_block()}\n```\ntrailing",
+            f"{_block(merge='maybe')}\ntrailing",
         ):
             self.assertIsNone(parse_end_block(text), repr(text))
 
@@ -227,6 +249,7 @@ class PromptTest(unittest.TestCase):
         self.assertIn("untrusted data", prompt)
         self.assertIn(f"at most {dcr_verdict.MAX_REASON_CHARS} characters", prompt)
         self.assertIn("code fence around the block", prompt)
+        self.assertIn(f"last {dcr_verdict.END_BLOCK_WINDOW} non-empty lines", prompt)
         self.assertNotIn(f"```\n{_block(reason='<one short sentence>')}", prompt)
         self.assertIn(dcr_verdict.TRANSITIVE_NOTE, prompt)
 

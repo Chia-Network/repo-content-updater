@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 
 MAX_REASON_CHARS = 300
+# The block must sit within this many final non-empty lines; ordinary text may follow it.
+END_BLOCK_WINDOW = 10
 PREFIXES = ("MALWARE:", "MERGE:", "REASON:")
 # Each line must match exactly: no indentation, no trailing whitespace.
 END_BLOCK = (
@@ -22,14 +24,15 @@ MAX_COMMENT_CHARS = 65536
 def parse_end_block(text: str) -> tuple[str, str, str] | None:
     """Return (malware, merge, reason) from the strict end block, or None if it is missing or malformed."""
     lines = [line for line in text.lstrip("\ufeff").splitlines() if line.strip()]
-    if len(lines) < 3:
+    hits = [i for i, line in enumerate(lines) if line.lstrip(" \t>").startswith(PREFIXES)]
+    if len(hits) != 3 or hits[2] - hits[0] != 2:
         return None
-    earlier = [line.lstrip(" \t>") for line in lines[:-3]]
-    if any(line.startswith(PREFIXES) for line in earlier):
+    start = hits[0]
+    if start < len(lines) - END_BLOCK_WINDOW:
         return None
-    if _open_fence(earlier):
+    if _open_fence(lines[:start]):
         return None
-    matches = [pattern.fullmatch(line) for pattern, line in zip(END_BLOCK, lines[-3:])]
+    matches = [pattern.fullmatch(line) for pattern, line in zip(END_BLOCK, lines[start : start + 3])]
     if not all(matches):
         return None
     return (matches[0].group(1), matches[1].group(1), matches[2].group(1))

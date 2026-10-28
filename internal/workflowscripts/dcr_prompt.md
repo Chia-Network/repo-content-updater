@@ -17,7 +17,7 @@ Read `changes.diff` first. Open files under `old/` and `new/` when the diff is u
 
 ## Required end block
 
-End the answer with exactly these three lines and nothing after them, as plain text (the example below is plain text, not a code block):
+End the answer with exactly these three lines, once, consecutive and in this order, as plain text (the example below is plain text, not a code block). Put them at the very end; a short closing note after them is tolerated, but the block must be within the last 10 non-empty lines of the answer:
 
 MALWARE: clean
 MERGE: yes

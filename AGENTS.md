@@ -11,7 +11,8 @@ and new artifacts with native tools (`npm pack --ignore-scripts`, PyPI JSON,
 `go mod download`, `git fetch` of a SHA-pinned action) -> `diff -ruN` the
 extracted trees plus a script-computed facts list -> the agent writes findings
 and a Compatibility section, ending with a strict block of `MALWARE:
-clean|suspicious|malicious`, `MERGE: yes|no` and `REASON:` lines -> one comment whose last
+clean|suspicious|malicious`, `MERGE: yes|no` and `REASON:` lines (exactly once,
+within the last 10 non-empty lines, ordinary text may follow) -> one comment whose last
 line is `**Verdict:** Malware: ... | Merge: ...`, pass/fail.
 
 Fails on missing metadata, an unverified or unfetchable update, a missing or

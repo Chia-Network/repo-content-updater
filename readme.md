@@ -37,7 +37,8 @@ literally on an added PR diff line, the old and new artifacts are fetched with
 native tools and diffed, and `meta.json` carries a short script-computed facts
 list (major version changes, changed manifest or build files, binary changes).
 The agent writes its findings and a `## Compatibility` section on the
-operational impact for maintainers, and must end with exactly this block:
+operational impact for maintainers, and must end with exactly this block (once,
+within the last 10 non-empty lines; ordinary text may follow it):
 
 ```
 MALWARE: clean|suspicious|malicious
