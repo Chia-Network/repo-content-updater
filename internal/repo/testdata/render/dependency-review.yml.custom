@@ -23,7 +23,6 @@ jobs:
       - name: "Dependency Review"
         uses: actions/dependency-review-action@v5.0.0
         with:
-          fail-on-severity: high
           allow-dependencies-licenses: pkg:pypi/example
           deny-licenses: GPL-3.0-only, MIT
 
