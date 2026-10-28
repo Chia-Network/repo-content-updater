@@ -18,6 +18,8 @@ from urllib.request import urlopen
 
 SAFE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._/~+-]{0,299}$")
 ACTION_SHA = re.compile(r"^[0-9a-f]{40}$")
+ACTION_TAG = r"v[0-9]+(?:\.[0-9]+){0,2}"
+FULL_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 ECOSYSTEM_ALIASES = {"go_modules": "gomod"}
 UPDATE_FIELDS = ("dependencyName", "packageEcosystem", "newVersion", "prevVersion")
 
@@ -35,6 +37,8 @@ class Update:
     new_version: str
     status: str = "reviewed"
     note: str = ""
+    prev_commit: str = ""
+    new_commit: str = ""
 
 
 def added_lines(diff: str) -> list[str]:
@@ -156,9 +160,9 @@ FETCHERS = {
 }
 
 
-def _action_shas(name: str, diff: str) -> tuple[dict[str, str], set[str]]:
-    """Return removed SHAs mapped to their diff lines, and added SHAs, for one action."""
-    pattern = re.compile(rf"uses:\s*[\"']?(?i:{re.escape(name)})(?:/[^@\s]*)?@([0-9a-f]{{40}})[\"']?")
+def _action_refs(name: str, diff: str, ref: str = "[0-9a-f]{40}") -> tuple[dict[str, str], set[str]]:
+    """Return removed refs mapped to their diff lines, and added refs, for one action."""
+    pattern = re.compile(rf"uses:\s*[\"']?(?i:{re.escape(name)})(?:/[^@\s]*)?@({ref})(?=[\"'\s]|$)")
     found: dict[str, dict[str, str]] = {"-": {}, "+": {}}
     for line in diff.split("\n"):
         if line[:1] in found and not line.startswith(("--- ", "+++ ")) and (match := pattern.search(line)):
@@ -172,17 +176,50 @@ def _prev_sha(old: dict[str, str], version: str) -> str:
     return next(matches, sorted(old)[0])
 
 
+def resolve_tag(name: str, tag: str) -> str:
+    """Resolve a tag to its commit with git ls-remote, peeling annotated tags; fail on missing or ambiguous refs."""
+    out = _run(["git", "ls-remote", f"https://github.com/{name}", tag], cwd=Path(tempfile.gettempdir())).stdout
+    refs = dict(reversed(line.split("\t", 1)) for line in out.splitlines() if "\t" in line)
+    if f"refs/heads/{tag}" in refs:
+        raise FetchError(f"{tag} is ambiguous: a branch has the same name")
+    sha = refs.get(f"refs/tags/{tag}" + "^{}") or refs.get(f"refs/tags/{tag}", "")
+    if not ACTION_SHA.fullmatch(sha):
+        raise FetchError(f"{tag} did not resolve to a commit")
+    return sha
+
+
+def _action_status(update: Update, diff: str) -> Update | None:
+    """Pin SHAs or resolve tags for an action; None means fall through to the generic checks."""
+    old, new = _action_refs(update.name, diff)
+    if len(new) == 1 and old:
+        return replace(update, prev_version=_prev_sha(old, update.prev_version), new_version=new.pop())
+    if new:
+        return replace(update, status="unverified", note="the diff does not identify one old and one new SHA")
+    if ACTION_SHA.fullmatch(update.new_version):
+        return update
+    old_tags, new_tags = _action_refs(update.name, diff, ACTION_TAG)
+    if not old_tags and not new_tags:
+        return replace(update, status="not_reviewed", note="the pin is not a version tag or a 40-hex commit SHA")
+    if len(new_tags) != 1 or not old_tags:
+        return replace(update, status="unverified", note="the diff does not identify one old and one new tag")
+    prev_tag = next(
+        (t for t in old_tags if t.removeprefix("v") == update.prev_version.removeprefix("v")), min(old_tags)
+    )
+    update = replace(update, prev_version=prev_tag, new_version=new_tags.pop())
+    try:
+        commits = [resolve_tag(update.name, tag) for tag in (update.prev_version, update.new_version)]
+    except FetchError as exc:
+        return replace(update, status="unverified", note=f"tag did not resolve: {exc}")
+    return replace(update, prev_commit=commits[0], new_commit=commits[1])
+
+
 def _status(update: Update, diff: str) -> Update:
     if update.ecosystem not in FETCHERS:
         return replace(update, status="not_reviewed", note="ecosystem is not reviewed")
     if update.ecosystem == "github_actions":
-        old, new = _action_shas(update.name, diff)
-        if len(new) == 1 and old:
-            update = replace(update, prev_version=_prev_sha(old, update.prev_version), new_version=new.pop())
-        elif new:
-            return replace(update, status="unverified", note="the diff does not identify one old and one new SHA")
-        elif not ACTION_SHA.fullmatch(update.new_version):
-            return replace(update, status="not_reviewed", note="moving ref: the new pin is not a 40-hex commit SHA")
+        update = _action_status(update, diff) or update
+        if update.status != "reviewed":
+            return update
     if not update.prev_version:
         return replace(update, status="unverified", note="previous version is missing")
     if not all(SAFE.fullmatch(value) for value in (update.name, update.prev_version, update.new_version)):
@@ -250,6 +287,12 @@ def collect_facts(results: list[Update], diff: bytes) -> list[str]:
         and r.ecosystem != "github_actions"
         and _major(r.prev_version) != _major(r.new_version)
     ]
+    for r in results:
+        if r.status != "reviewed" or not r.new_commit:
+            continue
+        facts.append(f"{r.name}: tag {r.prev_version} resolved to {r.prev_commit}, {r.new_version} to {r.new_commit}")
+        if not FULL_TAG.fullmatch(r.new_version):
+            facts.append(f"{r.name}: {r.new_version} can move after review; the reviewed commit was {r.new_commit}")
     binary = 0
     manifests: set[str] = set()
     for line in diff.decode("utf-8", errors="replace").splitlines():
@@ -279,7 +322,11 @@ def main() -> int:
         slug = f"{index:02d}-" + re.sub(r"[^A-Za-z0-9._@-]", "_", f"{resolved.name}@{resolved.new_version}")
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                for side, version in (("old", resolved.prev_version), ("new", resolved.new_version)):
+                sides = (
+                    ("old", resolved.prev_commit or resolved.prev_version),
+                    ("new", resolved.new_commit or resolved.new_version),
+                )
+                for side, version in sides:
                     work = Path(tmp) / side
                     work.mkdir()
                     extract(FETCHERS[resolved.ecosystem](work, resolved.name, version), out_dir / side / slug)

@@ -8,7 +8,9 @@ for signs of malware. Keep it small.
 Flow: fetch-metadata gives name/old/new version -> the name and new version must
 appear literally on an added PR diff line (else `unverified`, fail) -> fetch old
 and new artifacts with native tools (`npm pack --ignore-scripts`, PyPI JSON,
-`go mod download`, `git fetch` of a SHA-pinned action) -> `diff -ruN` the
+`go mod download`, `git fetch` of a SHA-pinned action, or of the commits that
+`git ls-remote` resolves vX, vX.Y or vX.Y.Z tag pins to, peeled; an unresolved
+or branch-ambiguous tag is `unverified`) -> `diff -ruN` the
 extracted trees plus a script-computed facts list -> the agent writes findings
 and a Compatibility section, ending with a strict block of `MALWARE:
 clean|suspicious|malicious`, `MERGE: yes|no` and `REASON:` lines (exactly once,
@@ -17,8 +19,8 @@ line is `**Verdict:** Malware: ... | Merge: ...`, pass/fail.
 
 Fails on missing metadata, an unverified or unfetchable update, a missing or
 malformed verdict when any update was reviewed, `malicious`, or `suspicious`
-unless warn-only. Other ecosystems and moving-tag actions pass as "not
-reviewed"; when every update is not reviewed the end block is ignored.
+unless warn-only. Other ecosystems and actions pinned to branches or other
+non-tag refs pass as "not reviewed"; when every update is not reviewed the end block is ignored.
 
 Invariants: scripts run from the default branch, never from the PR head; the
 agent step has no GitHub token or write permission; Dependabot does not update

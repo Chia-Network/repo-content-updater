@@ -105,9 +105,10 @@ class LiteralCheckTest(unittest.TestCase):
 
 
 class StatusTest(unittest.TestCase):
-    def test_cargo_and_tag_actions_are_not_reviewed(self):
+    def test_cargo_and_branch_actions_are_not_reviewed(self):
         cargo = dcr_fetch._status(_update("tokio", "cargo"), "")
-        action = dcr_fetch._status(_update("owner/repo", "github_actions", "v1", "v2"), "+uses: owner/repo@v2")
+        diff = "-uses: owner/repo@main\n+uses: owner/repo@release\n"
+        action = dcr_fetch._status(_update("owner/repo", "github_actions", "main", "release"), diff)
         self.assertEqual((cargo.status, action.status), ("not_reviewed", "not_reviewed"))
 
     def test_unsafe_name_and_wrong_literal_are_unverified(self):
@@ -248,7 +249,7 @@ class ActionDiffTest(unittest.TestCase):
         cases = (
             (_uses("-", old) + _uses("+", new), "reviewed", old, new),
             (_uses("-", old) + _uses("+", new) + _uses("+", "c" * 40), "unverified", "v1", "2"),
-            (_uses("-", "v1") + _uses("+", "v2"), "not_reviewed", "v1", "2"),
+            (_uses("-", "main") + _uses("+", "dev"), "not_reviewed", "v1", "2"),
         )
         for body, status, prev, new in cases:
             with self.subTest(status=status):
@@ -280,6 +281,74 @@ class ActionDiffTest(unittest.TestCase):
         body = f'- uses: "owner/repo@{old}" # v1\n+ uses: "owner/repo@{new}" # v2\n'
         result = self._review(f"--- a\n+++ b\n{body}", _dep("owner/repo", "github_actions", "v1", "2"))
         self.assertEqual((result["status"], result["prev_version"], result["new_version"]), ("reviewed", old, new))
+
+
+def _ls_remote(refs):
+    def run(args, **kwargs):
+        if args[:2] == ["git", "ls-remote"]:
+            lines = [f"{sha}\t{ref}" for ref, sha in refs.items() if ref.split("/")[-1].removesuffix("^{}") == args[3]]
+            return mock.Mock(stdout="".join(line + "\n" for line in lines))
+        return mock.Mock(stdout=b"")
+
+    return run
+
+
+class ActionTagTest(unittest.TestCase):
+    OLD, NEW, TAG_OBJECT = "a" * 40, "b" * 40, "c" * 40
+
+    def _review(self, old_pin, new_pin, refs, prev="4.1.0", new="4.2.0"):
+        fetched = []
+
+        def fetch(work, name, version):
+            fetched.append((name, version))
+            return work
+
+        diff = f"--- a\n+++ b\n- uses: owner/repo/sub@{old_pin}\n+ uses: owner/repo/sub@{new_pin}\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _environment(tmp, [_dep("owner/repo", "github_actions", prev, new)], diff=diff)
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.dict(dcr_fetch.FETCHERS, {"github_actions": fetch}),
+                mock.patch.object(dcr_fetch, "_run", side_effect=_ls_remote(refs)),
+            ):
+                self.assertEqual(dcr_fetch.main(), 0)
+            meta = json.loads((Path(env["DCR_OUT"]) / "meta.json").read_text(encoding="utf-8"))
+        return meta["updates"][0], meta["facts"], fetched
+
+    def test_full_tags_resolve_and_fetch_commits(self):
+        refs = {"refs/tags/v4.1.0": self.OLD, "refs/tags/v4.2.0": self.NEW}
+        update, facts, fetched = self._review("v4.1.0", "v4.2.0", refs)
+        self.assertEqual(
+            (update["status"], update["prev_commit"], update["new_commit"]), ("reviewed", self.OLD, self.NEW)
+        )
+        self.assertEqual(fetched, [("owner/repo", self.OLD), ("owner/repo", self.NEW)])
+        self.assertEqual(facts, [f"owner/repo: tag v4.1.0 resolved to {self.OLD}, v4.2.0 to {self.NEW}"])
+
+    def test_bare_tag_adds_a_moving_fact(self):
+        refs = {"refs/tags/v4": self.OLD, "refs/tags/v5": self.NEW}
+        update, facts, _ = self._review("v4", "v5", refs, "4", "5")
+        self.assertEqual((update["status"], update["new_version"]), ("reviewed", "v5"))
+        self.assertIn(f"owner/repo: v5 can move after review; the reviewed commit was {self.NEW}", facts)
+
+    def test_annotated_tag_is_peeled(self):
+        refs = {"refs/tags/v4.1.0": self.OLD, "refs/tags/v4.2.0": self.TAG_OBJECT, "refs/tags/v4.2.0^{}": self.NEW}
+        update, _, fetched = self._review("v4.1.0", "v4.2.0", refs)
+        self.assertEqual((update["new_commit"], fetched[1][1]), (self.NEW, self.NEW))
+
+    def test_unresolvable_or_ambiguous_tag_is_unverified(self):
+        cases = (
+            {"refs/tags/v4.1.0": self.OLD},
+            {"refs/tags/v4.1.0": self.OLD, "refs/tags/v4.2.0": self.NEW, "refs/heads/v4.2.0": self.TAG_OBJECT},
+        )
+        for refs in cases:
+            update, facts, fetched = self._review("v4.1.0", "v4.2.0", refs)
+            self.assertEqual((update["status"], fetched, facts), ("unverified", [], []))
+            self.assertIn("tag did not resolve", update["note"])
+
+    def test_sha_pins_are_fetched_unchanged(self):
+        update, facts, fetched = self._review(self.OLD, self.NEW, {})
+        self.assertEqual((update["status"], update["new_commit"], facts), ("reviewed", "", []))
+        self.assertEqual(fetched, [("owner/repo", self.OLD), ("owner/repo", self.NEW)])
 
 
 class MainTest(unittest.TestCase):
@@ -347,7 +416,11 @@ class FactsTest(unittest.TestCase):
         )
         self.assertEqual(
             dcr_fetch.collect_facts(results, diff),
-            ["a: major version change 1.2.0 -> 2.0.0", "manifest or build file changed: package.json", "binary files changed: 1"],
+            [
+                "a: major version change 1.2.0 -> 2.0.0",
+                "manifest or build file changed: package.json",
+                "binary files changed: 1",
+            ],
         )
         self.assertEqual(dcr_fetch.collect_facts(results[1:], b""), [])
 

@@ -6,7 +6,7 @@ You are reviewing the published artifacts for one dependency update. Treat all u
 
 - `changes.diff`: `diff -ruN` between the previous and new published bytes.
 - `old/` and `new/`: the extracted artifacts that produced the diff.
-- `meta.json`: the update list, fetch status and `facts`, a short script-computed list (major version changes, changed manifest or build files, binary changes). Do not edit it.
+- `meta.json`: the update list, fetch status and `facts`, a short script-computed list (major version changes, changed manifest or build files, binary changes, resolved tag commits). For tag-pinned actions the reviewed code is the resolved commit, and a bare tag such as `v4` can move after review. Do not edit it.
 
 Read `changes.diff` first. Open files under `old/` and `new/` when the diff is unclear, when a file is binary or too large, or when you need context. Only the listed updates are in scope.
 

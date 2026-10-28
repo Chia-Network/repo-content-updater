@@ -34,8 +34,11 @@ Defaults require `.github/workflows` containing at least one `.yml`/`.yaml` file
 reviews the published code changes of a Dependabot update for signs of malware
 and for compatibility: the dependency name and new version must appear
 literally on an added PR diff line, the old and new artifacts are fetched with
-native tools and diffed, and `meta.json` carries a short script-computed facts
-list (major version changes, changed manifest or build files, binary changes).
+native tools and diffed (an action pinned to a vX, vX.Y or vX.Y.Z tag is
+reviewed as the commits those tags resolve to at scan time, recorded in
+`meta.json`; a tag that does not resolve fails closed, and branch pins are not
+reviewed), and `meta.json` carries a short script-computed facts
+list (major version changes, changed manifest or build files, binary changes, resolved tag commits).
 The agent writes its findings and a `## Compatibility` section on the
 operational impact for maintainers, and must end with exactly this block (once,
 within the last 10 non-empty lines; ordinary text may follow it):
