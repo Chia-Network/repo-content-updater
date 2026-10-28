@@ -28,12 +28,18 @@ All defaults require `.github/workflows` containing at least one `.yml`/`.yaml` 
 ### Artifact review (opt-in)
 
 `dependency-artifact-review` is a separate, opt-in workflow. A trusted AI agent
-reviews the published code changes of a Dependabot update for signs of malware:
-the dependency name and new version must appear literally on an added PR diff
-line, the old and new artifacts are fetched with native tools and diffed, the
-agent prints one `MALWARE_REVIEW_VERDICT:` line, and the result is one comment
-and a pass/fail check. Other ecosystems pass as "not reviewed". It is **not** in
-`default_files`.
+reviews the published code changes of a Dependabot update for signs of malware
+and for compatibility: the dependency name and new version must appear
+literally on an added PR diff line, the old and new artifacts are fetched with
+native tools and diffed, and the agent answers with one `MALWARE_REVIEW_VERDICT:`
+line first, a `## Compatibility` section, and a final
+`COMPATIBILITY_RECOMMENDATION: Merge` or `Don't merge` line. The result is one
+comment that ends with `**Verdict:** Malware: ... | Merge: ...` (computed by the
+script, not taken from the agent text) and a pass/fail check. A `Don't merge`
+recommendation is advisory and does not fail the check. The check still fails on
+a missing or malformed malware verdict, `malicious`, or `suspicious` unless
+warn-only. Other ecosystems pass as "not reviewed". It is **not** in
+`default_files`, so it runs only in repos that opt in.
 
 To enable it, add `dependency-artifact-review` (or
 `group:dependency-artifact-review`) to the repo's `managed-files` property, for

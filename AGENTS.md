@@ -10,7 +10,9 @@ appear literally on an added PR diff line (else `unverified`, fail) -> fetch old
 and new artifacts with native tools (`npm pack --ignore-scripts`, PyPI JSON,
 `go mod download`, `git fetch` of a SHA-pinned action) -> `diff -ruN` the
 extracted trees -> the agent prints `MALWARE_REVIEW_VERDICT:
-benign|suspicious|malicious` as its first line -> one comment, pass/fail.
+benign|suspicious|malicious` as its first line, a Compatibility section, and a
+`COMPATIBILITY_RECOMMENDATION: Merge|Don't merge` line -> one comment whose last
+line is `**Verdict:** Malware: ... | Merge: ...`, pass/fail.
 
 Fails on missing metadata, an unverified or unfetchable update, a missing or
 malformed verdict, `malicious`, or `suspicious` unless warn-only. Other

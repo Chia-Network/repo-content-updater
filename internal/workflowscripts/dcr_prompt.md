@@ -22,6 +22,14 @@ Then add short evidence lines, one per finding:
 
 EVIDENCE: <file and line or concise fact>
 
+Then add a short `## Compatibility` section. Summarise the notable code, build, API or runtime changes in the published artifacts and the practical risk for a project that installs the new version. State that this is based on the published artifacts.
+
+End with exactly one line in this form:
+
+COMPATIBILITY_RECOMMENDATION: Merge
+
+Use `COMPATIBILITY_RECOMMENDATION: Don't merge` instead when the malware verdict is not `benign`, when the risk is high, or when you could not inspect enough. That line must be the very last line of the answer, with exactly one recommendation line and no prefix, indentation, quotes or trailing text.
+
 ## Decision guidance
 
 - `malicious`: code that is clearly harmful to install, such as credential access, destructive behaviour, hidden downloaders or unauthorised data collection.

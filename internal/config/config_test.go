@@ -159,6 +159,52 @@ func TestDependencyArtifactReviewIsOptInOnly(t *testing.T) {
 	}
 }
 
+func TestDependencyArtifactReviewNotAppliedWithoutOptIn(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	companions := []string{
+		"dependency-artifact-review",
+		"github-scripts-init",
+		"dependency-artifact-review-fetch",
+		"dependency-artifact-review-verdict",
+		"dependency-artifact-review-prompt",
+	}
+	for _, values := range [][]string{nil, {"group:base"}, {"!dep-review"}} {
+		selection := cfg.ResolveManagedFileSelection("repo", values)
+		for _, name := range companions {
+			assert.NotContains(t, selection.Explicit, name)
+			assert.NotContains(t, defaultNames(selection), name)
+		}
+		if values == nil {
+			assert.Equal(t, []string{"dependabot-actions", "dep-review"}, defaultNames(selection))
+		}
+	}
+}
+
+func TestDependencyArtifactReviewAppliedWithOptIn(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+	assert.NotContains(t, cfg.DefaultFiles, "dependency-artifact-review")
+
+	companions := []string{
+		"dependency-artifact-review",
+		"github-scripts-init",
+		"dependency-artifact-review-fetch",
+		"dependency-artifact-review-verdict",
+		"dependency-artifact-review-prompt",
+	}
+	for _, value := range []string{"dependency-artifact-review", "group:dependency-artifact-review"} {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{value})
+		for _, name := range companions {
+			assert.Contains(t, selection.Explicit, name)
+			assert.NotContains(t, defaultNames(selection), name)
+		}
+		assert.Contains(t, defaultNames(selection), "dependabot-actions")
+		assert.Contains(t, defaultNames(selection), "dep-review")
+	}
+}
+
 func TestResolveManagedFileSelection(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
