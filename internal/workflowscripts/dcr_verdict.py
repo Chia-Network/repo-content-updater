@@ -5,25 +5,43 @@ import os
 import re
 from pathlib import Path
 
-VERDICT_RE = re.compile(r"^MALWARE_REVIEW_VERDICT: (benign|suspicious|malicious)$")
-RECOMMENDATION_RE = re.compile(r"^COMPATIBILITY_RECOMMENDATION: (Merge|Don't merge)$")
+MAX_REASON_CHARS = 300
+PREFIXES = ("MALWARE:", "MERGE:", "REASON:")
+# Each line must match exactly: no indentation, no trailing whitespace.
+END_BLOCK = (
+    re.compile(rf"{PREFIXES[0]} (clean|suspicious|malicious)"),
+    re.compile(rf"{PREFIXES[1]} (yes|no)"),
+    re.compile(PREFIXES[2] + r" (\S(?:.{0," + str(MAX_REASON_CHARS - 2) + r"}\S)?)"),
+)
+FENCES = ("```", "~~~")
 MARKER = "<!-- dcr-artifact-review -->"
 TRANSITIVE_NOTE = "Dependencies added transitively and not listed as updates are not artifact-reviewed."
 MAX_COMMENT_CHARS = 65536
 
 
-def parse_verdict(text: str) -> str | None:
-    lines = text.lstrip("\ufeff").splitlines()
-    match = VERDICT_RE.fullmatch(lines[0]) if lines else None
-    return match.group(1) if match else None
+def parse_end_block(text: str) -> tuple[str, str, str] | None:
+    """Return (malware, merge, reason) from the strict end block, or None if it is missing or malformed."""
+    lines = [line for line in text.lstrip("\ufeff").splitlines() if line.strip()]
+    if len(lines) < 3:
+        return None
+    earlier = [line.lstrip(" \t>") for line in lines[:-3]]
+    if any(line.startswith(PREFIXES) for line in earlier):
+        return None
+    if _open_fence(earlier):
+        return None
+    matches = [pattern.fullmatch(line) for pattern, line in zip(END_BLOCK, lines[-3:])]
+    if not all(matches):
+        return None
+    return (matches[0].group(1), matches[1].group(1), matches[2].group(1))
 
 
-def parse_recommendation(text: str) -> str:
-    lines = text.lstrip("\ufeff").splitlines()
-    matches = [line for line in lines if RECOMMENDATION_RE.fullmatch(line)]
-    if len(matches) == 1 and matches[0] == "COMPATIBILITY_RECOMMENDATION: Merge":
-        return "Merge"
-    return "Don't merge"
+def _open_fence(lines: list[str]) -> bool:
+    return sum(line.lstrip(" \t>").startswith(FENCES) for line in lines) % 2 == 1
+
+
+def _inline_code(text: str) -> str:
+    """Render untrusted one-line text as a code span: no links, mentions, HTML or comments."""
+    return "`" + " ".join(text.replace("`", "'").split()) + "`"
 
 
 def _statuses(updates: tuple[dict[str, object], ...]) -> set[object]:
@@ -47,7 +65,7 @@ def decide(
     if all_updates_not_reviewed(updates):
         return ("success", "all updates are not reviewed (outside the reviewed ecosystems)")
     if verdict is None:
-        return ("failure", "no valid verdict line")
+        return ("failure", "the end block is missing or malformed")
     if verdict == "malicious":
         return ("failure", "the agent verdict is malicious")
     if verdict == "suspicious" and not warn_only:
@@ -56,18 +74,14 @@ def decide(
     return ("success", f"the agent verdict is {verdict}{suffix}")
 
 
-def display_verdict(updates: tuple[dict[str, object], ...], verdict: str | None, conclusion: str) -> str:
+def verdicts(
+    updates: tuple[dict[str, object], ...], block: tuple[str, str, str] | None, conclusion: str
+) -> tuple[str, str]:
     if conclusion == "success" and all_updates_not_reviewed(updates):
-        return "not reviewed"
-    return verdict or "unknown"
-
-
-def merge_verdict(conclusion: str, malware_verdict: str, recommendation: str) -> str:
-    if conclusion == "success" and malware_verdict == "not reviewed":
-        return "not assessed"
-    if conclusion == "success" and malware_verdict == "benign" and recommendation == "Merge":
-        return "Merge"
-    return "Don't merge"
+        return ("not reviewed", "not reviewed")
+    if block is None:
+        return ("unknown", "no")
+    return (block[0], block[1] if conclusion == "success" and block[0] == "clean" else "no")
 
 
 def _update_line(update: dict[str, object]) -> str:
@@ -77,11 +91,17 @@ def _update_line(update: dict[str, object]) -> str:
     return line + (f" - {note}" if isinstance(note, str) and note else "")
 
 
-def _message_body(updates: tuple[dict[str, object], ...], decision: tuple[str, str]) -> str:
+def _message_body(
+    updates: tuple[dict[str, object], ...], decision: tuple[str, str], facts: tuple[str, ...] = (), reason: str = ""
+) -> str:
     parts = [MARKER, "## Dependency Artifact Review"]
     parts.append(f"**Result:** {decision[0]}\n**Reason:** {decision[1]}")
+    if reason:
+        parts.append(f"**Agent reason:** {_inline_code(reason)}")
     if updates:
         parts.append("### Updates\n" + "\n".join(map(_update_line, updates)))
+    if facts:
+        parts.append("### Facts\n" + "\n".join(f"- {fact}" for fact in facts))
     parts.append(TRANSITIVE_NOTE)
     return "\n\n".join(parts)
 
@@ -92,41 +112,45 @@ def comment_body(
     agent_text: str,
     malware_verdict: str,
     merge: str,
+    facts: tuple[str, ...] = (),
+    reason: str = "",
 ) -> str:
-    head = _message_body(updates, decision)
+    head = _message_body(updates, decision, facts, reason)
     verdict_line = f"**Verdict:** Malware: {malware_verdict} | Merge: {merge}"
     tail = f"\n\n{verdict_line}\n"
+    head_note = "\n\n[... truncated]"
+    if len(head) + len(tail) > MAX_COMMENT_CHARS:
+        head = head[: MAX_COMMENT_CHARS - len(tail) - len(head_note)] + head_note
     if not agent_text:
         return head + tail
 
     open_details = "\n\n<details>\n<summary>Agent review</summary>\n\n"
     close_details = "\n\n</details>"
+    close_fence = "\n```"
     note = "\n\n[agent output truncated]"
-    budget = MAX_COMMENT_CHARS - len(head) - len(open_details) - len(close_details) - len(tail)
-    if budget <= 0:
-        return head + tail
-    if len(agent_text) > budget:
-        close_fence = "\n```"
-        if budget <= len(note) + len(close_fence):
+    budget = MAX_COMMENT_CHARS - len(head) - len(open_details) - len(close_details) - len(tail) - len(close_fence)
+    truncated = len(agent_text) > budget
+    if truncated:
+        if budget <= len(note):
             return head + tail
-        agent_text = agent_text[: budget - len(note) - len(close_fence)]
-        if sum(line.startswith("```") for line in agent_text.splitlines()) % 2:
-            agent_text += close_fence
+        agent_text = agent_text[: budget - len(note)]
+    if _open_fence(agent_text.splitlines()):
+        agent_text += close_fence
+    if truncated:
         agent_text += note
     return head + open_details + agent_text + close_details + tail
 
 
 def main() -> int:
     try:
-        raw = Path(os.environ.get("DCR_META", "meta.json")).read_bytes()
-    except OSError:
-        raw = b""
-    try:
-        updates = json.loads(raw).get("updates")
-    except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
-        updates = None
+        meta = json.loads(Path(os.environ.get("DCR_META", "meta.json")).read_bytes())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        meta = None
+    updates = meta.get("updates") if isinstance(meta, dict) else None
     if not isinstance(updates, list) or not all(isinstance(item, dict) for item in updates):
         updates = None
+    facts = meta.get("facts") if isinstance(meta, dict) else None
+    facts = tuple(f for f in facts if isinstance(f, str)) if isinstance(facts, list) else ()
     try:
         agent = Path(os.environ.get("DCR_AGENT_OUTPUT", "agent_output.txt")).read_text(
             encoding="utf-8", errors="replace"
@@ -135,17 +159,17 @@ def main() -> int:
         agent = ""
     warn_only = os.environ.get("MALWARE_WARN_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
     items = tuple(updates or ())
-    verdict = parse_verdict(agent)
-    recommendation = parse_recommendation(agent)
-    decision = decide(updates is not None, items, verdict, warn_only)
-    malware = display_verdict(items, verdict, decision[0])
-    merge = merge_verdict(decision[0], malware, recommendation)
+    block = parse_end_block(agent)
+    decision = decide(updates is not None, items, block[0] if block else None, warn_only)
+    malware, merge = verdicts(items, block, decision[0])
+    reason = block[2] if block else ""
     comment = os.environ.get("DCR_COMMENT", "comment.md")
-    Path(comment).write_text(comment_body(items, decision, agent, malware, merge), encoding="utf-8")
+    body = comment_body(items, decision, agent, malware, merge, facts, reason)
+    Path(comment).write_text(body, encoding="utf-8")
     if output := os.environ.get("GITHUB_OUTPUT"):
         with Path(output).open("a", encoding="utf-8") as handle:
-            handle.write(f"conclusion={decision[0]}\nmerge_verdict={merge}\n")
-    print(f"conclusion={decision[0]}\nreason={decision[1]}\nmerge_verdict={merge}")
+            handle.write(f"conclusion={decision[0]}\n")
+    print(f"conclusion={decision[0]}\nreason={decision[1]}\nmalware={malware}\nmerge={merge}")
     return 0
 
 

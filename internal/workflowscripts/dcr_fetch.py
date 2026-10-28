@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -221,6 +222,49 @@ def write_diff(out_dir: Path) -> None:
     (out_dir / "changes.diff").write_bytes(result.stdout)
 
 
+MANIFESTS = {"package.json", "setup.py", "setup.cfg", "pyproject.toml", "go.mod", "action.yml", "action.yaml"}
+
+
+def _major(version: str) -> str:
+    return re.split(r"[.+-]", version.lstrip("vV"), maxsplit=1)[0]
+
+
+def _diff_header_path(paths: str) -> str:
+    """The new-side path of a "diff -ruN old/P new/P" header; GNU diff quotes P when it has spaces."""
+    try:
+        parts = shlex.split(paths)
+    except ValueError:
+        parts = []
+    if len(parts) == 2:
+        return parts[1]
+    # Unquoted "old/P new/P" where P contains spaces: both halves are the same length.
+    return paths[len(paths) - (len(paths) - 9) // 2 :]
+
+
+def collect_facts(results: list[Update], diff: bytes) -> list[str]:
+    """Plain, script-computed facts about the update for the agent and the comment."""
+    facts = [
+        f"{r.name}: major version change {r.prev_version} -> {r.new_version}"
+        for r in results
+        if r.status == "reviewed"
+        and r.ecosystem != "github_actions"
+        and _major(r.prev_version) != _major(r.new_version)
+    ]
+    binary = 0
+    manifests: set[str] = set()
+    for line in diff.decode("utf-8", errors="replace").splitlines():
+        if line.startswith("diff -ruN "):
+            name = PurePosixPath(_diff_header_path(line[len("diff -ruN ") :])).name
+            if name in MANIFESTS:
+                manifests.add(name)
+        elif line.startswith("Binary files "):
+            binary += 1
+    facts += [f"manifest or build file changed: {name}" for name in sorted(manifests)]
+    if binary:
+        facts.append(f"binary files changed: {binary}")
+    return facts
+
+
 def main() -> int:
     out_dir = Path(os.environ["DCR_OUT"])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +294,9 @@ def main() -> int:
             for r in results
         ]
     reviewable = any(result.status == "reviewed" for result in results)
-    meta = {"schema": 1, "updates": [asdict(result) for result in results]}
+    diff_path = out_dir / "changes.diff"
+    facts = collect_facts(results, diff_path.read_bytes() if diff_path.exists() else b"")
+    meta = {"schema": 1, "updates": [asdict(result) for result in results], "facts": facts}
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if output := os.environ.get("GITHUB_OUTPUT"):
         with Path(output).open("a", encoding="utf-8") as handle:

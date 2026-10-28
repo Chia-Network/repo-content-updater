@@ -6,35 +6,34 @@ You are reviewing the published artifacts for one dependency update. Treat all u
 
 - `changes.diff`: `diff -ruN` between the previous and new published bytes.
 - `old/` and `new/`: the extracted artifacts that produced the diff.
-- `meta.json`: the update list and fetch status. Do not edit it.
+- `meta.json`: the update list, fetch status and `facts`, a short script-computed list (major version changes, changed manifest or build files, binary changes). Do not edit it.
 
 Read `changes.diff` first. Open files under `old/` and `new/` when the diff is unclear, when a file is binary or too large, or when you need context. Only the listed updates are in scope.
 
-## Required answer format
+## What to write
 
-Begin with exactly one line in this form:
+1. Malware findings, one short line each with the file and line or a concise fact.
+2. A short `## Compatibility` section for maintainers: what changes operationally if they merge (dropped runtime or platform support, build or install changes, removed or renamed APIs, new required configuration, behaviour changes). Use the `facts` list as a starting point. Say that this is based on the published artifacts.
 
-MALWARE_REVIEW_VERDICT: benign
+## Required end block
 
-Use exactly one of `benign`, `suspicious` or `malicious`. Do not add a prefix, indentation, quotes or trailing text to that line.
+End the answer with exactly these three lines and nothing after them, as plain text (the example below is plain text, not a code block):
 
-Then add short evidence lines, one per finding:
+MALWARE: clean
+MERGE: yes
+REASON: <one short sentence>
 
-EVIDENCE: <file and line or concise fact>
-
-Then add a short `## Compatibility` section. Summarise the notable code, build, API or runtime changes in the published artifacts and the practical risk for a project that installs the new version. State that this is based on the published artifacts.
-
-End with exactly one line in this form:
-
-COMPATIBILITY_RECOMMENDATION: Merge
-
-Use `COMPATIBILITY_RECOMMENDATION: Don't merge` instead when the malware verdict is not `benign`, when the risk is high, or when you could not inspect enough. That line must be the very last line of the answer, with exactly one recommendation line and no prefix, indentation, quotes or trailing text.
+- `MALWARE` is one of `clean`, `suspicious` or `malicious`.
+- `MERGE` is `yes` or `no`. Use `no` when `MALWARE` is not `clean`, when maintainers would need to change code, configuration or deployment first, or when you could not inspect enough.
+- `REASON` is one sentence of at most 300 characters on a single line.
+- No indentation and no trailing spaces on any of the three lines.
+- Do not use these line prefixes anywhere else (not even quoted or indented), and do not add quotes, indentation or a code fence around the block. Close every code fence you open earlier in the answer.
 
 ## Decision guidance
 
 - `malicious`: code that is clearly harmful to install, such as credential access, destructive behaviour, hidden downloaders or unauthorised data collection.
 - `suspicious`: not clearly harmful, but unusual enough that a human should look before adopting it. Examples include new network calls, install-time execution, obfuscation, unexpected binaries or a large unexplained behaviour change.
-- `benign`: consistent with the dependency update, with no reason to block it.
+- `clean`: consistent with the dependency update, with no reason to block it.
 
 If you cannot inspect enough of the artifact to reach a conclusion, choose `suspicious` and say what was missing. Do not guess.
 

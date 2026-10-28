@@ -127,13 +127,9 @@ func canonicalSourceForTemplate(cfg *config.Config, templateName string) (string
 	return "", false
 }
 
-func TestDependencyArtifactReviewIsOptInOnly(t *testing.T) {
+func TestDependencyArtifactReviewGroupExpansion(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
-
-	assert.NotContains(t, cfg.DefaultFiles, "dependency-artifact-review")
-	selection := cfg.ResolveManagedFileSelection("repo", nil)
-	assert.NotContains(t, defaultNames(selection), "dependency-artifact-review")
 
 	expanded, err := cfg.ExpandManagedFileEntries([]string{"dependency-artifact-review"})
 	assert.Nil(t, err)
@@ -176,7 +172,7 @@ func TestDependencyArtifactReviewNotAppliedWithoutOptIn(t *testing.T) {
 			assert.NotContains(t, defaultNames(selection), name)
 		}
 		if values == nil {
-			assert.Equal(t, []string{"dependabot-actions", "dep-review"}, defaultNames(selection))
+			assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
 		}
 	}
 }
@@ -199,8 +195,7 @@ func TestDependencyArtifactReviewAppliedWithOptIn(t *testing.T) {
 			assert.Contains(t, selection.Explicit, name)
 			assert.NotContains(t, defaultNames(selection), name)
 		}
-		assert.Contains(t, defaultNames(selection), "dependabot-actions")
-		assert.Contains(t, defaultNames(selection), "dep-review")
+		assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
 	}
 }
 

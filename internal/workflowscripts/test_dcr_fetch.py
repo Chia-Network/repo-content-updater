@@ -294,7 +294,7 @@ class MainTest(unittest.TestCase):
             meta = json.loads((Path(env["DCR_OUT"]) / "meta.json").read_text(encoding="utf-8"))
             self.assertEqual(
                 (set(meta), meta["schema"], meta["updates"][0]["status"]),
-                ({"schema", "updates"}, 1, "not_reviewed"),
+                ({"facts", "schema", "updates"}, 1, "not_reviewed"),
             )
             self.assertEqual(Path(env["GITHUB_OUTPUT"]).read_text(encoding="utf-8"), "reviewable=false\n")
 
@@ -331,6 +331,40 @@ class MainTest(unittest.TestCase):
             items = json.loads((Path(env["DCR_OUT"]) / "meta.json").read_text(encoding="utf-8"))["updates"]
             self.assertEqual([item["status"] for item in items], ["unverified", "not_reviewed"])
             self.assertIn("previous version", items[0]["note"])
+
+
+class FactsTest(unittest.TestCase):
+    def test_lists_major_bumps_manifests_and_binaries(self) -> None:
+        results = [
+            dcr_fetch.Update("a", "npm_and_yarn", "/", "1.2.0", "2.0.0"),
+            dcr_fetch.Update("b", "pip", "/", "1.0.0", "1.1.0"),
+            dcr_fetch.Update("c", "npm_and_yarn", "/", "1.0.0", "3.0.0", status="unverified"),
+        ]
+        diff = (
+            b"diff -ruN old/00-a/package.json new/00-a/package.json\n"
+            b"diff -ruN old/00-a/index.js new/00-a/index.js\n"
+            b"Binary files old/00-a/x.node and new/00-a/x.node differ\n"
+        )
+        self.assertEqual(
+            dcr_fetch.collect_facts(results, diff),
+            ["a: major version change 1.2.0 -> 2.0.0", "manifest or build file changed: package.json", "binary files changed: 1"],
+        )
+        self.assertEqual(dcr_fetch.collect_facts(results[1:], b""), [])
+
+    def test_real_diff_with_spaces_in_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            for side, text in (("old", "a"), ("new", "b")):
+                (out / side / "00-a" / "sub dir").mkdir(parents=True)
+                (out / side / "00-a" / "sub dir" / "pyproject.toml").write_text(text, encoding="utf-8")
+                (out / side / "00-a" / "my file.txt").write_text(text, encoding="utf-8")
+            dcr_fetch.write_diff(out)
+            facts = dcr_fetch.collect_facts([], (out / "changes.diff").read_bytes())
+        self.assertEqual(facts, ["manifest or build file changed: pyproject.toml"])
+
+    def test_actions_major_bump_is_not_a_fact(self) -> None:
+        results = [dcr_fetch.Update("o/r", "github_actions", "/", "v1", "v2")]
+        self.assertEqual(dcr_fetch.collect_facts(results, b""), [])
 
 
 if __name__ == "__main__":

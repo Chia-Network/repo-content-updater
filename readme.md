@@ -34,14 +34,25 @@ Defaults require `.github/workflows` containing at least one `.yml`/`.yaml` file
 reviews the published code changes of a Dependabot update for signs of malware
 and for compatibility: the dependency name and new version must appear
 literally on an added PR diff line, the old and new artifacts are fetched with
-native tools and diffed, and the agent answers with one `MALWARE_REVIEW_VERDICT:`
-line first, a `## Compatibility` section, and a final
-`COMPATIBILITY_RECOMMENDATION: Merge` or `Don't merge` line. The result is one
-comment that ends with `**Verdict:** Malware: ... | Merge: ...` (computed by the
-script, not taken from the agent text) and a pass/fail check. A `Don't merge`
-recommendation is advisory and does not fail the check. The check still fails on
-a missing or malformed malware verdict, `malicious`, or `suspicious` unless
-warn-only. Other ecosystems pass as "not reviewed". It is **not** in
+native tools and diffed, and `meta.json` carries a short script-computed facts
+list (major version changes, changed manifest or build files, binary changes).
+The agent writes its findings and a `## Compatibility` section on the
+operational impact for maintainers, and must end with exactly this block:
+
+```
+MALWARE: clean|suspicious|malicious
+MERGE: yes|no
+REASON: <one short sentence>
+```
+
+Every run produces both verdicts. The result is one comment that ends with
+`**Verdict:** Malware: ... | Merge: ...` (computed by the script, not taken from
+the agent text) and a pass/fail check. `MERGE: no` is advisory and does not fail
+the check. When at least one update was reviewed, a missing or malformed end
+block fails closed (Malware `unknown`, Merge `no`, check fails), as do
+`malicious` and `suspicious` unless warn-only. If every update is in another
+ecosystem, the agent's block is not used: the check passes and both verdicts
+read "not reviewed". It is **not** in
 `default_files`, so it runs only in repos that opt in.
 
 To enable it, add `dependency-artifact-review` (or

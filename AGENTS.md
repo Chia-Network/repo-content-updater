@@ -9,14 +9,15 @@ Flow: fetch-metadata gives name/old/new version -> the name and new version must
 appear literally on an added PR diff line (else `unverified`, fail) -> fetch old
 and new artifacts with native tools (`npm pack --ignore-scripts`, PyPI JSON,
 `go mod download`, `git fetch` of a SHA-pinned action) -> `diff -ruN` the
-extracted trees -> the agent prints `MALWARE_REVIEW_VERDICT:
-benign|suspicious|malicious` as its first line, a Compatibility section, and a
-`COMPATIBILITY_RECOMMENDATION: Merge|Don't merge` line -> one comment whose last
+extracted trees plus a script-computed facts list -> the agent writes findings
+and a Compatibility section, ending with a strict block of `MALWARE:
+clean|suspicious|malicious`, `MERGE: yes|no` and `REASON:` lines -> one comment whose last
 line is `**Verdict:** Malware: ... | Merge: ...`, pass/fail.
 
 Fails on missing metadata, an unverified or unfetchable update, a missing or
-malformed verdict, `malicious`, or `suspicious` unless warn-only. Other
-ecosystems and moving-tag actions pass as "not reviewed".
+malformed verdict when any update was reviewed, `malicious`, or `suspicious`
+unless warn-only. Other ecosystems and moving-tag actions pass as "not
+reviewed"; when every update is not reviewed the end block is ignored.
 
 Invariants: scripts run from the default branch, never from the PR head; the
 agent step has no GitHub token or write permission; Dependabot does not update
