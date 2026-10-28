@@ -284,9 +284,12 @@ class ActionDiffTest(unittest.TestCase):
 
 
 def _ls_remote(refs):
+    """Mimic git ls-remote: a pattern matches a ref exactly or as its trailing path components."""
+
     def run(args, **kwargs):
         if args[:2] == ["git", "ls-remote"]:
-            lines = [f"{sha}\t{ref}" for ref, sha in refs.items() if ref.split("/")[-1].removesuffix("^{}") == args[3]]
+            patterns = args[3:]
+            lines = [f"{sha}\t{ref}" for ref, sha in refs.items() if any(ref == p or ref.endswith("/" + p) for p in patterns)]
             return mock.Mock(stdout="".join(line + "\n" for line in lines))
         return mock.Mock(stdout=b"")
 
@@ -332,8 +335,19 @@ class ActionTagTest(unittest.TestCase):
 
     def test_annotated_tag_is_peeled(self):
         refs = {"refs/tags/v4.1.0": self.OLD, "refs/tags/v4.2.0": self.TAG_OBJECT, "refs/tags/v4.2.0^{}": self.NEW}
-        update, _, fetched = self._review("v4.1.0", "v4.2.0", refs)
+        update, facts, fetched = self._review("v4.1.0", "v4.2.0", refs)
         self.assertEqual((update["new_commit"], fetched[1][1]), (self.NEW, self.NEW))
+        self.assertEqual(facts, [f"owner/repo: tag v4.1.0 resolved to {self.OLD}, v4.2.0 to {self.NEW}"])
+
+    def test_ls_remote_mock_matches_real_output(self):
+        refs = {"refs/tags/v4.39.1": self.TAG_OBJECT, "refs/tags/v4.39.1^{}": self.NEW}
+        run = _ls_remote(refs)
+        url = "https://github.com/github/codeql-action"
+        self.assertEqual(run(["git", "ls-remote", url, "v4.39.1"]).stdout, f"{self.TAG_OBJECT}\trefs/tags/v4.39.1\n")
+        self.assertEqual(
+            run(["git", "ls-remote", url, "v4.39.1", "refs/tags/v4.39.1^{}"]).stdout,
+            f"{self.TAG_OBJECT}\trefs/tags/v4.39.1\n{self.NEW}\trefs/tags/v4.39.1" + "^{}\n",
+        )
 
     def test_unresolvable_or_ambiguous_tag_is_unverified(self):
         cases = (

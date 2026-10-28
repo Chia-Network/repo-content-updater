@@ -178,11 +178,12 @@ def _prev_sha(old: dict[str, str], version: str) -> str:
 
 def resolve_tag(name: str, tag: str) -> str:
     """Resolve a tag to its commit with git ls-remote, peeling annotated tags; fail on missing or ambiguous refs."""
-    out = _run(["git", "ls-remote", f"https://github.com/{name}", tag], cwd=Path(tempfile.gettempdir())).stdout
+    peeled = f"refs/tags/{tag}" + "^{}"
+    out = _run(["git", "ls-remote", f"https://github.com/{name}", tag, peeled], cwd=Path(tempfile.gettempdir())).stdout
     refs = dict(reversed(line.split("\t", 1)) for line in out.splitlines() if "\t" in line)
     if f"refs/heads/{tag}" in refs:
         raise FetchError(f"{tag} is ambiguous: a branch has the same name")
-    sha = refs.get(f"refs/tags/{tag}" + "^{}") or refs.get(f"refs/tags/{tag}", "")
+    sha = refs.get(peeled) or refs.get(f"refs/tags/{tag}", "")
     if not ACTION_SHA.fullmatch(sha):
         raise FetchError(f"{tag} did not resolve to a commit")
     return sha
