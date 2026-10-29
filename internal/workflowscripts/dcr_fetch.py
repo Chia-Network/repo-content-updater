@@ -263,7 +263,10 @@ def extract(source: Path, dest: Path) -> None:
         placeholder.rmdir()
 
 
-MANIFESTS = {"package.json", "setup.py", "setup.cfg", "pyproject.toml", "go.mod", "action.yml", "action.yaml"}
+MANIFESTS = {
+    "package.json", "setup.py", "setup.cfg", "pyproject.toml", "go.mod", "action.yml", "action.yaml",
+    "PKG-INFO", "METADATA", "Cargo.toml", "Cargo.lock", "build.rs",
+}  # fmt: skip
 LOCKFILES = {
     "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "uv.lock",
     "Pipfile.lock", "Cargo.lock", "go.sum", "composer.lock", "Gemfile.lock",
@@ -356,6 +359,34 @@ def _capped(title: str, entries: list[str]) -> list[str]:
     return [f"{title}: {entry}" for entry in entries[:LISTED]] + more
 
 
+def _metadata_facts(files: list[FileDiff]) -> list[str]:
+    """Requires-Python and Requires-Dist changes from PKG-INFO or METADATA diffs."""
+    facts: list[str] = []
+    for item in files:
+        if PurePosixPath(item.path).name not in {"PKG-INFO", "METADATA"} or item.binary:
+            continue
+        seen: dict[str, dict[str, str]] = {side: {} for side in "-+"}
+        for line in item.text.decode("utf-8", errors="replace").splitlines():
+            if line[:1] not in seen or line.startswith(("--- ", "+++ ")):
+                continue
+            key, _, value = line[1:].partition(":")
+            if key == "Requires-Python":
+                seen[line[0]]["Python"] = value.strip()
+            elif key == "Requires-Dist":
+                name = re.split(r"[\s<>=!~;\[(]", value.strip(), maxsplit=1)[0]
+                seen[line[0]][_norm(name)] = value.strip()
+        old, new = seen["-"], seen["+"]
+        for dep in sorted(old.keys() | new.keys()):
+            label = "Requires-Python" if dep == "Python" else "Requires-Dist"
+            if dep not in old:
+                facts.append(f"{item.path}: new {label}: {new[dep]}")
+            elif dep not in new:
+                facts.append(f"{item.path}: removed {label}: {old[dep]}")
+            elif old[dep] != new[dep]:
+                facts.append(f"{item.path}: {label} changed: {old[dep]} -> {new[dep]}")
+    return facts
+
+
 def collect_facts(results: list[Update], files: list[FileDiff]) -> list[str]:
     """Plain, script-computed facts about the update for the agent and the comment."""
     facts = [
@@ -373,6 +404,7 @@ def collect_facts(results: list[Update], files: list[FileDiff]) -> list[str]:
             facts.append(f"{r.name}: {r.new_version} can move after review; the reviewed commit was {r.new_commit}")
     manifests = sorted({PurePosixPath(i.path).name for i in files if PurePosixPath(i.path).name in MANIFESTS})
     facts += [f"manifest or build file changed: {name}" for name in manifests]
+    facts += _metadata_facts(files)
     binary = sum(i.binary for i in files)
     if binary:
         facts.append(f"binary files changed: {binary}")

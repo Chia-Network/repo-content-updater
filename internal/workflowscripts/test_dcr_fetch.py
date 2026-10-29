@@ -503,6 +503,17 @@ class FactsTest(unittest.TestCase):
         self.assertTrue(any(f.startswith("diff size: ") for f in facts))
         self.assertIn("largest change: 00-a/src/main.py", " ".join(facts))
 
+    def test_metadata_requires_changes(self) -> None:
+        old = b"Requires-Python: >=3.10\nRequires-Dist: yarl>=1.17\nRequires-Dist: attrs\n"
+        new = b"Requires-Python: >=3.11\nRequires-Dist: yarl>=1.20\nRequires-Dist: attrs\n"
+        new += b"Requires-Dist: idna; extra == 'x'\n"
+        tree = {side: {"00-a/PKG-INFO": data} for side, data in (("old", old), ("new", new))}
+        facts, _, _ = self._facts([], tree)
+        self.assertIn("manifest or build file changed: PKG-INFO", facts)
+        self.assertIn("00-a/PKG-INFO: Requires-Python changed: >=3.10 -> >=3.11", facts)
+        self.assertIn("00-a/PKG-INFO: Requires-Dist changed: yarl>=1.17 -> yarl>=1.20", facts)
+        self.assertIn("00-a/PKG-INFO: new Requires-Dist: idna; extra == 'x'", facts)
+
     def test_real_diff_with_spaces_in_paths(self) -> None:
         tree = {
             side: {"00-a/sub dir/pyproject.toml": text, "00-a/my file.txt": text}
