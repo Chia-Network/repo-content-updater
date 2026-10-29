@@ -100,6 +100,10 @@ updates:
       - dependencies
       - javascript
       - "Changed"
+    # @types/node tracks the Node runtime in use; take its major bumps with the runtime.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     # {{- if eq .DEPENDABOT_NPM_GROUP_UPDATES "1" }}
     groups:
       global:
