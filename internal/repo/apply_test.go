@@ -257,6 +257,7 @@ func TestDefaultDependabotDiscoversNestedManifests(t *testing.T) {
 	tests := []struct {
 		name      string
 		manifests []string
+		contents  map[string]string
 		want      string
 		dirs      map[string][]string
 	}{
@@ -281,8 +282,62 @@ func TestDefaultDependabotDiscoversNestedManifests(t *testing.T) {
 		{
 			name:      "a root solution covers nested projects",
 			manifests: []string{"App.sln", "src/App/App.csproj"},
-			want:      "github-actions,nuget",
-			dirs:      map[string][]string{"nuget": {"/"}},
+			contents: map[string]string{
+				"App.sln": "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"src\\App\\App.csproj\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+			},
+			want: "github-actions,nuget",
+			dirs: map[string][]string{"nuget": {"/"}},
+		},
+		{
+			name:      "a C++ solution does not enable nuget",
+			manifests: []string{"App.sln", "App.vcxproj"},
+			contents: map[string]string{
+				"App.sln": "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"App.vcxproj\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+			},
+			want: "github-actions",
+		},
+		{
+			name: "a root C++ solution does not cover the tree",
+			manifests: []string{
+				"App.sln",
+				"src/App/App.vcxproj",
+				"src/App/App.csproj",
+			},
+			contents: map[string]string{
+				"App.sln": "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"src\\App\\App.vcxproj\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+			},
+			want: "github-actions,nuget",
+			dirs: map[string][]string{"nuget": {"/src/App"}},
+		},
+		{
+			name: "a mixed solution qualifies",
+			manifests: []string{
+				"Mixed.sln",
+				"src/Native/Native.vcxproj",
+				"src/App/App.csproj",
+			},
+			contents: map[string]string{
+				"Mixed.sln": "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"Native\", \"src\\Native\\Native.vcxproj\", \"{11111111-1111-1111-1111-111111111111}\"\n" +
+					"Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"src\\App\\App.csproj\", \"{22222222-2222-2222-2222-222222222222}\"\n",
+			},
+			want: "github-actions,nuget",
+			dirs: map[string][]string{"nuget": {"/"}},
+		},
+		{
+			name: "pos2 vendored C++ solutions are not nuget manifests",
+			manifests: []string{
+				"libs/freetype/builds/windows/visualc/freetype.sln",
+				"libs/freetype/builds/windows/visualc/freetype.vcxproj",
+				"libs/sdl/VisualC/SDL.sln",
+				"libs/sdl/VisualC/SDL.vcxproj",
+				"libs/blst/bindings/c#/poc.csproj",
+			},
+			contents: map[string]string{
+				"libs/freetype/builds/windows/visualc/freetype.sln": "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"freetype\", \"freetype.vcxproj\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+				"libs/sdl/VisualC/SDL.sln":                          "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"SDL\", \"SDL.vcxproj\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+			},
+			want: "github-actions,nuget",
+			dirs: map[string][]string{"nuget": {"/libs/blst/bindings/c#"}},
 		},
 		{
 			name:      "unusual directory names stay one list entry each",
@@ -299,7 +354,7 @@ func TestDefaultDependabotDiscoversNestedManifests(t *testing.T) {
 			repo := t.TempDir()
 			writeDependabotTestFile(t, repo, workflow, "")
 			for _, manifest := range tt.manifests {
-				writeDependabotTestFile(t, repo, filepath.FromSlash(manifest), "")
+				writeDependabotTestFile(t, repo, filepath.FromSlash(manifest), tt.contents[manifest])
 			}
 			vars, err := DependabotVarsForRepo(repo, cfg.Variables, nil)
 			if err != nil {

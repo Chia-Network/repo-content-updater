@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -31,7 +32,11 @@ const dependabotTemplateName = "dependabot.yml"
 // below the configured directory. Unless the repo pins directoriesVar, their
 // directories are discovered from the whole tree and written back to
 // directoriesVar as a JSON list. A directory matching rootCovers at the root
-// stands for the whole tree (a NuGet solution lists its projects).
+// stands for the whole tree. A NuGet solution only counts when it lists a C#,
+// F# or VB project.
+//
+// manifestQualifier, when set, decides whether a matched manifest file counts.
+// It receives the resolved file path and propagates read errors.
 //
 // listDirectories marks ecosystems the template renders with a `directories`
 // sequence, so a bare pinned directory is written as a one-item list.
@@ -45,6 +50,7 @@ type dependabotEcosystem struct {
 	discover           bool
 	listDirectories    bool
 	rootCovers         []string
+	manifestQualifier  func(filePath string) (bool, error)
 }
 
 var dependabotEcosystems = []dependabotEcosystem{
@@ -131,9 +137,10 @@ var dependabotEcosystems = []dependabotEcosystem{
 			"packages.config",
 			"Directory.Packages.props",
 		},
-		discover:        true,
-		listDirectories: true,
-		rootCovers:      []string{"*.sln"},
+		discover:          true,
+		listDirectories:   true,
+		rootCovers:        []string{"*.sln"},
+		manifestQualifier: qualifyNugetManifest,
 	},
 }
 
@@ -291,7 +298,7 @@ func dependabotEcosystemPresent(repoRoot string, ecosystem dependabotEcosystem, 
 			} else if len(ecosystem.nonRootManifests) > 0 {
 				manifests = ecosystem.nonRootManifests
 			}
-			present, err := dependabotManifestsPresent(repoRoot, dir, manifests)
+			present, err := dependabotManifestsPresent(repoRoot, dir, manifests, ecosystem.manifestQualifier)
 			if err != nil {
 				return false, err
 			}
@@ -335,10 +342,24 @@ func discoverManifestDirectories(repoRoot string, ecosystems []dependabotEcosyst
 				return err
 			}
 			for _, ecosystem := range ecosystems {
-				if rel == "." && matchesAnyPattern(ecosystem.rootCovers, entry.Name()) {
+				coversRoot := rel == "." && matchesAnyPattern(ecosystem.rootCovers, entry.Name())
+				isManifest := matchesAnyPattern(ecosystem.manifests, entry.Name())
+				if !coversRoot && !isManifest {
+					continue
+				}
+				if ecosystem.manifestQualifier != nil {
+					qualified, err := ecosystem.manifestQualifier(current)
+					if err != nil {
+						return fmt.Errorf("manifest %q: %w", current, err)
+					}
+					if !qualified {
+						continue
+					}
+				}
+				if coversRoot {
 					coveredAtRoot[ecosystem.name] = true
 				}
-				if matchesAnyPattern(ecosystem.manifests, entry.Name()) {
+				if isManifest {
 					found[ecosystem.name][path.Join("/", filepath.ToSlash(rel))] = true
 				}
 			}
@@ -461,9 +482,9 @@ func escapesRepository(repoRoot, target string) bool {
 	return rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
-func dependabotManifestsPresent(repoRoot, baseDir string, manifests []string) (bool, error) {
+func dependabotManifestsPresent(repoRoot, baseDir string, manifests []string, qualifier func(string) (bool, error)) (bool, error) {
 	for _, manifest := range manifests {
-		present, err := dependabotManifestPresent(repoRoot, baseDir, manifest)
+		present, err := dependabotManifestPresent(repoRoot, baseDir, manifest, qualifier)
 		if err != nil || present {
 			return present, err
 		}
@@ -471,7 +492,7 @@ func dependabotManifestsPresent(repoRoot, baseDir string, manifests []string) (b
 	return false, nil
 }
 
-func dependabotManifestPresent(repoRoot, baseDir, manifest string) (bool, error) {
+func dependabotManifestPresent(repoRoot, baseDir, manifest string, qualifier func(string) (bool, error)) (bool, error) {
 	manifest = filepath.FromSlash(manifest)
 	dirPattern := filepath.Dir(manifest)
 	namePattern := filepath.Base(manifest)
@@ -501,9 +522,50 @@ func dependabotManifestPresent(repoRoot, baseDir, manifest string) (bool, error)
 			if err != nil {
 				return false, fmt.Errorf("manifest %q: %w", filepath.Join(manifest, entry.Name()), err)
 			}
-			if resolved != "" {
-				return true, nil
+			if resolved == "" {
+				continue
 			}
+			if qualifier != nil {
+				qualified, err := qualifier(resolved)
+				if err != nil {
+					return false, fmt.Errorf("manifest %q: %w", filepath.Join(manifest, entry.Name()), err)
+				}
+				if !qualified {
+					continue
+				}
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// qualifyNugetManifest treats a solution as a NuGet manifest only when it lists
+// a C#, F# or VB project. Other NuGet manifests always count.
+func qualifyNugetManifest(filePath string) (bool, error) {
+	if !strings.EqualFold(filepath.Ext(filePath), ".sln") {
+		return true, nil
+	}
+	return solutionListsManagedProject(filePath)
+}
+
+var solutionProjectPattern = regexp.MustCompile(`(?i)^\s*Project\("[^"]*"\)\s*=\s*"[^"]*"\s*,\s*"([^"]*)"`)
+
+// solutionListsManagedProject reports whether a Visual Studio solution lists at
+// least one project ending in .csproj, .fsproj or .vbproj.
+func solutionListsManagedProject(filePath string) (bool, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(strings.TrimPrefix(string(data), "\ufeff"), "\n") {
+		match := solutionProjectPattern.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(match[1])) {
+		case ".csproj", ".fsproj", ".vbproj":
+			return true, nil
 		}
 	}
 	return false, nil
