@@ -6,9 +6,8 @@ the design is intentionally minimal.
 Do not raise anything listed under "Accepted risks, do not flag" in AGENTS.md,
 and do not ask for added hardening, scanners, caps, binding or sandboxing.
 
-Tag pins (full or bare) for dependencies and actions are accepted. Do not flag
-them, ask for commit-SHA pins, or treat tag movement as a finding; the review
-records the resolved commit.
+Tag pins are normal; see the tag-pin entry under "Accepted risks" in
+AGENTS.md. Never ask for commit-SHA pins.
 
 Raise only:
 

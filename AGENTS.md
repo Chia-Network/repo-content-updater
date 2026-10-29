@@ -60,9 +60,10 @@ expressions.
   that gets installed.
 - Agent output is posted into the comment as written.
 - `gh pr diff` can fail on very large diffs; the check then fails closed.
-- Tag pins (full `vX.Y.Z` or bare `vX`) for dependencies and actions. Do not
-  ask for commit-SHA pins or treat tag movement as a finding; Dependabot keeps
-  tag pins current and the review records the resolved commit.
+- Tag pins (`vX`, `vX.Y` or `vX.Y.Z`) are normal. Do not ask for commit-SHA
+  pins or treat tag movement as a finding; Dependabot keeps tag pins current.
+  Only GitHub Actions tag pins are resolved to commits, and the review records
+  those commits; other ecosystems review the published version.
 
 ### Does warrant a finding
 
