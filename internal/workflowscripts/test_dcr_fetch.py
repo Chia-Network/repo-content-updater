@@ -459,6 +459,10 @@ class FactsTest(unittest.TestCase):
             files = dcr_fetch.write_diff(out, {"00-a": ("1.2.0", "2.0.0")})
             changes = (out / "changes.diff").read_text(encoding="utf-8")
             excluded = (out / "excluded.diff").read_text(encoding="utf-8")
+            for line in (changes + excluded).splitlines():
+                if line.startswith(("--- old/", "+++ new/")):
+                    side, slug = line[4:].split("/")[:2]
+                    self.assertTrue((out / side / slug).is_dir(), line)
         return dcr_fetch.collect_facts(results, files, pr_diff), changes, excluded
 
     def test_lists_major_bumps_manifests_and_binaries(self) -> None:
@@ -513,7 +517,8 @@ class FactsTest(unittest.TestCase):
         self.assertIn(", 2 generated, ", " ".join(facts))
         reasons = sorted(f.split("(")[1].split(",")[0] for f in facts if f.startswith("excluded"))
         self.assertEqual(
-            reasons, [".github", "generated", "generated", "lockfile", "test or fixture", "test or fixture", "type stubs"]
+            reasons,
+            [".github", "generated", "generated", "lockfile", "test or fixture", "test or fixture", "type stubs"],
         )
         self.assertIn("foo-stubs/a.pyi", excluded)
         self.assertTrue(any(f.startswith("diff size: ") for f in facts))
