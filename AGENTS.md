@@ -11,7 +11,9 @@ and new artifacts with native tools (`npm pack --ignore-scripts`, PyPI JSON,
 `go mod download`, `git fetch` of a SHA-pinned action, or of the commits that
 `git ls-remote` resolves vX, vX.Y or vX.Y.Z tag pins to, peeled; an unresolved
 or branch-ambiguous tag is `unverified`) -> `diff -ruN` the
-extracted trees plus a script-computed facts list -> the agent writes findings
+extracted trees into `changes.diff` (without tests, fixtures, type stubs,
+lockfiles, `.github` and generated files, which go to `excluded.diff` and are
+counted by reason in the facts) plus a script-computed facts list -> the agent writes findings
 and a Compatibility section, ending with a strict block of `MALWARE:
 clean|suspicious|malicious`, `MERGE: yes|no` and `REASON:` lines (exactly once,
 within the last 10 non-empty lines, ordinary text may follow) -> one comment whose last
