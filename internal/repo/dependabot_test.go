@@ -444,6 +444,96 @@ func TestDependabotEnabledVarsAreNotOverridable(t *testing.T) {
 	}
 }
 
+func TestDependabotNugetPinnedSolutionRequiresManagedProject(t *testing.T) {
+	tests := []struct {
+		name     string
+		solution string
+		want     string
+	}{
+		{
+			name:     "C++ only solution stays disabled",
+			solution: "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"App.vcxproj\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+			want:     "0",
+		},
+		{
+			name:     "managed solution enables nuget",
+			solution: "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"App.csproj\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+			want:     "1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoDir := t.TempDir()
+			writeDependabotTestFile(t, repoDir, "package.json", "{}")
+			writeDependabotTestFile(t, repoDir, filepath.Join("src", "App", "App.sln"), tt.solution)
+
+			vars, err := DependabotEcosystemVars(repoDir, map[string]string{
+				"DEPENDABOT_NUGET_DIRECTORIES": `["/src/App"]`,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := vars["DEPENDABOT_NUGET_ENABLED"]; got != tt.want {
+				t.Fatalf("DEPENDABOT_NUGET_ENABLED = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDependabotNugetSolutionProjectVariants(t *testing.T) {
+	tests := []struct {
+		name     string
+		solution string
+		want     string
+	}{
+		{
+			name:     "backslash csproj",
+			solution: "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"src\\App\\App.csproj\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+			want:     "1",
+		},
+		{
+			name:     "forward slash fsproj",
+			solution: "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"src/App/App.fsproj\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+			want:     "1",
+		},
+		{
+			name:     "uppercase vbproj",
+			solution: "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"src/App/App.VBPROJ\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+			want:     "1",
+		},
+		{
+			name:     "lowercase project keyword",
+			solution: "project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"src/App/App.csproj\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+			want:     "1",
+		},
+		{
+			name:     "C++ only",
+			solution: "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"src/App/App.vcxproj\", \"{11111111-1111-1111-1111-111111111111}\"\n",
+			want:     "0",
+		},
+		{
+			name:     "no projects",
+			solution: "Microsoft Visual Studio Solution File, Format Version 12.00\n",
+			want:     "0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoDir := t.TempDir()
+			writeDependabotTestFile(t, repoDir, "package.json", "{}")
+			writeDependabotTestFile(t, repoDir, filepath.Join("src", "App", "App.sln"), tt.solution)
+
+			vars, err := DependabotEcosystemVars(repoDir, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := vars["DEPENDABOT_NUGET_ENABLED"]; got != tt.want {
+				t.Fatalf("DEPENDABOT_NUGET_ENABLED = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func loadDependabotTestConfig(t *testing.T) *config.Config {
 	t.Helper()
 	cfg, err := config.LoadConfig(filepath.Join("..", "..", "config.yaml"))
