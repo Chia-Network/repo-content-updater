@@ -475,7 +475,7 @@ class FactsTest(unittest.TestCase):
             [
                 "a: major version change 1.2.0 -> 2.0.0",
                 "manifest or build file changed: package.json",
-                "binary files changed: 1",
+                "binary file changed: 00-a/x.node",
             ],
         )
         self.assertEqual(dcr_fetch.collect_facts(results[1:], []), [])

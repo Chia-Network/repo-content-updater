@@ -405,9 +405,7 @@ def collect_facts(results: list[Update], files: list[FileDiff]) -> list[str]:
     manifests = sorted({PurePosixPath(i.path).name for i in files if PurePosixPath(i.path).name in MANIFESTS})
     facts += [f"manifest or build file changed: {name}" for name in manifests]
     facts += _metadata_facts(files)
-    binary = sum(i.binary for i in files)
-    if binary:
-        facts.append(f"binary files changed: {binary}")
+    facts += _capped("binary file changed", [i.path for i in files if i.binary])
     kept = [i for i in files if not i.excluded]
     if files:
         total, agent = sum(len(i.text) for i in files), sum(len(i.text) for i in kept)
