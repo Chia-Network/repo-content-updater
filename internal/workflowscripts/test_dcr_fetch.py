@@ -283,6 +283,18 @@ class ActionDiffTest(unittest.TestCase):
         self.assertEqual((result["status"], result["prev_version"], result["new_version"]), ("reviewed", old, new))
 
 
+class TagKeyTest(unittest.TestCase):
+    def test_numeric_order(self):
+        tags = ["v10", "v4.10", "v4", "v4.1"]
+        self.assertEqual(sorted(tags, key=dcr_fetch._tag_key), ["v4", "v4.1", "v4.10", "v10"])
+        self.assertEqual(min(["v10", "v9"], key=dcr_fetch._tag_key), "v9")
+
+    def test_non_numeric_tag_fails_closed(self):
+        for tag in ("v4-beta", "vx", "v4..1", "v"):
+            with self.assertRaises(FetchError):
+                dcr_fetch._tag_key(tag)
+
+
 def _ls_remote(refs):
     """Mimic git ls-remote: a pattern matches a ref exactly or as its trailing path components."""
 
@@ -348,6 +360,20 @@ class ActionTagTest(unittest.TestCase):
             run(["git", "ls-remote", url, "v4.39.1", "refs/tags/v4.39.1^{}"]).stdout,
             f"{self.TAG_OBJECT}\trefs/tags/v4.39.1\n{self.NEW}\trefs/tags/v4.39.1" + "^{}\n",
         )
+
+    def test_unmatched_prev_version_falls_back_to_numerically_oldest_tag(self):
+        diff_pins = "- uses: owner/repo@v10\n- uses: owner/repo@v9\n+ uses: owner/repo@v11\n"
+        refs = {"refs/tags/v9": self.OLD, "refs/tags/v10": self.TAG_OBJECT, "refs/tags/v11": self.NEW}
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _environment(tmp, [_dep("owner/repo", "github_actions", "8", "11")], diff=f"--- a\n+++ b\n{diff_pins}")
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.dict(dcr_fetch.FETCHERS, {"github_actions": lambda work, name, version: work}),
+                mock.patch.object(dcr_fetch, "_run", side_effect=_ls_remote(refs)),
+            ):
+                dcr_fetch.main()
+            update = json.loads((Path(env["DCR_OUT"]) / "meta.json").read_text(encoding="utf-8"))["updates"][0]
+        self.assertEqual((update["prev_version"], update["prev_commit"]), ("v9", self.OLD))
 
     def test_unresolvable_or_ambiguous_tag_is_unverified(self):
         cases = (

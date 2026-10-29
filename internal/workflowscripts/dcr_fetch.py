@@ -176,6 +176,14 @@ def _prev_sha(old: dict[str, str], version: str) -> str:
     return next(matches, sorted(old)[0])
 
 
+def _tag_key(tag: str) -> tuple[int, ...]:
+    """Numeric sort key for vX, vX.Y or vX.Y.Z; raises FetchError on non-numeric tags."""
+    parts = tag.removeprefix("v").split(".")
+    if not all(part.isdigit() and part.isascii() for part in parts):
+        raise FetchError(f"{tag} is not a numeric version tag")
+    return tuple(int(part) for part in parts)
+
+
 def resolve_tag(name: str, tag: str) -> str:
     """Resolve a tag to its commit with git ls-remote, peeling annotated tags; fail on missing or ambiguous refs."""
     peeled = f"refs/tags/{tag}" + "^{}"
@@ -203,9 +211,11 @@ def _action_status(update: Update, diff: str) -> Update | None:
         return replace(update, status="not_reviewed", note="the pin is not a version tag or a 40-hex commit SHA")
     if len(new_tags) != 1 or not old_tags:
         return replace(update, status="unverified", note="the diff does not identify one old and one new tag")
-    prev_tag = next(
-        (t for t in old_tags if t.removeprefix("v") == update.prev_version.removeprefix("v")), min(old_tags)
-    )
+    try:
+        oldest = min(old_tags, key=_tag_key)
+    except FetchError as exc:
+        return replace(update, status="unverified", note=str(exc))
+    prev_tag = next((t for t in old_tags if t.removeprefix("v") == update.prev_version.removeprefix("v")), oldest)
     update = replace(update, prev_version=prev_tag, new_version=new_tags.pop())
     try:
         commits = [resolve_tag(update.name, tag) for tag in (update.prev_version, update.new_version)]
