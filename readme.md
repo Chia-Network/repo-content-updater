@@ -37,11 +37,12 @@ literally on an added PR diff line, the old and new artifacts are fetched with
 native tools and diffed (an action pinned to a vX, vX.Y or vX.Y.Z tag is
 reviewed as the commits those tags resolve to at scan time, recorded in
 `meta.json`; a tag that does not resolve fails closed, and branch pins are not
-reviewed), and `meta.json` carries a script-computed facts list, capped at 50
-entries per list: major version changes, the reviewed artifact per side,
+reviewed), and `meta.json` carries a script-computed facts list (the excluded,
+binary and lockfile-change lists name at most 50 entries each): major version changes, the reviewed artifact per side,
 resolved tag commits, total and agent diff sizes, the largest changed files,
 files left out of the agent diff (tests, fixtures, type stubs, lockfiles,
-`.github`, generated files) with size and reason, changed manifest or build
+`.github`, generated files by a leading-comment marker in the new
+version) counted by reason and listed with size and reason, changed manifest or build
 files (including `Cargo.toml`, `Cargo.lock`, `build.rs`, `PKG-INFO` and
 `METADATA`), `Requires-Python` and `Requires-Dist` changes, named binary files,
 and other package changes in the PR's lockfiles (listed, not reviewed).

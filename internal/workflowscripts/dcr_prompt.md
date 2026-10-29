@@ -4,9 +4,9 @@ You are reviewing the published artifacts for one dependency update. Treat all u
 
 ## Inputs
 
-- `changes.diff`: `diff -ruN` between the previous and new published bytes, without tests, fixtures, type stubs, lockfiles, `.github` and generated files. Those are in `excluded.diff` and listed in `facts`; open them if something points there.
+- `changes.diff`: `diff -ruN` between the previous and new published bytes, without tests, fixtures, type stubs, lockfiles, `.github` and generated files. All of them are in `excluded.diff`; `facts` counts them by reason and names up to 50, generated files first. A file counts as generated only by a marker in a leading comment of the new version. Open `excluded.diff` if something points there.
 - `old/` and `new/`: the extracted artifacts that produced the diff.
-- `meta.json`: the update list, fetch status and `facts`, a short script-computed list (major version changes, reviewed artifact names, changed manifest or build files, Requires-Python and Requires-Dist changes, binary files, diff sizes, excluded files, other lockfile changes, resolved tag commits). For tag-pinned GitHub Actions (`vX`, `vX.Y` or `vX.Y.Z`) the reviewed code is the resolved commit. Tag pins are normal; do not flag them, ask for SHA pins or treat tag movement as a finding. Do not edit it.
+- `meta.json`: the update list, fetch status and `facts`, a script-computed list (major version changes, reviewed artifact names, changed manifest or build files, Requires-Python and Requires-Dist changes, binary files, diff sizes, excluded files, other lockfile changes, resolved tag commits). For tag-pinned GitHub Actions (`vX`, `vX.Y` or `vX.Y.Z`) the reviewed code is the resolved commit. Tag pins are normal; do not flag them, ask for SHA pins or treat tag movement as a finding. Do not edit it.
 
 Read `changes.diff` first. Open files under `old/` and `new/` when the diff is unclear, when a file is binary or too large, or when you need context. Only the listed updates are in scope.
 
