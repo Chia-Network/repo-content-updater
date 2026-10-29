@@ -6,6 +6,9 @@ the design is intentionally minimal.
 Do not raise anything listed under "Accepted risks, do not flag" in AGENTS.md,
 and do not ask for added hardening, scanners, caps, binding or sandboxing.
 
+Tag pins are normal; see the tag-pin entry under "Accepted risks" in
+AGENTS.md. Never ask for commit-SHA pins.
+
 Raise only:
 
 - PR-head code running in a trusted job.

@@ -8,13 +8,21 @@ for signs of malware. Keep it small.
 Flow: fetch-metadata gives name/old/new version -> the name and new version must
 appear literally on an added PR diff line (else `unverified`, fail) -> fetch old
 and new artifacts with native tools (`npm pack --ignore-scripts`, PyPI JSON,
-`go mod download`, `git fetch` of a SHA-pinned action) -> `diff -ruN` the
-extracted trees -> the agent prints `MALWARE_REVIEW_VERDICT:
-benign|suspicious|malicious` as its first line -> one comment, pass/fail.
+`go mod download`, `git fetch` of a SHA-pinned action, or of the commits that
+`git ls-remote` resolves vX, vX.Y or vX.Y.Z tag pins to, peeled; an unresolved
+or branch-ambiguous tag is `unverified`) -> `diff -ruN` the
+extracted trees into `changes.diff` (without tests, fixtures, type stubs,
+lockfiles, `.github` and generated files, which go to `excluded.diff` and are
+counted by reason in the facts) plus a script-computed facts list -> the agent writes findings
+and a Compatibility section, ending with a strict block of `MALWARE:
+clean|suspicious|malicious`, `MERGE: yes|no` and `REASON:` lines (exactly once,
+within the last 10 non-empty lines, ordinary text may follow) -> one comment whose last
+line is `**Verdict:** Malware: ... | Merge: ...`, pass/fail.
 
 Fails on missing metadata, an unverified or unfetchable update, a missing or
-malformed verdict, `malicious`, or `suspicious` unless warn-only. Other
-ecosystems and moving-tag actions pass as "not reviewed".
+malformed verdict when any update was reviewed, `malicious`, or `suspicious`
+unless warn-only. Other ecosystems and actions pinned to branches or other
+non-tag refs pass as "not reviewed"; when every update is not reviewed the end block is ignored.
 
 Invariants: scripts run from the default branch, never from the PR head; the
 agent step has no GitHub token or write permission; Dependabot does not update
@@ -54,6 +62,10 @@ expressions.
   that gets installed.
 - Agent output is posted into the comment as written.
 - `gh pr diff` can fail on very large diffs; the check then fails closed.
+- Tag pins (`vX`, `vX.Y` or `vX.Y.Z`) are normal. Do not ask for commit-SHA
+  pins or treat tag movement as a finding; Dependabot keeps tag pins current.
+  Only GitHub Actions tag pins are resolved to commits, and the review records
+  those commits; other ecosystems review the published version.
 
 ### Does warrant a finding
 

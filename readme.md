@@ -31,12 +31,43 @@ Defaults require `.github/workflows` containing at least one `.yml`/`.yaml` file
 ### Artifact review (opt-in)
 
 `dependency-artifact-review` is a separate, opt-in workflow. A trusted AI agent
-reviews the published code changes of a Dependabot update for signs of malware:
-the dependency name and new version must appear literally on an added PR diff
-line, the old and new artifacts are fetched with native tools and diffed, the
-agent prints one `MALWARE_REVIEW_VERDICT:` line, and the result is one comment
-and a pass/fail check. Other ecosystems pass as "not reviewed". It is **not** in
-`default_files`.
+reviews the published code changes of a Dependabot update for signs of malware
+and for compatibility: the dependency name and new version must appear
+literally on an added PR diff line, the old and new artifacts are fetched with
+native tools and diffed (an action pinned to a vX, vX.Y or vX.Y.Z tag is
+reviewed as the commits those tags resolve to at scan time, recorded in
+`meta.json`; if the old version matches no removed tag, the oldest removed tag
+is used; a tag that does not resolve fails closed, and branch pins are not
+reviewed), and `meta.json` carries a script-computed facts list (the excluded,
+binary and lockfile-change lists name at most 50 entries each): major version changes, the reviewed artifact per side,
+resolved tag commits, total and agent diff sizes, the largest changed files,
+files left out of the agent diff (tests, fixtures, type stubs, lockfiles,
+`.github`, generated files by a leading-comment marker in the new
+version) counted by reason and listed with size and reason, changed manifest or build
+files (including `Cargo.toml`, `Cargo.lock`, `build.rs`, `PKG-INFO` and
+`METADATA`), `Requires-Python` and `Requires-Dist` changes, named binary files,
+and a best-effort list of other package version changes in the PR's npm, yarn,
+Cargo, Poetry, uv, Pipfile and `go.sum` lockfile hunks (listed, not reviewed;
+other lockfile formats are not parsed).
+The agent writes its findings and a `## Compatibility` section on the
+operational impact for maintainers, and must end with exactly this block (once,
+within the last 10 non-empty lines; ordinary text may follow it):
+
+```
+MALWARE: clean|suspicious|malicious
+MERGE: yes|no
+REASON: <one short sentence>
+```
+
+Every run produces both verdicts. The result is one comment that ends with
+`**Verdict:** Malware: ... | Merge: ...` (computed by the script, not taken from
+the agent text) and a pass/fail check. `MERGE: no` is advisory and does not fail
+the check. When at least one update was reviewed, a missing or malformed end
+block fails closed (Malware `unknown`, Merge `no`, check fails), as do
+`malicious` and `suspicious` unless warn-only. If every update is in another
+ecosystem, the agent's block is not used: the check passes and both verdicts
+read "not reviewed". It is **not** in
+`default_files`, so it runs only in repos that opt in.
 
 To enable it, add `dependency-artifact-review` (or
 `group:dependency-artifact-review`) to the repo's `managed-files` property, for

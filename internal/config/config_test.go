@@ -127,13 +127,9 @@ func canonicalSourceForTemplate(cfg *config.Config, templateName string) (string
 	return "", false
 }
 
-func TestDependencyArtifactReviewIsOptInOnly(t *testing.T) {
+func TestDependencyArtifactReviewGroupExpansion(t *testing.T) {
 	cfg, err := config.LoadConfig("../../config.yaml")
 	assert.Nil(t, err)
-
-	assert.NotContains(t, cfg.DefaultFiles, "dependency-artifact-review")
-	selection := cfg.ResolveManagedFileSelection("repo", nil)
-	assert.NotContains(t, defaultNames(selection), "dependency-artifact-review")
 
 	expanded, err := cfg.ExpandManagedFileEntries([]string{"dependency-artifact-review"})
 	assert.Nil(t, err)
@@ -155,6 +151,51 @@ func TestDependencyArtifactReviewIsOptInOnly(t *testing.T) {
 		assert.Equal(t, ".github/workflows/dependency-artifact-review.yml", file.RepoPath)
 		assert.Equal(t, "repo-content-updater:dependency-artifact-review", file.AdoptionMarker)
 		assert.Equal(t, []string{".github/workflows"}, file.RequiresPaths)
+	}
+}
+
+func TestDependencyArtifactReviewNotAppliedWithoutOptIn(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+
+	companions := []string{
+		"dependency-artifact-review",
+		"github-scripts-init",
+		"dependency-artifact-review-fetch",
+		"dependency-artifact-review-verdict",
+		"dependency-artifact-review-prompt",
+	}
+	for _, values := range [][]string{nil, {"group:base"}, {"!dep-review"}} {
+		selection := cfg.ResolveManagedFileSelection("repo", values)
+		for _, name := range companions {
+			assert.NotContains(t, selection.Explicit, name)
+			assert.NotContains(t, defaultNames(selection), name)
+		}
+		if values == nil {
+			assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
+		}
+	}
+}
+
+func TestDependencyArtifactReviewAppliedWithOptIn(t *testing.T) {
+	cfg, err := config.LoadConfig("../../config.yaml")
+	assert.Nil(t, err)
+	assert.NotContains(t, cfg.DefaultFiles, "dependency-artifact-review")
+
+	companions := []string{
+		"dependency-artifact-review",
+		"github-scripts-init",
+		"dependency-artifact-review-fetch",
+		"dependency-artifact-review-verdict",
+		"dependency-artifact-review-prompt",
+	}
+	for _, value := range []string{"dependency-artifact-review", "group:dependency-artifact-review"} {
+		selection := cfg.ResolveManagedFileSelection("repo", []string{value})
+		for _, name := range companions {
+			assert.Contains(t, selection.Explicit, name)
+			assert.NotContains(t, defaultNames(selection), name)
+		}
+		assert.Equal(t, []string{"dependabot-actions"}, defaultNames(selection))
 	}
 }
 

@@ -105,9 +105,10 @@ class LiteralCheckTest(unittest.TestCase):
 
 
 class StatusTest(unittest.TestCase):
-    def test_cargo_and_tag_actions_are_not_reviewed(self):
+    def test_cargo_and_branch_actions_are_not_reviewed(self):
         cargo = dcr_fetch._status(_update("tokio", "cargo"), "")
-        action = dcr_fetch._status(_update("owner/repo", "github_actions", "v1", "v2"), "+uses: owner/repo@v2")
+        diff = "-uses: owner/repo@main\n+uses: owner/repo@release\n"
+        action = dcr_fetch._status(_update("owner/repo", "github_actions", "main", "release"), diff)
         self.assertEqual((cargo.status, action.status), ("not_reviewed", "not_reviewed"))
 
     def test_unsafe_name_and_wrong_literal_are_unverified(self):
@@ -248,7 +249,7 @@ class ActionDiffTest(unittest.TestCase):
         cases = (
             (_uses("-", old) + _uses("+", new), "reviewed", old, new),
             (_uses("-", old) + _uses("+", new) + _uses("+", "c" * 40), "unverified", "v1", "2"),
-            (_uses("-", "v1") + _uses("+", "v2"), "not_reviewed", "v1", "2"),
+            (_uses("-", "main") + _uses("+", "dev"), "not_reviewed", "v1", "2"),
         )
         for body, status, prev, new in cases:
             with self.subTest(status=status):
@@ -282,6 +283,120 @@ class ActionDiffTest(unittest.TestCase):
         self.assertEqual((result["status"], result["prev_version"], result["new_version"]), ("reviewed", old, new))
 
 
+class TagKeyTest(unittest.TestCase):
+    def test_numeric_order(self):
+        tags = ["v10", "v4.10", "v4", "v4.1"]
+        self.assertEqual(sorted(tags, key=dcr_fetch._tag_key), ["v4", "v4.1", "v4.10", "v10"])
+        self.assertEqual(min(["v10", "v9"], key=dcr_fetch._tag_key), "v9")
+
+    def test_non_numeric_tag_fails_closed(self):
+        for tag in ("v4-beta", "vx", "v4..1", "v"):
+            with self.assertRaises(FetchError):
+                dcr_fetch._tag_key(tag)
+
+
+def _ls_remote(refs):
+    """Mimic git ls-remote: a pattern matches a ref exactly or as its trailing path components."""
+
+    def run(args, **kwargs):
+        if args[:2] == ["git", "ls-remote"]:
+            patterns = args[3:]
+            lines = [
+                f"{sha}\t{ref}" for ref, sha in refs.items() if any(ref == p or ref.endswith("/" + p) for p in patterns)
+            ]
+            return mock.Mock(stdout="".join(line + "\n" for line in lines))
+        return mock.Mock(stdout=b"")
+
+    return run
+
+
+class ActionTagTest(unittest.TestCase):
+    OLD, NEW, TAG_OBJECT = "a" * 40, "b" * 40, "c" * 40
+
+    def _review(self, old_pin, new_pin, refs, prev="4.1.0", new="4.2.0"):
+        fetched = []
+
+        def fetch(work, name, version):
+            fetched.append((name, version))
+            return work
+
+        diff = f"--- a\n+++ b\n- uses: owner/repo/sub@{old_pin}\n+ uses: owner/repo/sub@{new_pin}\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _environment(tmp, [_dep("owner/repo", "github_actions", prev, new)], diff=diff)
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.dict(dcr_fetch.FETCHERS, {"github_actions": fetch}),
+                mock.patch.object(dcr_fetch, "_run", side_effect=_ls_remote(refs)),
+            ):
+                self.assertEqual(dcr_fetch.main(), 0)
+            meta = json.loads((Path(env["DCR_OUT"]) / "meta.json").read_text(encoding="utf-8"))
+        facts = [fact for fact in meta["facts"] if "reviewed artifacts" not in fact]
+        return meta["updates"][0], facts, fetched
+
+    def test_full_tags_resolve_and_fetch_commits(self):
+        refs = {"refs/tags/v4.1.0": self.OLD, "refs/tags/v4.2.0": self.NEW}
+        update, facts, fetched = self._review("v4.1.0", "v4.2.0", refs)
+        self.assertEqual(
+            (update["status"], update["prev_commit"], update["new_commit"]), ("reviewed", self.OLD, self.NEW)
+        )
+        self.assertEqual(fetched, [("owner/repo", self.OLD), ("owner/repo", self.NEW)])
+        self.assertEqual(update["new_artifact"], f"commit {self.NEW}")
+        self.assertEqual(facts, [f"owner/repo: tag v4.1.0 resolved to {self.OLD}, v4.2.0 to {self.NEW}"])
+
+    def test_bare_tag_adds_a_moving_fact(self):
+        refs = {"refs/tags/v4": self.OLD, "refs/tags/v5": self.NEW}
+        update, facts, _ = self._review("v4", "v5", refs, "4", "5")
+        self.assertEqual((update["status"], update["new_version"]), ("reviewed", "v5"))
+        self.assertIn(f"owner/repo: v5 can move after review; the reviewed commit was {self.NEW}", facts)
+
+    def test_annotated_tag_is_peeled(self):
+        refs = {"refs/tags/v4.1.0": self.OLD, "refs/tags/v4.2.0": self.TAG_OBJECT, "refs/tags/v4.2.0^{}": self.NEW}
+        update, facts, fetched = self._review("v4.1.0", "v4.2.0", refs)
+        self.assertEqual((update["new_commit"], fetched[1][1]), (self.NEW, self.NEW))
+        self.assertEqual(facts, [f"owner/repo: tag v4.1.0 resolved to {self.OLD}, v4.2.0 to {self.NEW}"])
+
+    def test_ls_remote_mock_matches_real_output(self):
+        refs = {"refs/tags/v4.39.1": self.TAG_OBJECT, "refs/tags/v4.39.1^{}": self.NEW}
+        run = _ls_remote(refs)
+        url = "https://github.com/github/codeql-action"
+        self.assertEqual(run(["git", "ls-remote", url, "v4.39.1"]).stdout, f"{self.TAG_OBJECT}\trefs/tags/v4.39.1\n")
+        self.assertEqual(
+            run(["git", "ls-remote", url, "v4.39.1", "refs/tags/v4.39.1^{}"]).stdout,
+            f"{self.TAG_OBJECT}\trefs/tags/v4.39.1\n{self.NEW}\trefs/tags/v4.39.1" + "^{}\n",
+        )
+
+    def test_unmatched_prev_version_falls_back_to_numerically_oldest_tag(self):
+        diff_pins = "- uses: owner/repo@v10\n- uses: owner/repo@v9\n+ uses: owner/repo@v11\n"
+        refs = {"refs/tags/v9": self.OLD, "refs/tags/v10": self.TAG_OBJECT, "refs/tags/v11": self.NEW}
+        with tempfile.TemporaryDirectory() as tmp:
+            env = _environment(
+                tmp, [_dep("owner/repo", "github_actions", "8", "11")], diff=f"--- a\n+++ b\n{diff_pins}"
+            )
+            with (
+                mock.patch.dict(os.environ, env),
+                mock.patch.dict(dcr_fetch.FETCHERS, {"github_actions": lambda work, name, version: work}),
+                mock.patch.object(dcr_fetch, "_run", side_effect=_ls_remote(refs)),
+            ):
+                dcr_fetch.main()
+            update = json.loads((Path(env["DCR_OUT"]) / "meta.json").read_text(encoding="utf-8"))["updates"][0]
+        self.assertEqual((update["prev_version"], update["prev_commit"]), ("v9", self.OLD))
+
+    def test_unresolvable_or_ambiguous_tag_is_unverified(self):
+        cases = (
+            {"refs/tags/v4.1.0": self.OLD},
+            {"refs/tags/v4.1.0": self.OLD, "refs/tags/v4.2.0": self.NEW, "refs/heads/v4.2.0": self.TAG_OBJECT},
+        )
+        for refs in cases:
+            update, facts, fetched = self._review("v4.1.0", "v4.2.0", refs)
+            self.assertEqual((update["status"], fetched, facts), ("unverified", [], []))
+            self.assertIn("tag did not resolve", update["note"])
+
+    def test_sha_pins_are_fetched_unchanged(self):
+        update, facts, fetched = self._review(self.OLD, self.NEW, {})
+        self.assertEqual((update["status"], update["new_commit"], facts), ("reviewed", "", []))
+        self.assertEqual(fetched, [("owner/repo", self.OLD), ("owner/repo", self.NEW)])
+
+
 class MainTest(unittest.TestCase):
     def test_meta_shape_and_github_output(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -294,7 +409,7 @@ class MainTest(unittest.TestCase):
             meta = json.loads((Path(env["DCR_OUT"]) / "meta.json").read_text(encoding="utf-8"))
             self.assertEqual(
                 (set(meta), meta["schema"], meta["updates"][0]["status"]),
-                ({"schema", "updates"}, 1, "not_reviewed"),
+                ({"facts", "schema", "updates"}, 1, "not_reviewed"),
             )
             self.assertEqual(Path(env["GITHUB_OUTPUT"]).read_text(encoding="utf-8"), "reviewable=false\n")
 
@@ -331,6 +446,126 @@ class MainTest(unittest.TestCase):
             items = json.loads((Path(env["DCR_OUT"]) / "meta.json").read_text(encoding="utf-8"))["updates"]
             self.assertEqual([item["status"] for item in items], ["unverified", "not_reviewed"])
             self.assertIn("previous version", items[0]["note"])
+
+
+class FactsTest(unittest.TestCase):
+    def _facts(self, results, tree, pr_diff=""):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            for side, files in tree.items():
+                for name, data in files.items():
+                    (out / side / name).parent.mkdir(parents=True, exist_ok=True)
+                    (out / side / name).write_bytes(data)
+            files = dcr_fetch.write_diff(out, {"00-a": ("1.2.0", "2.0.0")})
+            changes = (out / "changes.diff").read_text(encoding="utf-8")
+            excluded = (out / "excluded.diff").read_text(encoding="utf-8")
+            for line in (changes + excluded).splitlines():
+                if line.startswith(("--- old/", "+++ new/")):
+                    side, slug = line[4:].split("/")[:2]
+                    self.assertTrue((out / side / slug).is_dir(), line)
+        return dcr_fetch.collect_facts(results, files, pr_diff), changes, excluded
+
+    def test_lists_major_bumps_manifests_and_binaries(self) -> None:
+        results = [
+            dcr_fetch.Update("a", "npm_and_yarn", "/", "1.2.0", "2.0.0"),
+            dcr_fetch.Update(
+                "b", "pip", "/", "1.0.0", "1.1.0", prev_artifact="b-1.0.0.tar.gz", new_artifact="b-1.1.0.tar.gz"
+            ),
+            dcr_fetch.Update("c", "npm_and_yarn", "/", "1.0.0", "3.0.0", status="unverified"),
+        ]
+        tree = {
+            "old": {"00-a/package.json": b"1", "00-a/x.node": b"\0a"},
+            "new": {"00-a/package.json": b"2", "00-a/x.node": b"\0b"},
+        }
+        facts, changes, _ = self._facts(results, tree)
+        self.assertEqual(
+            facts[:4],
+            [
+                "a: major version change 1.2.0 -> 2.0.0",
+                "b: reviewed artifacts: old b-1.0.0.tar.gz, new b-1.1.0.tar.gz",
+                "manifest or build file changed: package.json",
+                "binary file changed: 00-a/x.node",
+            ],
+        )
+        self.assertIn("--- old/00-a@1.2.0/package.json", changes)
+        self.assertIn("+++ new/00-a@2.0.0/package.json", changes)
+        self.assertEqual(dcr_fetch.collect_facts(results[2:], []), [])
+
+    def test_excluded_files_are_listed_with_sizes(self) -> None:
+        tree = {
+            "new": {
+                "00-a/src/main.py": b"x = 1\n",
+                "00-a/tests/test_main.py": b"assert 1\n",
+                "00-a/pkg/fixtures/data.json": b"{}\n",
+                "00-a/foo-stubs/a.pyi": b"x: int\n",
+                "00-a/poetry.lock": b"lock\n",
+                "00-a/.github/workflows/ci.yml": b"on: push\n",
+                "00-a/src/fast.c": b"/* Generated by Cython 3.1 */\n",
+                "00-a/src/late.js": b"x = 1;\n" * 6 + b"// @generated\n",
+                "00-a/src/inline.json": b'{"x": "@generated"}\n',
+            },
+            "old": {"00-a/src/was.py": b"# @generated\n", "00-a/src/marker.py": b"# @generated\n"},
+        }
+        tree["new"]["00-a/src/marker.py"] = b"import os\n"
+        facts, changes, excluded = self._facts([], tree)
+        self.assertIn("src/main.py", changes)
+        self.assertNotIn("tests/test_main.py", changes)
+        for kept in ("src/late.js", "src/inline.json", "src/marker.py"):
+            self.assertIn(kept, changes)
+        self.assertIn("src/was.py", excluded)
+        self.assertIn("not in changes.diff: 7 files, ", " ".join(facts))
+        self.assertIn(", 2 generated, ", " ".join(facts))
+        reasons = sorted(f.split("(")[1].split(",")[0] for f in facts if f.startswith("excluded"))
+        self.assertEqual(
+            reasons,
+            [".github", "generated", "generated", "lockfile", "test or fixture", "test or fixture", "type stubs"],
+        )
+        self.assertIn("foo-stubs/a.pyi", excluded)
+        self.assertTrue(any(f.startswith("diff size: ") for f in facts))
+        self.assertIn("largest change: 00-a/src/main.py", " ".join(facts))
+
+    def test_metadata_requires_changes(self) -> None:
+        old = b"Requires-Python: >=3.10\nRequires-Dist: yarl>=1.17\nRequires-Dist: attrs\n"
+        new = b"Requires-Python: >=3.11\nRequires-Dist: yarl>=1.20\nRequires-Dist: attrs\n"
+        new += b"Requires-Dist: idna; extra == 'x'\n"
+        tree = {side: {"00-a/PKG-INFO": data} for side, data in (("old", old), ("new", new))}
+        facts, _, _ = self._facts([], tree)
+        self.assertIn("manifest or build file changed: PKG-INFO", facts)
+        self.assertIn("00-a/PKG-INFO: Requires-Python changed: >=3.10 -> >=3.11", facts)
+        self.assertIn("00-a/PKG-INFO: Requires-Dist changed: yarl>=1.17 -> yarl>=1.20", facts)
+        self.assertIn("00-a/PKG-INFO: new Requires-Dist: idna; extra == 'x'", facts)
+
+    def test_lockfile_changes_list_other_packages(self) -> None:
+        pr_diff = (
+            "+++ b/poetry.lock\n"
+            ' name = "yarl"\n-version = "1.17.0"\n+version = "1.20.0"\n'
+            ' name = "aiohttp"\n-version = "3.14.3"\n+version = "3.14.5"\n'
+            "+++ b/package-lock.json\n"
+            '     "node_modules/undici": {\n-      "version": "6.29.0",\n+      "version": "6.29.1",\n'
+            "+++ b/go.sum\n-golang.org/x/net v0.1.0 h1:abc=\n+golang.org/x/net v0.2.0 h1:def=\n"
+            "+++ b/README.md\n"
+            ' name = "skip"\n-version = "1"\n+version = "2"\n'
+        )
+        results = [dcr_fetch.Update("aiohttp", "pip", "/", "3.14.3", "3.14.5")]
+        self.assertEqual(
+            dcr_fetch.lockfile_changes(pr_diff, {"aiohttp"}),
+            ["golang.org/x/net v0.1.0 -> v0.2.0", "undici 6.29.0 -> 6.29.1", "yarl 1.17.0 -> 1.20.0"],
+        )
+        facts = dcr_fetch.collect_facts(results, [], pr_diff)
+        self.assertIn("lockfile change not reviewed: yarl 1.17.0 -> 1.20.0", facts)
+
+    def test_real_diff_with_spaces_in_paths(self) -> None:
+        tree = {
+            side: {"00-a/sub dir/pyproject.toml": text, "00-a/my file.txt": text}
+            for side, text in (("old", b"a"), ("new", b"b"))
+        }
+        facts, _, _ = self._facts([], tree)
+        self.assertIn("manifest or build file changed: pyproject.toml", facts)
+        self.assertIn("largest change: 00-a/my file.txt", " ".join(facts))
+
+    def test_actions_major_bump_is_not_a_fact(self) -> None:
+        results = [dcr_fetch.Update("o/r", "github_actions", "/", "v1", "v2")]
+        self.assertEqual(dcr_fetch.collect_facts(results, []), [])
 
 
 if __name__ == "__main__":
