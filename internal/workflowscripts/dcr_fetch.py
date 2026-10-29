@@ -401,7 +401,36 @@ def _metadata_facts(files: list[FileDiff]) -> list[str]:
     return facts
 
 
-def collect_facts(results: list[Update], files: list[FileDiff]) -> list[str]:
+LOCK_NAME = re.compile(r'^\s*(?:name = "([^"]+)"|"(?:[^"]*node_modules/)?([^"]+)": \{|"?(@?[^@\s"]+)@[^:]*"?:$)')
+LOCK_VERSION = re.compile(r'^\s*(?:version = "([^"]+)"|"version": "([^"]+)"|version "([^"]+)")')
+GO_SUM = re.compile(r"^(\S+) (v[^/\s]+)(?:/go\.mod)? h1:")
+
+
+def lockfile_changes(pr_diff: str, reviewed: set[str]) -> list[str]:
+    """Other packages whose versions change in the PR's lockfile hunks (not artifact-reviewed)."""
+    changes: dict[str, dict[str, str]] = {}
+    lockfile, current = False, ""
+    for line in pr_diff.split("\n"):
+        if line.startswith("+++ "):
+            lockfile, current = PurePosixPath(line[4:].strip()).name in LOCKFILES, ""
+            continue
+        if not lockfile or line[:1] not in {" ", "-", "+"} or line.startswith("--- "):
+            continue
+        sign, body = line[0], line[1:]
+        if sign != " " and (match := GO_SUM.match(body)):
+            changes.setdefault(match.group(1), {})[sign] = match.group(2)
+        elif match := LOCK_NAME.match(body):
+            current = next(g for g in match.groups() if g)
+        elif sign != " " and current and (match := LOCK_VERSION.match(body)):
+            changes.setdefault(current, {})[sign] = next(g for g in match.groups() if g)
+    return [
+        f"{name} {sides.get('-', '?')} -> {sides.get('+', '?')}"
+        for name, sides in sorted(changes.items())
+        if sides.get("-") != sides.get("+") and _norm(name) not in reviewed
+    ]
+
+
+def collect_facts(results: list[Update], files: list[FileDiff], pr_diff: str = "") -> list[str]:
     """Plain, script-computed facts about the update for the agent and the comment."""
     facts = [
         f"{r.name}: major version change {r.prev_version} -> {r.new_version}"
@@ -432,6 +461,8 @@ def collect_facts(results: list[Update], files: list[FileDiff]) -> list[str]:
     facts += [f"largest change: {i.path} ({len(i.text)} bytes)" for i in largest]
     excluded = [f"{i.path} ({i.excluded}, {len(i.text)} bytes)" for i in files if i.excluded]
     facts += _capped("excluded from changes.diff, see excluded.diff", excluded)
+    reviewed = {_norm(r.name) for r in results}
+    facts += _capped("lockfile change not reviewed", lockfile_changes(pr_diff, reviewed))
     return facts
 
 
@@ -474,7 +505,7 @@ def main() -> int:
             for r in results
         ]
     reviewable = any(result.status == "reviewed" for result in results)
-    facts = collect_facts(results, files)
+    facts = collect_facts(results, files, diff_text)
     meta = {"schema": 1, "updates": [asdict(result) for result in results], "facts": facts}
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if output := os.environ.get("GITHUB_OUTPUT"):

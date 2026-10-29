@@ -449,7 +449,7 @@ class MainTest(unittest.TestCase):
 
 
 class FactsTest(unittest.TestCase):
-    def _facts(self, results, tree):
+    def _facts(self, results, tree, pr_diff=""):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             for side, files in tree.items():
@@ -459,7 +459,7 @@ class FactsTest(unittest.TestCase):
             files = dcr_fetch.write_diff(out, {"00-a": ("1.2.0", "2.0.0")})
             changes = (out / "changes.diff").read_text(encoding="utf-8")
             excluded = (out / "excluded.diff").read_text(encoding="utf-8")
-        return dcr_fetch.collect_facts(results, files), changes, excluded
+        return dcr_fetch.collect_facts(results, files, pr_diff), changes, excluded
 
     def test_lists_major_bumps_manifests_and_binaries(self) -> None:
         results = [
@@ -520,6 +520,25 @@ class FactsTest(unittest.TestCase):
         self.assertIn("00-a/PKG-INFO: Requires-Python changed: >=3.10 -> >=3.11", facts)
         self.assertIn("00-a/PKG-INFO: Requires-Dist changed: yarl>=1.17 -> yarl>=1.20", facts)
         self.assertIn("00-a/PKG-INFO: new Requires-Dist: idna; extra == 'x'", facts)
+
+    def test_lockfile_changes_list_other_packages(self) -> None:
+        pr_diff = (
+            "+++ b/poetry.lock\n"
+            ' name = "yarl"\n-version = "1.17.0"\n+version = "1.20.0"\n'
+            ' name = "aiohttp"\n-version = "3.14.3"\n+version = "3.14.5"\n'
+            "+++ b/package-lock.json\n"
+            '     "node_modules/undici": {\n-      "version": "6.29.0",\n+      "version": "6.29.1",\n'
+            "+++ b/go.sum\n-golang.org/x/net v0.1.0 h1:abc=\n+golang.org/x/net v0.2.0 h1:def=\n"
+            "+++ b/README.md\n"
+            ' name = "skip"\n-version = "1"\n+version = "2"\n'
+        )
+        results = [dcr_fetch.Update("aiohttp", "pip", "/", "3.14.3", "3.14.5")]
+        self.assertEqual(
+            dcr_fetch.lockfile_changes(pr_diff, {"aiohttp"}),
+            ["golang.org/x/net v0.1.0 -> v0.2.0", "undici 6.29.0 -> 6.29.1", "yarl 1.17.0 -> 1.20.0"],
+        )
+        facts = dcr_fetch.collect_facts(results, [], pr_diff)
+        self.assertIn("lockfile change not reviewed: yarl 1.17.0 -> 1.20.0", facts)
 
     def test_real_diff_with_spaces_in_paths(self) -> None:
         tree = {
