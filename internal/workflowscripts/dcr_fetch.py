@@ -327,7 +327,18 @@ def _exclusion(item: FileDiff, out_dir: Path) -> str:
     return ""
 
 
-def write_diff(out_dir: Path) -> list[FileDiff]:
+def _relabel(item: FileDiff, labels: dict[str, tuple[str, str]]) -> bytes:
+    """Rewrite header paths old/<slug>/ and new/<slug>/ to carry each side's version."""
+    slug = PurePosixPath(item.path).parts[0] if item.path else ""
+    if slug not in labels:
+        return item.text
+    head, sep, body = item.text.partition(b"\n@@")
+    for side, version in zip(("old", "new"), labels[slug], strict=True):
+        head = head.replace(f"{side}/{slug}/".encode(), f"{side}/{slug}@{version}/".encode())
+    return head + sep + body
+
+
+def write_diff(out_dir: Path, labels: dict[str, tuple[str, str]] | None = None) -> list[FileDiff]:
     """Write changes.diff for the agent and excluded.diff for the rest; return every file diff."""
     (out_dir / "old").mkdir(exist_ok=True)
     (out_dir / "new").mkdir(exist_ok=True)
@@ -335,6 +346,7 @@ def write_diff(out_dir: Path) -> list[FileDiff]:
     files = _split_diff(result.stdout)
     for item in files:
         item.excluded = _exclusion(item, out_dir)
+        item.text = _relabel(item, labels or {})
     (out_dir / "changes.diff").write_bytes(b"".join(i.text for i in files if not i.excluded))
     (out_dir / "excluded.diff").write_bytes(b"".join(i.text for i in files if i.excluded))
     return files
@@ -429,12 +441,14 @@ def main() -> int:
     updates = _parse_updates(os.environ.get("UPDATED_DEPENDENCIES_JSON", ""))
     diff_text = Path(os.environ["PR_DIFF_PATH"]).read_text(encoding="utf-8", errors="replace")
     results: list[Update] = []
+    labels: dict[str, tuple[str, str]] = {}
     for index, update in enumerate(updates):
         resolved = _status(update, diff_text)
         if resolved.status != "reviewed":
             results.append(resolved)
             continue
-        slug = f"{index:02d}-" + re.sub(r"[^A-Za-z0-9._@-]", "_", f"{resolved.name}@{resolved.new_version}")
+        slug = f"{index:02d}-" + re.sub(r"[^A-Za-z0-9._@-]", "_", resolved.name)
+        labels[slug] = (resolved.prev_version, resolved.new_version)
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 artifacts = []
@@ -453,7 +467,7 @@ def main() -> int:
             results.append(replace(resolved, status="fetch_failed", note=str(exc)))
     files: list[FileDiff] = []
     try:
-        files = write_diff(out_dir)
+        files = write_diff(out_dir, labels)
     except FetchError as exc:
         results = [
             replace(r, status="fetch_failed", note=f"diff failed: {exc}") if r.status == "reviewed" else r

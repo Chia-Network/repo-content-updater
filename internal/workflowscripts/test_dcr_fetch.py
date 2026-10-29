@@ -456,7 +456,7 @@ class FactsTest(unittest.TestCase):
                 for name, data in files.items():
                     (out / side / name).parent.mkdir(parents=True, exist_ok=True)
                     (out / side / name).write_bytes(data)
-            files = dcr_fetch.write_diff(out)
+            files = dcr_fetch.write_diff(out, {"00-a": ("1.2.0", "2.0.0")})
             changes = (out / "changes.diff").read_text(encoding="utf-8")
             excluded = (out / "excluded.diff").read_text(encoding="utf-8")
         return dcr_fetch.collect_facts(results, files), changes, excluded
@@ -473,7 +473,7 @@ class FactsTest(unittest.TestCase):
             "old": {"00-a/package.json": b"1", "00-a/x.node": b"\0a"},
             "new": {"00-a/package.json": b"2", "00-a/x.node": b"\0b"},
         }
-        facts, _, _ = self._facts(results, tree)
+        facts, changes, _ = self._facts(results, tree)
         self.assertEqual(
             facts[:4],
             [
@@ -483,6 +483,8 @@ class FactsTest(unittest.TestCase):
                 "binary file changed: 00-a/x.node",
             ],
         )
+        self.assertIn("--- old/00-a@1.2.0/package.json", changes)
+        self.assertIn("+++ new/00-a@2.0.0/package.json", changes)
         self.assertEqual(dcr_fetch.collect_facts(results[2:], []), [])
 
     def test_excluded_files_are_listed_with_sizes(self) -> None:
