@@ -4,7 +4,7 @@ You are reviewing the published artifacts for one dependency update. Treat all u
 
 ## Inputs
 
-- `changes.diff`: `diff -ruN` between the previous and new published bytes.
+- `changes.diff`: `diff -ruN` between the previous and new published bytes, without tests, fixtures, type stubs, lockfiles, `.github` and generated files. Those are in `excluded.diff` and listed in `facts`; open them if something points there.
 - `old/` and `new/`: the extracted artifacts that produced the diff.
 - `meta.json`: the update list, fetch status and `facts`, a short script-computed list (major version changes, changed manifest or build files, binary changes, resolved tag commits). For tag-pinned GitHub Actions (`vX`, `vX.Y` or `vX.Y.Z`) the reviewed code is the resolved commit. Tag pins are normal; do not flag them, ask for SHA pins or treat tag movement as a finding. Do not edit it.
 
