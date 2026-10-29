@@ -29,7 +29,7 @@ func TestArtifactReviewActionsArePinned(t *testing.T) {
 		"actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
 		"actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
 		"actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
-		"dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a",
+		"dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98",
 		"actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
 	} {
 		if !pins[want] {
