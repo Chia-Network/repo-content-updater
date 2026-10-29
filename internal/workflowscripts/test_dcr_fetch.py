@@ -330,7 +330,8 @@ class ActionTagTest(unittest.TestCase):
             ):
                 self.assertEqual(dcr_fetch.main(), 0)
             meta = json.loads((Path(env["DCR_OUT"]) / "meta.json").read_text(encoding="utf-8"))
-        return meta["updates"][0], meta["facts"], fetched
+        facts = [fact for fact in meta["facts"] if "reviewed artifacts" not in fact]
+        return meta["updates"][0], facts, fetched
 
     def test_full_tags_resolve_and_fetch_commits(self):
         refs = {"refs/tags/v4.1.0": self.OLD, "refs/tags/v4.2.0": self.NEW}
@@ -339,6 +340,7 @@ class ActionTagTest(unittest.TestCase):
             (update["status"], update["prev_commit"], update["new_commit"]), ("reviewed", self.OLD, self.NEW)
         )
         self.assertEqual(fetched, [("owner/repo", self.OLD), ("owner/repo", self.NEW)])
+        self.assertEqual(update["new_artifact"], f"commit {self.NEW}")
         self.assertEqual(facts, [f"owner/repo: tag v4.1.0 resolved to {self.OLD}, v4.2.0 to {self.NEW}"])
 
     def test_bare_tag_adds_a_moving_fact(self):
@@ -462,7 +464,9 @@ class FactsTest(unittest.TestCase):
     def test_lists_major_bumps_manifests_and_binaries(self) -> None:
         results = [
             dcr_fetch.Update("a", "npm_and_yarn", "/", "1.2.0", "2.0.0"),
-            dcr_fetch.Update("b", "pip", "/", "1.0.0", "1.1.0"),
+            dcr_fetch.Update(
+                "b", "pip", "/", "1.0.0", "1.1.0", prev_artifact="b-1.0.0.tar.gz", new_artifact="b-1.1.0.tar.gz"
+            ),
             dcr_fetch.Update("c", "npm_and_yarn", "/", "1.0.0", "3.0.0", status="unverified"),
         ]
         tree = {
@@ -471,14 +475,15 @@ class FactsTest(unittest.TestCase):
         }
         facts, _, _ = self._facts(results, tree)
         self.assertEqual(
-            facts[:3],
+            facts[:4],
             [
                 "a: major version change 1.2.0 -> 2.0.0",
+                "b: reviewed artifacts: old b-1.0.0.tar.gz, new b-1.1.0.tar.gz",
                 "manifest or build file changed: package.json",
                 "binary file changed: 00-a/x.node",
             ],
         )
-        self.assertEqual(dcr_fetch.collect_facts(results[1:], []), [])
+        self.assertEqual(dcr_fetch.collect_facts(results[2:], []), [])
 
     def test_excluded_files_are_listed_with_sizes(self) -> None:
         tree = {

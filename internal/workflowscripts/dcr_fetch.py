@@ -39,6 +39,8 @@ class Update:
     note: str = ""
     prev_commit: str = ""
     new_commit: str = ""
+    prev_artifact: str = ""
+    new_artifact: str = ""
 
 
 def added_lines(diff: str) -> list[str]:
@@ -397,7 +399,11 @@ def collect_facts(results: list[Update], files: list[FileDiff]) -> list[str]:
         and _major(r.prev_version) != _major(r.new_version)
     ]
     for r in results:
-        if r.status != "reviewed" or not r.new_commit:
+        if r.status != "reviewed":
+            continue
+        if r.prev_artifact or r.new_artifact:
+            facts.append(f"{r.name}: reviewed artifacts: old {r.prev_artifact}, new {r.new_artifact}")
+        if not r.new_commit:
             continue
         facts.append(f"{r.name}: tag {r.prev_version} resolved to {r.prev_commit}, {r.new_version} to {r.new_commit}")
         if not FULL_TAG.fullmatch(r.new_version):
@@ -431,6 +437,7 @@ def main() -> int:
         slug = f"{index:02d}-" + re.sub(r"[^A-Za-z0-9._@-]", "_", f"{resolved.name}@{resolved.new_version}")
         try:
             with tempfile.TemporaryDirectory() as tmp:
+                artifacts = []
                 sides = (
                     ("old", resolved.prev_commit or resolved.prev_version),
                     ("new", resolved.new_commit or resolved.new_version),
@@ -438,8 +445,10 @@ def main() -> int:
                 for side, version in sides:
                     work = Path(tmp) / side
                     work.mkdir()
-                    extract(FETCHERS[resolved.ecosystem](work, resolved.name, version), out_dir / side / slug)
-            results.append(resolved)
+                    source = FETCHERS[resolved.ecosystem](work, resolved.name, version)
+                    artifacts.append(f"commit {version}" if source.is_dir() else source.name)
+                    extract(source, out_dir / side / slug)
+            results.append(replace(resolved, prev_artifact=artifacts[0], new_artifact=artifacts[1]))
         except (FetchError, OSError) as exc:
             results.append(replace(resolved, status="fetch_failed", note=str(exc)))
     files: list[FileDiff] = []
