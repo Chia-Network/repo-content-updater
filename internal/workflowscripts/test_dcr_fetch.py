@@ -70,6 +70,20 @@ def _environment(tmp, updates, added="left-pad 1.0.1", diff=None):
 
 
 class ParseUpdatesTest(unittest.TestCase):
+    def test_missing_poetry_previous_version(self):
+        diff = (_TESTDATA / "poetry_chia_rs.diff").read_text(encoding="utf-8")
+        update = _update("chia_rs", "pip", "", "0.52.0")
+        self.assertEqual(dcr_fetch._status(update, diff).prev_version, "0.50.0")
+        for changed in (
+            diff.replace('name = "chia-rs"', 'name = "other"'),
+            diff.replace('+version = "0.52.0"', '+version = "0.53.0"'),
+            diff.replace("b/poetry.lock", "b/other/poetry.lock"),
+            diff + diff.replace('-version = "0.50.0"', '-version = "0.49.0"'),
+        ):
+            self.assertEqual(dcr_fetch._status(update, changed).status, "unverified")
+        known = _update("chia_rs", "pip", "0.48.0", "0.52.0")
+        self.assertEqual(dcr_fetch._status(known, diff).prev_version, "0.48.0")
+
     def test_go_modules_alias_and_leading_v(self):
         update = dcr_fetch._parse_updates(json.dumps([_dep("example.com/mod", "go_modules")]))[0]
         self.assertEqual((update.ecosystem, update.prev_version, update.new_version), ("gomod", "v1.0.0", "v1.0.1"))
