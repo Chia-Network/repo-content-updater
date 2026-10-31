@@ -393,8 +393,9 @@ def _diff_header_path(paths: str) -> str:
         parts = []
     if len(parts) == 2:
         return parts[1]
-    # Unquoted "old/P new/P" where P contains spaces: both halves are the same length.
-    return paths[len(paths) - (len(paths) - 9) // 2 :]
+    # Unquoted "old/P new/P" where P contains spaces: both halves have the same
+    # length plus one separating space, so the new-side path starts at the midpoint.
+    return paths[(len(paths) + 1) // 2 :]
 
 
 def _capped(title: str, entries: list[str]) -> list[str]:
