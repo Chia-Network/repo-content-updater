@@ -577,6 +577,17 @@ class FactsTest(unittest.TestCase):
         self.assertIn("manifest or build file changed: pyproject.toml", facts)
         self.assertIn("largest change: 00-a/my file.txt", " ".join(facts))
 
+    def test_diff_header_path_fallback_keeps_new_side(self) -> None:
+        self.assertEqual(
+            dcr_fetch._diff_header_path("old/00-a/it's.txt new/00-a/it's.txt"), "new/00-a/it's.txt"
+        )
+        self.assertEqual(
+            dcr_fetch._diff_header_path("old/00-a/sub dir/x.txt new/00-a/sub dir/x.txt"),
+            "new/00-a/sub dir/x.txt",
+        )
+        files = dcr_fetch._split_diff(b"diff -ruN old/00-a/it's.txt new/00-a/it's.txt\n")
+        self.assertEqual(files[0].path, "00-a/it's.txt")
+
     def test_actions_major_bump_is_not_a_fact(self) -> None:
         results = [dcr_fetch.Update("o/r", "github_actions", "/", "v1", "v2")]
         self.assertEqual(dcr_fetch.collect_facts(results, []), [])
