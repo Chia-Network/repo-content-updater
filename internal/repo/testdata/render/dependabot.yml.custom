@@ -77,10 +77,12 @@ updates:
     ignore:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+    # Majors stay one PR per package so a breaking bump cannot hold up the rest.
     groups:
       global:
         patterns:
           - "*"
+        update-types: ["minor", "patch"]
   - package-ecosystem: cargo
     directories: ["/"]
     schedule:
